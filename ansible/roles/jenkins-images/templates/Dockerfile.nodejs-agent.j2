@@ -1,0 +1,107 @@
+ARG NODE_VERSION={{ nodejs_version | default('18') }}
+FROM node:${NODE_VERSION}
+
+# Build arguments
+ARG BUILD_DATE
+ARG VCS_REF
+
+# Metadata
+LABEL maintainer="DevOps Team" \
+      org.label-schema.build-date=${BUILD_DATE} \
+      org.label-schema.vcs-ref=${VCS_REF} \
+      org.label-schema.version=${NODE_VERSION} \
+      org.label-schema.schema-version="1.0" \
+      description="Jenkins Agent with Node.js development capabilities"
+
+# Switch to root to install packages
+USER root
+
+# Install essential packages and Java for Jenkins agent
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    unzip \
+    vim \
+    sudo \
+    openssh-client \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    build-essential \
+    python3 \
+    python3-pip \
+    openjdk-11-jre-headless \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install global Node.js tools
+RUN npm install -g \
+    npm@latest \
+    yarn \
+    pnpm \
+    @angular/cli \
+    @vue/cli \
+    create-react-app \
+    typescript \
+    ts-node \
+    eslint \
+    prettier \
+    jest \
+    mocha \
+    nyc \
+    webpack \
+    webpack-cli \
+    nodemon \
+    pm2 \
+    semantic-release \
+    commitizen \
+    husky \
+    lint-staged
+
+# Install Jenkins agent
+ARG AGENT_VERSION={{ jenkins_agent_version | default('latest') }}
+RUN curl --create-dirs -fsSLo /usr/share/jenkins/agent.jar \
+    https://repo.jenkins-ci.org/public/org/jenkins-ci/main/remoting/${AGENT_VERSION}/remoting-${AGENT_VERSION}.jar \
+    && chmod 755 /usr/share/jenkins \
+    && chmod 644 /usr/share/jenkins/agent.jar
+
+# Install Docker CLI for integration
+RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y docker-ce-cli \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create jenkins user
+RUN groupadd -g 1000 jenkins \
+    && useradd -u 1000 -g jenkins -m -s /bin/bash jenkins \
+    && usermod -aG docker jenkins
+
+# Create workspace directory
+RUN mkdir -p /home/jenkins/workspace \
+    && mkdir -p /home/jenkins/.npm-global \
+    && chown -R jenkins:jenkins /home/jenkins
+
+# Set environment variables
+ENV NPM_CONFIG_PREFIX=/home/jenkins/.npm-global
+ENV PATH=/home/jenkins/.npm-global/bin:$PATH
+ENV NODE_ENV=development
+
+# Switch to jenkins user
+USER jenkins
+
+# Configure npm for jenkins user
+RUN npm config set prefix '/home/jenkins/.npm-global' \
+    && npm config set cache '/home/jenkins/.npm-cache'
+
+# Set working directory
+WORKDIR /home/jenkins
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD node --version && npm --version && java -version || exit 1
+
+# Entry point for the agent
+ENTRYPOINT ["java", "-jar", "/usr/share/jenkins/agent.jar"]

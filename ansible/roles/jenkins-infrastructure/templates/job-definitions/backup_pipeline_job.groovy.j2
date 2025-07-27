@@ -1,0 +1,497 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job@2.47">
+  <actions/>
+  <description>Infrastructure Pipeline: Automated Backup and Recovery System
+
+This pipeline manages comprehensive backup operations for:
+- Jenkins home directory and job configurations
+- Docker volumes (jenkins_data, shared_workspace, maven-cache, pip-cache)
+- Configuration files (JCasC, systemd services, SSL certificates)
+- Monitoring data (Prometheus metrics, Grafana dashboards)
+- System configurations and secrets
+
+Backups are stored on shared NFS/CIFS storage: {{ backup_mount_point }}
+Retention policy: {{ backup_daily_retention | default(30) }} daily, {{ backup_weekly_retention | default(12) }} weekly, {{ backup_monthly_retention | default(12) }} monthly
+</description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <jenkins.model.BuildDiscarderProperty>
+      <strategy class="hudson.tasks.LogRotator">
+        <daysToKeep>90</daysToKeep>
+        <numToKeep>50</numToKeep>
+        <artifactDaysToKeep>-1</artifactDaysToKeep>
+        <artifactNumToKeep>-1</artifactNumToKeep>
+      </strategy>
+    </jenkins.model.BuildDiscarderProperty>
+    <org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>
+      <triggers>
+        <hudson.triggers.TimerTrigger>
+          <spec>{{ backup_incremental_schedule | default('0 2 * * 1-6') }}</spec>
+        </hudson.triggers.TimerTrigger>
+      </triggers>
+    </org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.ChoiceParameterDefinition>
+          <n>BACKUP_TYPE</n>
+          <description>Type of backup to perform</description>
+          <choices class="java.util.Arrays$ArrayList">
+            <a class="string-array">
+              <string>incremental</string>
+              <string>full</string>
+              <string>configuration-only</string>
+              <string>volumes-only</string>
+            </a>
+          </choices>
+        </hudson.model.ChoiceParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>VERIFY_BACKUP</n>
+          <description>Verify backup integrity after creation</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>CLEANUP_OLD_BACKUPS</n>
+          <description>Clean up old backups according to retention policy</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <n>CUSTOM_TAG</n>
+          <description>Custom tag for backup (optional)</description>
+          <defaultValue></defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>SEND_NOTIFICATIONS</n>
+          <description>Send backup status notifications</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps@2.94">
+    <script>#!/usr/bin/env groovy
+
+pipeline {
+    agent {
+        label 'dind docker-manager static privileged'
+    }
+    
+    options {
+        buildDiscarder(logRotator(daysToKeepStr: '90', numToKeepStr: '50'))
+        timeout(time: 4, unit: 'HOURS')
+        timestamps()
+        ansiColor('xterm')
+        skipDefaultCheckout()
+    }
+    
+    environment {
+        BACKUP_HOME = '{{ backup_home_dir }}'
+        BACKUP_MOUNT = '{{ backup_mount_point }}'
+        JENKINS_HOME = '{{ jenkins_home_dir }}'
+        BACKUP_USER = '{{ backup_user }}'
+        BACKUP_TAG = "${params.CUSTOM_TAG ?: env.BUILD_NUMBER}"
+        TIMESTAMP = sh(script: 'date +%Y%m%d_%H%M%S', returnStdout: true).trim()
+        HOSTNAME = sh(script: 'hostname', returnStdout: true).trim()
+        {% if backup_method == 'borg' %}
+        BORG_PASSPHRASE = credentials('borg-passphrase')
+        BORG_REPO = '{{ backup_mount_point }}/${HOSTNAME}-jenkins'
+        {% endif %}
+    }
+    
+    stages {
+        stage('Pre-Backup Validation') {
+            steps {
+                script {
+                    echo "💾 Jenkins Infrastructure Backup Pipeline"
+                    echo "🏷️ Backup Type: ${params.BACKUP_TYPE}"
+                    echo "🏷️ Backup Tag: ${BACKUP_TAG}"
+                    echo "⏰ Timestamp: ${TIMESTAMP}"
+                    echo "🖥️ Hostname: ${HOSTNAME}"
+                    echo "📁 Backup Mount: ${BACKUP_MOUNT}"
+                    
+                    // Validate backup storage connectivity
+                    sh """
+                        echo "🔍 Validating backup storage connectivity..."
+                        if ! mountpoint -q ${BACKUP_MOUNT}; then
+                            echo "❌ Backup storage not mounted at ${BACKUP_MOUNT}"
+                            exit 1
+                        fi
+                        
+                        if ! touch ${BACKUP_MOUNT}/connectivity_test_${TIMESTAMP}; then
+                            echo "❌ Cannot write to backup storage"
+                            exit 1
+                        fi
+                        rm -f ${BACKUP_MOUNT}/connectivity_test_${TIMESTAMP}
+                        
+                        echo "✅ Backup storage is accessible and writable"
+                    """
+                    
+                    // Check available space
+                    sh """
+                        echo "📊 Checking available backup storage space..."
+                        df -h ${BACKUP_MOUNT}
+                        
+                        AVAILABLE_GB=\$(df ${BACKUP_MOUNT} | tail -1 | awk '{print \$4}' | sed 's/G//')
+                        if [ "\$AVAILABLE_GB" -lt "{{ backup_min_free_space_gb | default(10) }}" ]; then
+                            echo "⚠️ Warning: Low disk space on backup storage"
+                        fi
+                    """
+                }
+            }
+        }
+        
+        stage('Pre-Backup Jenkins State') {
+            steps {
+                script {
+                    echo "📊 Capturing Jenkins state before backup..."
+                    
+                    // Create backup metadata
+                    sh """
+                        mkdir -p ${BACKUP_HOME}/temp/${TIMESTAMP}
+                        
+                        # Capture Jenkins state
+                        cat > ${BACKUP_HOME}/temp/${TIMESTAMP}/backup-metadata.json << EOF
+{
+  "backup_type": "${params.BACKUP_TYPE}",
+  "backup_tag": "${BACKUP_TAG}",
+  "timestamp": "${TIMESTAMP}",
+  "hostname": "${HOSTNAME}",
+  "jenkins_version": "\$(docker exec jenkins-master-${HOSTNAME} cat /usr/share/jenkins/jenkins.war | head -1 || echo 'unknown')",
+  "build_number": "${env.BUILD_NUMBER}",
+  "triggered_by": "${env.BUILD_USER_ID ?: 'system'}"
+}
+EOF
+                        
+                        # Capture running containers
+                        docker ps --format "table {{.Names}}\\t{{.Image}}\\t{{.Status}}" > ${BACKUP_HOME}/temp/${TIMESTAMP}/running-containers.txt
+                        
+                        # Capture volume information
+                        docker volume ls > ${BACKUP_HOME}/temp/${TIMESTAMP}/docker-volumes.txt
+                        
+                        # Capture Jenkins job status
+                        curl -s -u ${JENKINS_USER}:${JENKINS_PASS} \
+                            http://localhost:{{ jenkins_master_port }}/api/json?tree=jobs[name,buildable,inQueue] \
+                            > ${BACKUP_HOME}/temp/${TIMESTAMP}/jenkins-jobs.json || echo "Failed to capture job status"
+                    """
+                }
+            }
+        }
+        
+        stage('Backup Jenkins Configuration') {
+            when {
+                anyOf {
+                    equals expected: 'full', actual: params.BACKUP_TYPE
+                    equals expected: 'incremental', actual: params.BACKUP_TYPE
+                    equals expected: 'configuration-only', actual: params.BACKUP_TYPE
+                }
+            }
+            steps {
+                script {
+                    echo "📋 Backing up Jenkins configuration..."
+                    
+                    sh """
+                        # Execute configuration backup script
+                        sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/backup-configuration.sh \
+                            --type ${params.BACKUP_TYPE} \
+                            --tag ${BACKUP_TAG} \
+                            --timestamp ${TIMESTAMP}
+                    """
+                }
+            }
+        }
+        
+        stage('Backup Jenkins Volumes') {
+            when {
+                anyOf {
+                    equals expected: 'full', actual: params.BACKUP_TYPE
+                    equals expected: 'incremental', actual: params.BACKUP_TYPE
+                    equals expected: 'volumes-only', actual: params.BACKUP_TYPE
+                }
+            }
+            parallel {
+                stage('Backup Jenkins Home') {
+                    steps {
+                        script {
+                            echo "🏠 Backing up Jenkins home directory..."
+                            
+                            sh """
+                                sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/backup-jenkins-volumes.sh \
+                                    --volume jenkins_data \
+                                    --type ${params.BACKUP_TYPE} \
+                                    --tag ${BACKUP_TAG} \
+                                    --timestamp ${TIMESTAMP}
+                            """
+                        }
+                    }
+                }
+                
+                stage('Backup Shared Workspace') {
+                    steps {
+                        script {
+                            echo "📁 Backing up shared workspace..."
+                            
+                            sh """
+                                sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/backup-jenkins-volumes.sh \
+                                    --volume shared_workspace \
+                                    --type ${params.BACKUP_TYPE} \
+                                    --tag ${BACKUP_TAG} \
+                                    --timestamp ${TIMESTAMP}
+                            """
+                        }
+                    }
+                }
+                
+                stage('Backup Build Caches') {
+                    steps {
+                        script {
+                            echo "🗃️ Backing up build caches..."
+                            
+                            sh """
+                                # Backup Maven cache
+                                sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/backup-jenkins-volumes.sh \
+                                    --volume maven-cache \
+                                    --type ${params.BACKUP_TYPE} \
+                                    --tag ${BACKUP_TAG} \
+                                    --timestamp ${TIMESTAMP}
+                                
+                                # Backup pip cache
+                                sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/backup-jenkins-volumes.sh \
+                                    --volume pip-cache \
+                                    --type ${params.BACKUP_TYPE} \
+                                    --tag ${BACKUP_TAG} \
+                                    --timestamp ${TIMESTAMP}
+                            """
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Backup Monitoring Data') {
+            when {
+                anyOf {
+                    equals expected: 'full', actual: params.BACKUP_TYPE
+                    equals expected: 'incremental', actual: params.BACKUP_TYPE
+                }
+            }
+            steps {
+                script {
+                    echo "📊 Backing up monitoring data..."
+                    
+                    sh """
+                        sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/backup-monitoring.sh \
+                            --type ${params.BACKUP_TYPE} \
+                            --tag ${BACKUP_TAG} \
+                            --timestamp ${TIMESTAMP}
+                    """
+                }
+            }
+        }
+        
+        stage('Create Backup Archive') {
+            steps {
+                script {
+                    echo "📦 Creating backup archive..."
+                    
+                    {% if backup_method == 'borg' %}
+                    // Using BorgBackup
+                    sh """
+                        echo "🏛️ Creating Borg backup archive..."
+                        
+                        ARCHIVE_NAME="${HOSTNAME}-${params.BACKUP_TYPE}-${TIMESTAMP}"
+                        
+                        sudo -u ${BACKUP_USER} borg create \
+                            --verbose \
+                            --stats \
+                            --show-rc \
+                            --compression {{ borg_compression | default('lz4') }} \
+                            --exclude-caches \
+                            "\${BORG_REPO}::\${ARCHIVE_NAME}" \
+                            ${BACKUP_HOME}/temp/${TIMESTAMP} \
+                            {% if params.BACKUP_TYPE != 'configuration-only' %}
+                            /var/lib/docker/volumes/jenkins_data \
+                            /var/lib/docker/volumes/shared_workspace \
+                            /var/lib/docker/volumes/maven-cache \
+                            /var/lib/docker/volumes/pip-cache \
+                            {% endif %}
+                            {{ jenkins_home_dir }}/jcasc \
+                            {{ jenkins_home_dir }}/ssl \
+                            /etc/systemd/system/jenkins-*.service
+                        
+                        echo "✅ Borg backup archive created: \${ARCHIVE_NAME}"
+                    """
+                    {% else %}
+                    // Using traditional tar backup
+                    sh """
+                        echo "📦 Creating tar backup archive..."
+                        
+                        BACKUP_NAME="${HOSTNAME}-jenkins-${params.BACKUP_TYPE}-${TIMESTAMP}-${BACKUP_TAG}.tar.gz"
+                        
+                        sudo -u ${BACKUP_USER} tar -czf \
+                            ${BACKUP_MOUNT}/\${BACKUP_NAME} \
+                            -C ${BACKUP_HOME}/temp/${TIMESTAMP} . \
+                            {% if params.BACKUP_TYPE != 'configuration-only' %}
+                            -C /var/lib/docker/volumes jenkins_data shared_workspace maven-cache pip-cache \
+                            {% endif %}
+                            -C {{ jenkins_home_dir }} jcasc ssl \
+                            -C /etc/systemd/system jenkins-*.service
+                        
+                        # Create checksum
+                        sudo -u ${BACKUP_USER} sha256sum ${BACKUP_MOUNT}/\${BACKUP_NAME} > ${BACKUP_MOUNT}/\${BACKUP_NAME}.sha256
+                        
+                        echo "✅ Backup archive created: \${BACKUP_NAME}"
+                        echo "📏 Archive size: \$(du -h ${BACKUP_MOUNT}/\${BACKUP_NAME} | cut -f1)"
+                    """
+                    {% endif %}
+                }
+            }
+        }
+        
+        stage('Verify Backup Integrity') {
+            when {
+                expression { params.VERIFY_BACKUP }
+            }
+            steps {
+                script {
+                    echo "🔍 Verifying backup integrity..."
+                    
+                    sh """
+                        sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/verify-backup.sh \
+                            --timestamp ${TIMESTAMP} \
+                            --type ${params.BACKUP_TYPE} \
+                            --tag ${BACKUP_TAG}
+                    """
+                }
+            }
+        }
+        
+        stage('Cleanup Old Backups') {
+            when {
+                expression { params.CLEANUP_OLD_BACKUPS }
+            }
+            steps {
+                script {
+                    echo "🧹 Cleaning up old backups..."
+                    
+                    sh """
+                        sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/cleanup-old-backups.sh \
+                            --daily-retention {{ backup_daily_retention | default(30) }} \
+                            --weekly-retention {{ backup_weekly_retention | default(12) }} \
+                            --monthly-retention {{ backup_monthly_retention | default(12) }}
+                    """
+                }
+            }
+        }
+        
+        stage('Update Backup Registry') {
+            steps {
+                script {
+                    echo "📝 Updating backup registry..."
+                    
+                    sh """
+                        # Update backup registry with latest backup information
+                        cat >> ${BACKUP_MOUNT}/backup-registry.json << EOF
+{
+  "timestamp": "${TIMESTAMP}",
+  "hostname": "${HOSTNAME}",
+  "backup_type": "${params.BACKUP_TYPE}",
+  "backup_tag": "${BACKUP_TAG}",
+  "build_number": "${env.BUILD_NUMBER}",
+  "verification_status": "${params.VERIFY_BACKUP ? 'verified' : 'not_verified'}",
+  "size_mb": "\$(du -m ${BACKUP_MOUNT}/*${TIMESTAMP}* 2>/dev/null | awk '{sum+=\$1} END {print sum}' || echo 0)"
+},
+EOF
+                        
+                        # Generate backup report
+                        sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/backup-notification.sh \
+                            --status success \
+                            --type ${params.BACKUP_TYPE} \
+                            --timestamp ${TIMESTAMP} \
+                            --send-notification ${params.SEND_NOTIFICATIONS}
+                    """
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                // Cleanup temporary files
+                sh """
+                    rm -rf ${BACKUP_HOME}/temp/${TIMESTAMP}
+                """
+                
+                // Archive backup logs
+                archiveArtifacts artifacts: "${BACKUP_HOME}/logs/backup-*${TIMESTAMP}*.log", allowEmptyArchive: true
+            }
+        }
+        
+        success {
+            script {
+                echo "✅ Jenkins Backup Pipeline Completed Successfully!"
+                
+                def backupSize = sh(
+                    script: "du -sh ${BACKUP_MOUNT}/*${TIMESTAMP}* 2>/dev/null | awk '{print \$1}' | head -1 || echo 'Unknown'",
+                    returnStdout: true
+                ).trim()
+                
+                if (params.SEND_NOTIFICATIONS && env.SLACK_WEBHOOK) {
+                    slackSend(
+                        channel: '#infrastructure',
+                        color: 'good',
+                        message: """
+                            ✅ Jenkins Backup Successful
+                            
+                            📦 Type: ${params.BACKUP_TYPE}
+                            🏷️ Tag: ${BACKUP_TAG}
+                            📏 Size: ${backupSize}
+                            🔍 Verified: ${params.VERIFY_BACKUP ? 'Yes' : 'No'}
+                            ⏱️ Duration: ${currentBuild.durationString}
+                            
+                            🔗 Build: ${env.BUILD_URL}
+                        """.stripIndent()
+                    )
+                }
+            }
+        }
+        
+        failure {
+            script {
+                echo "❌ Jenkins Backup Pipeline Failed!"
+                
+                sh """
+                    # Send failure notification
+                    sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/backup-notification.sh \
+                        --status failure \
+                        --type ${params.BACKUP_TYPE} \
+                        --timestamp ${TIMESTAMP} \
+                        --send-notification ${params.SEND_NOTIFICATIONS}
+                """
+                
+                if (params.SEND_NOTIFICATIONS && env.SLACK_WEBHOOK) {
+                    slackSend(
+                        channel: '#infrastructure',
+                        color: 'danger',
+                        message: """
+                            ❌ Jenkins Backup Failed
+                            
+                            📦 Type: ${params.BACKUP_TYPE}
+                            🏷️ Tag: ${BACKUP_TAG}
+                            ⏱️ Duration: ${currentBuild.durationString}
+                            
+                            🔗 Build: ${env.BUILD_URL}
+                            📋 Please check logs for details
+                        """.stripIndent()
+                    )
+                }
+            }
+        }
+    }
+}
+    </script>
+    <sandbox>true</sandbox>
+  </definition>
+  <triggers/>
+  <disabled>false</disabled>
+</flow-definition>

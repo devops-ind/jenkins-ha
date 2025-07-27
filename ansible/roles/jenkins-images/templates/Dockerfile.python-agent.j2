@@ -1,0 +1,111 @@
+ARG PYTHON_VERSION={{ python_version | default('3.11') }}
+FROM python:${PYTHON_VERSION}
+
+# Build arguments
+ARG BUILD_DATE
+ARG VCS_REF
+
+# Metadata
+LABEL maintainer="DevOps Team" \
+      org.label-schema.build-date=${BUILD_DATE} \
+      org.label-schema.vcs-ref=${VCS_REF} \
+      org.label-schema.version=${PYTHON_VERSION} \
+      org.label-schema.schema-version="1.0" \
+      description="Jenkins Agent with Python development capabilities"
+
+# Switch to root to install packages
+USER root
+
+# Install essential packages and Java for Jenkins agent
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    unzip \
+    vim \
+    sudo \
+    openssh-client \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    build-essential \
+    libffi-dev \
+    libssl-dev \
+    libbz2-dev \
+    libreadline-dev \
+    libsqlite3-dev \
+    openjdk-11-jre-headless \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install common Python packages
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# Install development and testing tools
+RUN pip install --no-cache-dir \
+    pytest \
+    pytest-cov \
+    black \
+    flake8 \
+    mypy \
+    bandit \
+    safety \
+    pre-commit \
+    tox \
+    virtualenv \
+    pipenv \
+    poetry \
+    twine \
+    requests \
+    click \
+    pyyaml \
+    jinja2
+
+# Install Jenkins agent
+ARG AGENT_VERSION={{ jenkins_agent_version | default('latest') }}
+RUN curl --create-dirs -fsSLo /usr/share/jenkins/agent.jar \
+    https://repo.jenkins-ci.org/public/org/jenkins-ci/main/remoting/${AGENT_VERSION}/remoting-${AGENT_VERSION}.jar \
+    && chmod 755 /usr/share/jenkins \
+    && chmod 644 /usr/share/jenkins/agent.jar
+
+# Install Docker CLI for integration
+RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y docker-ce-cli \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create jenkins user
+RUN groupadd -g 1000 jenkins \
+    && useradd -u 1000 -g jenkins -m -s /bin/bash jenkins \
+    && usermod -aG docker jenkins
+
+# Create workspace and virtual environment directories
+RUN mkdir -p /home/jenkins/workspace \
+    && mkdir -p /home/jenkins/.virtualenvs \
+    && chown -R jenkins:jenkins /home/jenkins
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV VIRTUAL_ENV_DISABLE_PROMPT=1
+
+# Switch to jenkins user
+USER jenkins
+
+# Set working directory
+WORKDIR /home/jenkins
+
+# Create default virtual environment
+RUN python -m venv /home/jenkins/.virtualenvs/default \
+    && /home/jenkins/.virtualenvs/default/bin/pip install --upgrade pip
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD python --version && java -version || exit 1
+
+# Entry point for the agent
+ENTRYPOINT ["java", "-jar", "/usr/share/jenkins/agent.jar"]

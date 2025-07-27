@@ -1,0 +1,48 @@
+[Unit]
+Description=Jenkins Master {{ item }} Container
+Requires={% if jenkins_container_runtime == 'docker' %}docker.service{% else %}podman.service{% endif %}
+After={% if jenkins_container_runtime == 'docker' %}docker.service{% else %}podman.service{% endif %} network.target
+Wants=network.target
+
+[Service]
+Type=forking
+User={{ jenkins_user }}
+Group={{ jenkins_group }}
+ExecStartPre=-{% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} stop jenkins-master-{{ item }}
+ExecStartPre=-{% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} rm jenkins-master-{{ item }}
+ExecStart={% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} run --name jenkins-master-{{ item }} \
+  --network {{ jenkins_network_name }} \
+  -p {{ jenkins_port + item - 1 }}:{{ jenkins_port }} \
+  -p {{ jenkins_agent_port + item - 1 }}:{{ jenkins_agent_port }} \
+  -v jenkins-home-{{ item }}:{{ jenkins_home_dir }} \
+  -v jenkins-shared:{{ shared_storage_path | default('/shared/jenkins') }} \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e JAVA_OPTS="{{ jenkins_master_java_opts }}" \
+  -e JENKINS_OPTS="--httpPort={{ jenkins_port }} --prefix={{ jenkins_context_path }}" \
+  -e TZ="{{ common_timezone | default('UTC') }}" \
+  --memory {{ jenkins_master_memory }} \
+  --cpus {{ jenkins_master_cpu_limit }} \
+  --log-driver {{ jenkins_log_driver }} \
+  --log-opt max-size={{ jenkins_log_max_size }} \
+  --log-opt max-file={{ jenkins_log_max_files }} \
+  --restart {{ jenkins_restart_policy }} \
+  --label service=jenkins-master \
+  --label instance={{ item }} \
+  --label cluster={{ jenkins_cluster_name }} \
+  --health-cmd="curl -f http://localhost:{{ jenkins_port }}/login || exit 1" \
+  --health-interval=30s \
+  --health-timeout=10s \
+  --health-retries=3 \
+  --health-start-period=60s \
+  --detach \
+  {{ harbor_registry_url | default('jenkins') }}/{{ harbor_project | default('library') }}/jenkins-master:{{ jenkins_master_image_tag }}
+
+ExecStop={% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} stop jenkins-master-{{ item }}
+ExecStopPost={% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} rm jenkins-master-{{ item }}
+Restart={{ jenkins_systemd_restart }}
+RestartSec={{ jenkins_systemd_restart_sec }}
+TimeoutStartSec=300
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

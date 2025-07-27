@@ -1,0 +1,8 @@
+---
+- name: deploy-infrastructure playbook
+  hosts: all
+  become: yes
+  tasks:
+    - name: Execute deploy-infrastructure
+      debug:
+        msg: "Running deploy-infrastructure tasks"

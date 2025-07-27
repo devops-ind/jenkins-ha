@@ -1,0 +1,4 @@
+---
+# Default variables for shared-storage role
+shared-storage_enabled: true
+shared-storage_version: "latest"

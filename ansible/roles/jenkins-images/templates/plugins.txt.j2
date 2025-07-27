@@ -1,0 +1,96 @@
+# Core Pipeline and Workflow Plugins
+workflow-aggregator:latest
+workflow-job:latest
+workflow-cps:latest
+workflow-basic-steps:latest
+workflow-durable-task-step:latest
+workflow-scm-step:latest
+workflow-support:latest
+pipeline-stage-view:latest
+pipeline-rest-api:latest
+pipeline-build-step:latest
+pipeline-input-step:latest
+pipeline-milestone-step:latest
+
+# Docker Integration
+docker-workflow:latest
+docker-commons:latest
+docker-build-step:latest
+
+# Cloud and Agent Management
+kubernetes:latest
+ssh-slaves:latest
+matrix-project:latest
+
+# Source Control Management
+git:latest
+github:latest
+github-branch-source:latest
+pipeline-github-lib:latest
+
+# Build Tools
+maven-plugin:latest
+gradle:latest
+nodejs:latest
+python:latest
+
+# Monitoring and Metrics
+prometheus:latest
+monitoring:latest
+build-monitor-plugin:latest
+
+# Configuration as Code
+configuration-as-code:latest
+configuration-as-code-support:latest
+
+# Security
+matrix-auth:latest
+role-strategy:latest
+authorize-project:latest
+
+# Utilities
+build-timeout:latest
+timestamper:latest
+ws-cleanup:latest
+build-name-setter:latest
+description-setter:latest
+envinject:latest
+copyartifact:latest
+junit:latest
+jacoco:latest
+htmlpublisher:latest
+publish-over-ssh:latest
+
+# UI Enhancements
+blueocean:latest
+dashboard-view:latest
+view-job-filters:latest
+
+# Notifications
+mailer:latest
+slack:latest
+
+{% if jenkins_plugins is defined %}
+# Additional custom plugins
+{% for plugin in jenkins_plugins %}
+{{ plugin }}:latest
+{% endfor %}
+{% endif %}
+
+# HA Specific Plugins
+{% if jenkins_ha_enabled | default(false) %}
+shared-workspace:latest
+{% endif %}
+
+# Environment Specific Plugins
+{% if harbor_integration_enabled | default(true) %}
+docker-plugin:latest
+{% endif %}
+
+{% if backup_enabled | default(true) %}
+backup:latest
+{% endif %}
+
+{% if monitoring_enabled | default(true) %}
+metrics:latest
+{% endif %}

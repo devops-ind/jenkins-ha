@@ -1,0 +1,234 @@
+---
+# Jenkins Images Building and Management Role
+# Builds images and pushes to Harbor registry
+
+- name: Create image build directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+  loop:
+    - "{{ jenkins_images_build_dir }}"
+    - "{{ jenkins_images_build_dir }}/master"
+    - "{{ jenkins_images_build_dir }}/agents"
+    - "{{ jenkins_images_build_dir }}/agents/dind"
+    - "{{ jenkins_images_build_dir }}/agents/maven"
+    - "{{ jenkins_images_build_dir }}/agents/python"
+    - "{{ jenkins_images_build_dir }}/agents/nodejs"
+    - "{{ jenkins_images_build_dir }}/haproxy"
+
+- name: Generate Jenkins Master Dockerfile
+  template:
+    src: Dockerfile.master.j2
+    dest: "{{ jenkins_images_build_dir }}/master/Dockerfile"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  notify: build jenkins master image
+
+- name: Generate plugins list for master
+  template:
+    src: plugins.txt.j2
+    dest: "{{ jenkins_images_build_dir }}/master/plugins.txt"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  notify: build jenkins master image
+
+- name: Generate DIND agent Dockerfile
+  template:
+    src: Dockerfile.dind-agent.j2
+    dest: "{{ jenkins_images_build_dir }}/agents/dind/Dockerfile"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  notify: build dind agent image
+
+- name: Generate Maven agent Dockerfile
+  template:
+    src: Dockerfile.maven-agent.j2
+    dest: "{{ jenkins_images_build_dir }}/agents/maven/Dockerfile"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  notify: build maven agent image
+
+- name: Generate Python agent Dockerfile
+  template:
+    src: Dockerfile.python-agent.j2
+    dest: "{{ jenkins_images_build_dir }}/agents/python/Dockerfile"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  notify: build python agent image
+
+- name: Generate Node.js agent Dockerfile
+  template:
+    src: Dockerfile.nodejs-agent.j2
+    dest: "{{ jenkins_images_build_dir }}/agents/nodejs/Dockerfile"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  notify: build nodejs agent image
+
+- name: Copy common scripts and files
+  copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { src: 'docker-entrypoint.sh', dest: "{{ jenkins_images_build_dir }}/docker-entrypoint.sh", mode: '0755' }
+    - { src: 'healthcheck.sh', dest: "{{ jenkins_images_build_dir }}/healthcheck.sh", mode: '0755' }
+
+- name: Login to Harbor registry
+  community.docker.docker_login:
+    registry_url: "{{ harbor_registry_url }}"
+    username: "{{ harbor_username }}"
+    password: "{{ harbor_password }}"
+    email: "{{ harbor_email | default(omit) }}"
+  when: harbor_integration_enabled | default(true)
+
+- name: Build Jenkins master image
+  community.docker.docker_image:
+    name: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-master"
+    tag: "{{ jenkins_master_image_tag }}"
+    build:
+      path: "{{ jenkins_images_build_dir }}/master"
+      dockerfile: Dockerfile
+      pull: yes
+      nocache: "{{ jenkins_images_force_rebuild | default(false) }}"
+      args:
+        JENKINS_VERSION: "{{ jenkins_version }}"
+        BUILD_DATE: "{{ ansible_date_time.iso8601 }}"
+        VCS_REF: "{{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
+    source: build
+    state: present
+    push: "{{ jenkins_images_push | default(true) }}"
+  register: master_image_build
+
+- name: Build DIND agent image
+  community.docker.docker_image:
+    name: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-agent-dind"
+    tag: "{{ jenkins_agent_image_tag }}"
+    build:
+      path: "{{ jenkins_images_build_dir }}/agents/dind"
+      dockerfile: Dockerfile
+      pull: yes
+      nocache: "{{ jenkins_images_force_rebuild | default(false) }}"
+      args:
+        AGENT_VERSION: "{{ jenkins_agent_version }}"
+        BUILD_DATE: "{{ ansible_date_time.iso8601 }}"
+        VCS_REF: "{{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
+    source: build
+    state: present
+    push: "{{ jenkins_images_push | default(true) }}"
+  register: dind_image_build
+
+- name: Build Maven agent image
+  community.docker.docker_image:
+    name: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-agent-maven"
+    tag: "{{ jenkins_agent_image_tag }}"
+    build:
+      path: "{{ jenkins_images_build_dir }}/agents/maven"
+      dockerfile: Dockerfile
+      pull: yes
+      nocache: "{{ jenkins_images_force_rebuild | default(false) }}"
+      args:
+        MAVEN_VERSION: "{{ maven_version }}"
+        JDK_VERSION: "{{ default_jdk_version }}"
+        BUILD_DATE: "{{ ansible_date_time.iso8601 }}"
+        VCS_REF: "{{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
+    source: build
+    state: present
+    push: "{{ jenkins_images_push | default(true) }}"
+  register: maven_image_build
+
+- name: Build Python agent image
+  community.docker.docker_image:
+    name: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-agent-python"
+    tag: "{{ jenkins_agent_image_tag }}"
+    build:
+      path: "{{ jenkins_images_build_dir }}/agents/python"
+      dockerfile: Dockerfile
+      pull: yes
+      nocache: "{{ jenkins_images_force_rebuild | default(false) }}"
+      args:
+        PYTHON_VERSION: "{{ python_version }}"
+        BUILD_DATE: "{{ ansible_date_time.iso8601 }}"
+        VCS_REF: "{{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
+    source: build
+    state: present
+    push: "{{ jenkins_images_push | default(true) }}"
+  register: python_image_build
+
+- name: Build Node.js agent image
+  community.docker.docker_image:
+    name: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-agent-nodejs"
+    tag: "{{ jenkins_agent_image_tag }}"
+    build:
+      path: "{{ jenkins_images_build_dir }}/agents/nodejs"
+      dockerfile: Dockerfile
+      pull: yes
+      nocache: "{{ jenkins_images_force_rebuild | default(false) }}"
+      args:
+        NODE_VERSION: "{{ nodejs_version }}"
+        BUILD_DATE: "{{ ansible_date_time.iso8601 }}"
+        VCS_REF: "{{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
+    source: build
+    state: present
+    push: "{{ jenkins_images_push | default(true) }}"
+  register: nodejs_image_build
+
+- name: Clean up old images (keep last 3 versions)
+  community.docker.docker_prune:
+    images: yes
+    images_filters:
+      dangling: false
+      until: "72h"
+  when: jenkins_images_cleanup | default(true)
+
+- name: Generate image manifest
+  template:
+    src: image-manifest.yml.j2
+    dest: "{{ jenkins_images_build_dir }}/image-manifest.yml"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  vars:
+    images_built:
+      - name: jenkins-master
+        tag: "{{ jenkins_master_image_tag }}"
+        digest: "{{ master_image_build.image.Id | default('') }}"
+      - name: jenkins-agent-dind
+        tag: "{{ jenkins_agent_image_tag }}"
+        digest: "{{ dind_image_build.image.Id | default('') }}"
+      - name: jenkins-agent-maven
+        tag: "{{ jenkins_agent_image_tag }}"
+        digest: "{{ maven_image_build.image.Id | default('') }}"
+      - name: jenkins-agent-python
+        tag: "{{ jenkins_agent_image_tag }}"
+        digest: "{{ python_image_build.image.Id | default('') }}"
+      - name: jenkins-agent-nodejs
+        tag: "{{ jenkins_agent_image_tag }}"
+        digest: "{{ nodejs_image_build.image.Id | default('') }}"
+
+- name: Display image build summary
+  debug:
+    msg: |
+      🎉 Jenkins Images Build Completed!
+      
+      📦 Built Images:
+      • Master: {{ harbor_registry_url }}/{{ harbor_project }}/jenkins-master:{{ jenkins_master_image_tag }}
+      • DIND Agent: {{ harbor_registry_url }}/{{ harbor_project }}/jenkins-agent-dind:{{ jenkins_agent_image_tag }}
+      • Maven Agent: {{ harbor_registry_url }}/{{ harbor_project }}/jenkins-agent-maven:{{ jenkins_agent_image_tag }}
+      • Python Agent: {{ harbor_registry_url }}/{{ harbor_project }}/jenkins-agent-python:{{ jenkins_agent_image_tag }}
+      • Node.js Agent: {{ harbor_registry_url }}/{{ harbor_project }}/jenkins-agent-nodejs:{{ jenkins_agent_image_tag }}
+      
+      🏷️ Registry: {{ harbor_registry_url }}/{{ harbor_project }}
+      📅 Build Date: {{ ansible_date_time.iso8601 }}
+      🔨 Force Rebuild: {{ jenkins_images_force_rebuild | default(false) }}
+      📤 Push to Registry: {{ jenkins_images_push | default(true) }}

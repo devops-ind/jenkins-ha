@@ -1,0 +1,73 @@
+ARG JENKINS_VERSION={{ jenkins_version }}
+FROM jenkins/jenkins:${JENKINS_VERSION}
+
+# Build arguments
+ARG BUILD_DATE
+ARG VCS_REF
+
+# Metadata
+LABEL maintainer="DevOps Team" \
+      org.label-schema.build-date=${BUILD_DATE} \
+      org.label-schema.vcs-ref=${VCS_REF} \
+      org.label-schema.version=${JENKINS_VERSION} \
+      org.label-schema.schema-version="1.0" \
+      description="Custom Jenkins Master for HA deployment"
+
+# Switch to root to install packages
+USER root
+
+# Install additional packages and Docker
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    unzip \
+    vim \
+    sudo \
+    apt-transport-https \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y docker-ce-cli \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy plugins list
+COPY plugins.txt /usr/share/jenkins/ref/plugins.txt
+
+# Install plugins
+RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt
+
+# Create necessary directories
+RUN mkdir -p /var/jenkins_home/casc_configs \
+    && mkdir -p /var/jenkins_home/init.groovy.d \
+    && mkdir -p /var/jenkins_home/scripts
+
+# Set permissions for jenkins user
+RUN chown -R jenkins:jenkins /var/jenkins_home
+
+# Add jenkins user to docker group for Docker socket access
+RUN usermod -aG docker jenkins
+
+# Switch back to jenkins user
+USER jenkins
+
+# Set Java options for HA deployment
+ENV JAVA_OPTS="-Djenkins.install.runSetupWizard=false \
+               -Djenkins.model.Jenkins.slaveAgentPort={{ jenkins_agent_port | default('50000') }} \
+               -Djenkins.model.Jenkins.slaveAgentPortEnforce=true \
+               -Dhudson.DNSMultiCast.disabled=true"
+
+# Set Jenkins options
+ENV JENKINS_OPTS="--httpPort={{ jenkins_port }} \
+                  --prefix={{ jenkins_context_path | default('') }}"
+
+# Expose ports
+EXPOSE {{ jenkins_port }} {{ jenkins_agent_port | default('50000') }}
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5m --retries=3 \
+    CMD curl -f http://localhost:{{ jenkins_port }}{{ jenkins_context_path | default('') }}/login || exit 1

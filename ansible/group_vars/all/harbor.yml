@@ -1,0 +1,6 @@
+---
+harbor_version: "2.7.0"
+harbor_hostname: "{{ harbor_registry }}"
+harbor_port: 443
+harbor_data_volume: "/data/harbor"
+harbor_log_level: "info"

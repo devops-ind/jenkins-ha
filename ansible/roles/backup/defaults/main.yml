@@ -1,0 +1,4 @@
+---
+# Default variables for backup role
+backup_enabled: true
+backup_version: "latest"

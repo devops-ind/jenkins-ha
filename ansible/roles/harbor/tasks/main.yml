@@ -1,0 +1,150 @@
+---
+# Tasks for harbor role
+
+- name: Create Harbor directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ harbor_install_dir }}"
+    - "{{ harbor_data_dir }}"
+    - "{{ harbor_log_dir }}"
+    - "{{ harbor_data_dir }}/registry"
+    - "{{ harbor_data_dir }}/database"
+    - "{{ harbor_data_dir }}/redis"
+
+- name: Download Harbor installer
+  get_url:
+    url: "{{ harbor_download_url }}"
+    dest: "/tmp/harbor-installer.tgz"
+    mode: '0644'
+  register: harbor_download
+
+- name: Extract Harbor installer
+  unarchive:
+    src: "/tmp/harbor-installer.tgz"
+    dest: "{{ harbor_install_dir }}"
+    remote_src: yes
+    extra_opts: [--strip-components=1]
+  when: harbor_download.changed
+
+- name: Generate Harbor configuration
+  template:
+    src: harbor.yml.j2
+    dest: "{{ harbor_install_dir }}/harbor.yml"
+    backup: yes
+  notify: restart harbor
+
+- name: Check if Harbor is already installed
+  stat:
+    path: "{{ harbor_install_dir }}/common/config"
+  register: harbor_installed
+
+- name: Run Harbor installer
+  command: "{{ harbor_install_dir }}/install.sh --with-trivy"
+  args:
+    chdir: "{{ harbor_install_dir }}"
+  when: not harbor_installed.stat.exists
+  register: harbor_install_result
+
+- name: Wait for Harbor to be ready
+  uri:
+    url: "http://{{ harbor_hostname }}:{{ harbor_port }}/api/v2.0/systeminfo"
+    method: GET
+    status_code: 200
+  register: harbor_health
+  until: harbor_health.status == 200
+  retries: 30
+  delay: 10
+  when: harbor_install_result.changed or not harbor_installed.stat.exists
+
+- name: Login to Harbor API
+  uri:
+    url: "http://{{ harbor_hostname }}:{{ harbor_port }}/c/login"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      principal: admin
+      password: "{{ harbor_admin_password }}"
+    status_code: 200
+  register: harbor_login
+  no_log: true
+
+- name: Create Harbor projects
+  uri:
+    url: "http://{{ harbor_hostname }}:{{ harbor_port }}/api/v2.0/projects"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      Cookie: "{{ harbor_login.set_cookie }}"
+    body_format: json
+    body:
+      project_name: "{{ item.name }}"
+      public: "{{ item.public }}"
+      metadata:
+        auto_scan: "{{ item.auto_scan | string | lower }}"
+        prevent_vul: "{{ item.prevent_vul | string | lower }}"
+    status_code: [201, 409]  # 409 if project already exists
+  loop: "{{ harbor_projects }}"
+  no_log: true
+
+- name: Create Harbor users
+  uri:
+    url: "http://{{ harbor_hostname }}:{{ harbor_port }}/api/v2.0/users"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      Cookie: "{{ harbor_login.set_cookie }}"
+    body_format: json
+    body:
+      username: "{{ item.username }}"
+      email: "{{ item.email }}"
+      password: "{{ item.password }}"
+      realname: "{{ item.realname }}"
+    status_code: [201, 409]  # 409 if user already exists
+  loop: "{{ harbor_users }}"
+  no_log: true
+
+- name: Configure Harbor scan policy
+  uri:
+    url: "http://{{ harbor_hostname }}:{{ harbor_port }}/api/v2.0/system/scanAll/schedule"
+    method: PUT
+    headers:
+      Content-Type: "application/json"
+      Cookie: "{{ harbor_login.set_cookie }}"
+    body_format: json
+    body:
+      schedule:
+        type: "{{ harbor_scan_all_policy.type }}"
+        cron: "0 {{ harbor_scan_all_policy.parameter.daily_time.split(':')[1] }} {{ harbor_scan_all_policy.parameter.daily_time.split(':')[0] }} * * *"
+    status_code: 200
+  when: harbor_scan_all_policy is defined
+  no_log: true
+
+- name: Setup Harbor logrotate
+  template:
+    src: harbor-logrotate.j2
+    dest: /etc/logrotate.d/harbor
+
+- name: Create Harbor systemd service
+  template:
+    src: harbor.service.j2
+    dest: /etc/systemd/system/harbor.service
+  notify:
+    - reload systemd
+    - restart harbor
+
+- name: Enable Harbor service
+  systemd:
+    name: harbor
+    enabled: yes
+    daemon_reload: yes
+
+- name: Configure Docker to trust Harbor registry
+  template:
+    src: docker-daemon-harbor.json.j2
+    dest: /etc/docker/daemon.json
+    backup: yes
+  notify: restart docker
+  when: not harbor_ssl_enabled

@@ -1,0 +1,8 @@
+---
+# Handlers for jenkins-infrastructure role
+- name: restart jenkins-infrastructure service
+  systemd:
+    name: jenkins-infrastructure
+    state: restarted
+    enabled: yes
+  listen: "restart jenkins-infrastructure"

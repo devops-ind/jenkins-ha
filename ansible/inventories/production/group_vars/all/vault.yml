@@ -1,0 +1,9 @@
+---
+# Encrypted variables (use ansible-vault to edit)
+# $ANSIBLE_VAULT;1.1;AES256
+# This is a placeholder - use: ansible-vault create vault.yml
+# Add your encrypted secrets here
+vault_jenkins_admin_password: "changeme"
+vault_grafana_password: "changeme"
+vault_harbor_password: "changeme"
+vault_slack_webhook: "https://hooks.slack.com/your/webhook/url"

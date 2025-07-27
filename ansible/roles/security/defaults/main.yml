@@ -1,0 +1,83 @@
+---
+# Default variables for security role
+
+# General Security Configuration
+security_enabled: true
+security_hardening_enabled: true
+security_scanning_enabled: true
+jenkins_security_enabled: true
+
+# Firewall Configuration
+security_allowed_ports:
+  - "22"    # SSH
+  - "80"    # HTTP
+  - "443"   # HTTPS
+  - "8080"  # Jenkins primary
+  - "8081"  # Jenkins secondary (if HA)
+  - "50000" # Jenkins agent primary
+  - "50001" # Jenkins agent secondary (if HA)
+  - "8404"  # HAProxy stats
+
+# SSH Hardening
+ssh_hardening_enabled: true
+ssh_port: 22
+ssh_permit_root_login: false
+ssh_password_authentication: false
+ssh_pubkey_authentication: true
+ssh_max_auth_tries: 3
+ssh_client_alive_interval: 300
+ssh_client_alive_count_max: 2
+
+# Fail2ban Configuration
+fail2ban_enabled: true
+fail2ban_jail_configs:
+  - name: "sshd"
+    enabled: true
+    port: "ssh"
+    filter: "sshd"
+    logpath: "/var/log/auth.log"
+    maxretry: 3
+    findtime: 600
+    bantime: 3600
+  - name: "jenkins"
+    enabled: true
+    port: "8080,8081"
+    filter: "jenkins"
+    logpath: "/var/log/jenkins/jenkins.log"
+    maxretry: 5
+    findtime: 300
+    bantime: 1800
+
+# Security Scanning
+aide_enabled: true
+rkhunter_enabled: true
+chkrootkit_enabled: true
+security_audit_enabled: true
+
+# Jenkins Security
+jenkins_csrf_protection: true
+jenkins_disable_cli: true
+jenkins_disable_remember_me: false
+jenkins_agent_protocols: ["JNLP4-connect", "Ping"]
+jenkins_disable_jnlp3: true
+
+# System Hardening
+kernel_hardening_enabled: true
+network_hardening_enabled: true
+file_permissions_hardening: true
+
+# Logging and Monitoring
+security_log_file: "/var/log/security-audit.log"
+security_log_level: "INFO"
+security_alert_email: ""  # Set to enable email alerts
+
+# Password Policies
+password_min_length: 12
+password_complexity_enabled: true
+password_history: 5
+password_max_age: 90
+
+# Account Lockout
+account_lockout_enabled: true
+account_lockout_threshold: 5
+account_lockout_duration: 30  # minutes

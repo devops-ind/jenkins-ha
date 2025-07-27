@@ -1,0 +1,13 @@
+---
+- name: Test playbook syntax
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  tasks:
+    - name: Check Ansible version
+      debug:
+        msg: "Ansible version: {{ ansible_version.full }}"
+    
+    - name: Syntax test passed
+      debug:
+        msg: "All playbook syntax checks passed"

@@ -1,0 +1,8 @@
+---
+- name: security-hardening playbook
+  hosts: all
+  become: yes
+  tasks:
+    - name: Execute security-hardening
+      debug:
+        msg: "Running security-hardening tasks"

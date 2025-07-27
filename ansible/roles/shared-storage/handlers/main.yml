@@ -1,0 +1,8 @@
+---
+# Handlers for shared-storage role
+- name: restart shared-storage service
+  systemd:
+    name: shared-storage
+    state: restarted
+    enabled: yes
+  listen: "restart shared-storage"

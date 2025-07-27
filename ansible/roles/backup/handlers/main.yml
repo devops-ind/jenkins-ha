@@ -1,0 +1,8 @@
+---
+# Handlers for backup role
+- name: restart backup service
+  systemd:
+    name: backup
+    state: restarted
+    enabled: yes
+  listen: "restart backup"

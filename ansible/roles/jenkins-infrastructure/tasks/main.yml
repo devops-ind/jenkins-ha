@@ -1,0 +1,48 @@
+---
+# Jenkins Infrastructure Role - Native Container Management
+# Replaces Docker Compose with Ansible container management and systemd services
+
+- name: Create Jenkins system user and group
+  group:
+    name: "{{ jenkins_group }}"
+    gid: "{{ jenkins_gid }}"
+    state: present
+  become: yes
+
+- name: Create Jenkins system user
+  user:
+    name: "{{ jenkins_user }}"
+    uid: "{{ jenkins_uid }}"
+    group: "{{ jenkins_group }}"
+    home: "{{ jenkins_home_dir }}"
+    shell: /bin/bash
+    system: yes
+    create_home: yes
+  become: yes
+
+- name: Include network configuration tasks
+  include_tasks: networks.yml
+  tags: ['networks']
+
+- name: Include volume configuration tasks
+  include_tasks: volumes.yml
+  tags: ['volumes']
+
+- name: Include master container tasks
+  include_tasks: master-containers.yml
+  when: jenkins_role == 'master' or jenkins_role is not defined
+  tags: ['master', 'containers']
+
+- name: Include agent container tasks
+  include_tasks: agent-containers.yml
+  when: jenkins_role == 'agent'
+  tags: ['agents', 'containers']
+
+- name: Include systemd service configuration
+  include_tasks: systemd-services.yml
+  tags: ['systemd', 'services']
+
+- name: Include Jenkins bootstrap configuration
+  include_tasks: bootstrap-jobs.yml
+  when: jenkins_role == 'master' or jenkins_role is not defined
+  tags: ['bootstrap', 'jobs']

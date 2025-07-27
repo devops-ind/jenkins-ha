@@ -1,0 +1,58 @@
+---
+# Bootstrap playbook for initial server setup
+- name: Bootstrap infrastructure servers
+  hosts: all
+  become: yes
+  gather_facts: yes
+  serial: "{{ bootstrap_serial | default('100%') }}"
+  
+  pre_tasks:
+    - name: Wait for system to be ready
+      wait_for_connection:
+        timeout: 300
+        
+    - name: Gather facts
+      setup:
+        
+  roles:
+    - role: common
+      tags: ['common', 'bootstrap']
+      
+  tasks:
+    - name: Create jenkins user
+      user:
+        name: jenkins
+        uid: 1000
+        group: jenkins
+        home: /var/lib/jenkins
+        shell: /bin/bash
+        system: yes
+        create_home: yes
+        
+    - name: Create required directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: '0755'
+      loop:
+        - /var/lib/jenkins
+        - /var/log/jenkins
+        - /opt/jenkins
+        - /etc/jenkins
+        
+    - name: Configure system limits for jenkins
+      lineinfile:
+        path: /etc/security/limits.conf
+        line: "{{ item }}"
+        backup: yes
+      loop:
+        - "jenkins soft nofile 65536"
+        - "jenkins hard nofile 65536"
+        - "jenkins soft nproc 4096"
+        - "jenkins hard nproc 4096"
+        
+    - name: Verify bootstrap completion
+      debug:
+        msg: "Bootstrap completed successfully for {{ inventory_hostname }}"

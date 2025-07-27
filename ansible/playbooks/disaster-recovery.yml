@@ -1,0 +1,8 @@
+---
+- name: disaster-recovery playbook
+  hosts: all
+  become: yes
+  tasks:
+    - name: Execute disaster-recovery
+      debug:
+        msg: "Running disaster-recovery tasks"

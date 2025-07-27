@@ -1,0 +1,138 @@
+---
+# High Availability Configuration for Jenkins
+
+- name: Install HAProxy for load balancing
+  package:
+    name: haproxy
+    state: present
+  become: yes
+  tags: ['ha', 'loadbalancer']
+
+- name: Create HAProxy configuration directory
+  file:
+    path: /etc/haproxy/conf.d
+    state: directory
+    mode: '0755'
+  become: yes
+  tags: ['ha', 'config']
+
+- name: Configure HAProxy for Jenkins HA
+  template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    backup: yes
+    validate: haproxy -f %s -c
+  become: yes
+  notify: restart haproxy
+  tags: ['ha', 'config']
+
+- name: Install keepalived for VIP management
+  package:
+    name: keepalived
+    state: present
+  become: yes
+  when: jenkins_vip is defined and jenkins_vip != ""
+  tags: ['ha', 'vip']
+
+- name: Configure keepalived for VIP
+  template:
+    src: keepalived.conf.j2
+    dest: /etc/keepalived/keepalived.conf
+    backup: yes
+  become: yes
+  notify: restart keepalived
+  when: jenkins_vip is defined and jenkins_vip != ""
+  tags: ['ha', 'vip']
+
+- name: Create Jenkins HA health check script
+  template:
+    src: jenkins-ha-healthcheck.sh.j2
+    dest: /usr/local/bin/jenkins-ha-healthcheck.sh
+    mode: '0755'
+  become: yes
+  tags: ['ha', 'healthcheck']
+
+- name: Configure firewall for HA services
+  ansible.posix.firewalld:
+    service: "{{ item }}"
+    permanent: yes
+    state: enabled
+    immediate: yes
+  loop:
+    - http
+    - https
+  when: ansible_os_family == "RedHat"
+  become: yes
+  tags: ['ha', 'firewall']
+
+- name: Configure UFW for HA services
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - "80"
+    - "443"
+    - "8404"  # HAProxy stats
+  when: ansible_os_family == "Debian"
+  become: yes
+  tags: ['ha', 'firewall']
+
+- name: Start and enable HAProxy
+  systemd:
+    name: haproxy
+    state: started
+    enabled: yes
+    daemon_reload: yes
+  become: yes
+  tags: ['ha', 'service']
+
+- name: Start and enable keepalived
+  systemd:
+    name: keepalived
+    state: started
+    enabled: yes
+    daemon_reload: yes
+  become: yes
+  when: jenkins_vip is defined and jenkins_vip != ""
+  tags: ['ha', 'service']
+
+- name: Create HA monitoring scripts
+  template:
+    src: "{{ item }}.j2"
+    dest: "/usr/local/bin/{{ item }}"
+    mode: '0755'
+  loop:
+    - jenkins-ha-monitor.sh
+    - jenkins-failover.sh
+  become: yes
+  tags: ['ha', 'monitoring']
+
+- name: Setup HA monitoring cron job
+  cron:
+    name: "Jenkins HA Health Monitoring"
+    job: "/usr/local/bin/jenkins-ha-monitor.sh"
+    minute: "*/2"
+    user: root
+  become: yes
+  tags: ['ha', 'monitoring']
+
+- name: Display HA configuration status
+  debug:
+    msg: |
+      Jenkins High Availability Configuration:
+      
+      Load Balancer: HAProxy (http://{{ ansible_default_ipv4.address }}:80)
+      Stats: http://{{ ansible_default_ipv4.address }}:8404/stats
+      {% if jenkins_vip is defined and jenkins_vip != "" %}
+      Virtual IP: {{ jenkins_vip }}
+      VRRP: Enabled with keepalived
+      {% endif %}
+      HA Mode: {{ jenkins_ha_mode }}
+      Master Count: {{ jenkins_master_count }}
+      
+      Backend Servers:
+      {% for i in range(1, jenkins_master_count + 1) %}
+      - jenkins-master-{{ i }}: {{ ansible_default_ipv4.address }}:{{ jenkins_port + i - 1 }}
+      {% endfor %}
+  tags: ['ha', 'info']

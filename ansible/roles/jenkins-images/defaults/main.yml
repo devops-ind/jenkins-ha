@@ -1,0 +1,4 @@
+---
+# Default variables for jenkins-images role
+jenkins-images_enabled: true
+jenkins-images_version: "latest"

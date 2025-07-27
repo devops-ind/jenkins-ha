@@ -1,0 +1,8 @@
+---
+- name: update-images playbook
+  hosts: all
+  become: yes
+  tasks:
+    - name: Execute update-images
+      debug:
+        msg: "Running update-images tasks"

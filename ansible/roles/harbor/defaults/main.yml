@@ -1,0 +1,94 @@
+---
+# Default variables for harbor role
+
+# Harbor configuration
+harbor_enabled: true
+harbor_version: "v2.9.0"
+harbor_hostname: "{{ harbor_registry | default('harbor.local') }}"
+harbor_port: 80
+harbor_https_port: 443
+harbor_ssl_enabled: false
+
+# Harbor installation
+harbor_install_dir: "/opt/harbor"
+harbor_data_dir: "/data/harbor"
+harbor_log_dir: "/var/log/harbor"
+harbor_download_url: "https://github.com/goharbor/harbor/releases/download/{{ harbor_version }}/harbor-offline-installer-{{ harbor_version }}.tgz"
+
+# Harbor database
+harbor_db_host: "localhost"
+harbor_db_port: 5432
+harbor_db_name: "registry"
+harbor_db_user: "harbor"
+harbor_db_password: "{{ vault_harbor_db_password | default('changeme') }}"
+
+# Harbor Redis
+harbor_redis_host: "localhost"
+harbor_redis_port: 6379
+harbor_redis_password: "{{ vault_harbor_redis_password | default('') }}"
+
+# Harbor admin
+harbor_admin_password: "{{ vault_harbor_admin_password | default('Harbor12345') }}"
+
+# Harbor components
+harbor_components:
+  - proxy
+  - portal
+  - core
+  - jobservice
+  - registryctl
+  - registry
+  - db
+  - redis
+  - trivy
+
+# Harbor projects
+harbor_projects:
+  - name: "{{ jenkins_project_name | default('jenkins') }}"
+    public: false
+    auto_scan: true
+    prevent_vul: true
+  - name: "library"
+    public: true
+    auto_scan: false
+    prevent_vul: false
+
+# Harbor users
+harbor_users:
+  - username: "jenkins"
+    email: "jenkins@company.com"
+    password: "{{ vault_harbor_jenkins_password | default('Jenkins123') }}"
+    realname: "Jenkins Service Account"
+    role_id: 2  # Developer
+
+# Harbor replication
+harbor_replication_enabled: false
+harbor_replication_targets: []
+
+# Harbor security
+harbor_token_expiration: 30
+harbor_robot_token_duration: 90
+harbor_scan_all_policy:
+  type: "daily"
+  parameter:
+    daily_time: "02:00"
+
+# Harbor storage
+harbor_storage_backend: "filesystem"
+harbor_storage_config:
+  filesystem:
+    rootdirectory: "{{ harbor_data_dir }}/registry"
+  # s3:
+  #   region: us-west-1
+  #   bucket: harbor-registry
+  #   accesskey: access-key-id
+  #   secretkey: secret-access-key
+
+# Harbor notification
+harbor_webhook_enabled: false
+harbor_webhook_endpoints: []
+
+# Harbor resource limits
+harbor_core_replicas: 1
+harbor_jobservice_replicas: 1
+harbor_registry_replicas: 1

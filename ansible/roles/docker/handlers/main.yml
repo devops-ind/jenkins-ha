@@ -1,0 +1,8 @@
+---
+# Handlers for docker role
+- name: restart docker service
+  systemd:
+    name: docker
+    state: restarted
+    enabled: yes
+  listen: "restart docker"

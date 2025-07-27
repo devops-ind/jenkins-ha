@@ -1,0 +1,287 @@
+---
+# Backup Role - Volume Backup to Shared Storage
+# Automated backup system for Jenkins data and configuration
+
+- name: Create backup user and group
+  group:
+    name: "{{ backup_group }}"
+    gid: "{{ backup_gid }}"
+    state: present
+  become: yes
+
+- name: Create backup system user
+  user:
+    name: "{{ backup_user }}"
+    uid: "{{ backup_uid }}"
+    group: "{{ backup_group }}"
+    home: "{{ backup_home_dir }}"
+    shell: /bin/bash
+    system: yes
+    create_home: yes
+  become: yes
+
+- name: Create backup directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  loop:
+    - "{{ backup_home_dir }}"
+    - "{{ backup_home_dir }}/scripts"
+    - "{{ backup_home_dir }}/logs"
+    - "{{ backup_home_dir }}/temp"
+    - "{{ backup_local_dir }}"
+    - "{{ backup_local_dir }}/jenkins"
+    - "{{ backup_local_dir }}/monitoring"
+    - "{{ backup_local_dir }}/configuration"
+
+- name: Install backup dependencies
+  package:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - rsync
+    - tar
+    - gzip
+    - cifs-utils
+    - nfs-utils
+    - borgbackup
+  become: yes
+
+- name: Configure shared storage mount for backups
+  mount:
+    path: "{{ backup_mount_point }}"
+    src: "{{ backup_nfs_server }}:{{ backup_nfs_path }}"
+    fstype: nfs
+    opts: "{{ backup_nfs_options }}"
+    state: mounted
+  when: backup_storage_type == 'nfs'
+  become: yes
+
+- name: Configure CIFS mount for backups
+  mount:
+    path: "{{ backup_mount_point }}"
+    src: "{{ backup_cifs_share }}"
+    fstype: cifs
+    opts: "credentials={{ backup_cifs_credentials }},{{ backup_cifs_options }}"
+    state: mounted
+  when: backup_storage_type == 'cifs'
+  become: yes
+
+- name: Create backup credentials file for CIFS
+  template:
+    src: cifs-credentials.j2
+    dest: "{{ backup_cifs_credentials }}"
+    owner: root
+    group: root
+    mode: '0600'
+  when: backup_storage_type == 'cifs'
+  become: yes
+
+- name: Generate Jenkins volume backup script
+  template:
+    src: backup-jenkins-volumes.sh.j2
+    dest: "{{ backup_home_dir }}/scripts/backup-jenkins-volumes.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+
+- name: Generate monitoring backup script
+  template:
+    src: backup-monitoring.sh.j2
+    dest: "{{ backup_home_dir }}/scripts/backup-monitoring.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+
+- name: Generate configuration backup script
+  template:
+    src: backup-configuration.sh.j2
+    dest: "{{ backup_home_dir }}/scripts/backup-configuration.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+
+- name: Generate master backup orchestration script
+  template:
+    src: backup-master.sh.j2
+    dest: "{{ backup_home_dir }}/scripts/backup-master.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+
+- name: Generate backup restoration script
+  template:
+    src: restore-backup.sh.j2
+    dest: "{{ backup_home_dir }}/scripts/restore-backup.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+
+- name: Generate backup verification script
+  template:
+    src: verify-backup.sh.j2
+    dest: "{{ backup_home_dir }}/scripts/verify-backup.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+
+- name: Generate backup cleanup script
+  template:
+    src: cleanup-old-backups.sh.j2
+    dest: "{{ backup_home_dir }}/scripts/cleanup-old-backups.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+
+- name: Create backup systemd service
+  template:
+    src: backup.service.j2
+    dest: /etc/systemd/system/jenkins-backup.service
+    owner: root
+    group: root
+    mode: '0644'
+  become: yes
+
+- name: Create backup systemd timer
+  template:
+    src: backup.timer.j2
+    dest: /etc/systemd/system/jenkins-backup.timer
+    owner: root
+    group: root
+    mode: '0644'
+  become: yes
+
+- name: Create backup monitoring systemd service
+  template:
+    src: backup-monitor.service.j2
+    dest: /etc/systemd/system/backup-monitor.service
+    owner: root
+    group: root
+    mode: '0644'
+  become: yes
+
+- name: Force systemd to reload configs
+  systemd:
+    daemon_reload: yes
+  become: yes
+
+- name: Enable and start backup timer
+  systemd:
+    name: jenkins-backup.timer
+    enabled: yes
+    state: started
+  become: yes
+
+- name: Enable backup monitoring service
+  systemd:
+    name: backup-monitor.service
+    enabled: yes
+    state: started
+  become: yes
+
+- name: Create backup log rotation config
+  template:
+    src: backup-logrotate.j2
+    dest: /etc/logrotate.d/jenkins-backup
+    owner: root
+    group: root
+    mode: '0644'
+  become: yes
+
+- name: Setup backup notification script
+  template:
+    src: backup-notification.sh.j2
+    dest: "{{ backup_home_dir }}/scripts/backup-notification.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+
+- name: Create backup status dashboard
+  template:
+    src: backup-status.html.j2
+    dest: "{{ backup_home_dir }}/backup-status.html"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0644'
+
+- name: Test backup storage connectivity
+  command: "{{ backup_home_dir }}/scripts/verify-backup.sh --test-connectivity"
+  register: backup_connectivity_test
+  changed_when: false
+  failed_when: backup_connectivity_test.rc != 0
+
+- name: Initialize backup repository (BorgBackup)
+  command: >
+    borg init
+    --encryption=repokey-blake2
+    "{{ backup_mount_point }}/{{ inventory_hostname }}-jenkins"
+  environment:
+    BORG_PASSPHRASE: "{{ borg_passphrase }}"
+  register: borg_init
+  failed_when: 
+    - borg_init.rc != 0
+    - "'already exists' not in borg_init.stderr"
+  when: backup_method == 'borg'
+
+- name: Create initial backup
+  command: "{{ backup_home_dir }}/scripts/backup-master.sh --initial"
+  register: initial_backup
+  when: backup_create_initial | default(false)
+
+- name: Generate backup report
+  template:
+    src: backup-report.j2
+    dest: "{{ backup_home_dir }}/logs/backup-report-{{ ansible_date_time.date }}.log"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0644'
+
+- name: Display backup system information
+  debug:
+    msg: |
+      💾 Backup System Configuration Completed!
+      
+      📁 Backup Configuration:
+      Storage Type: {{ backup_storage_type }}
+      {% if backup_storage_type == 'nfs' %}
+      NFS Server: {{ backup_nfs_server }}:{{ backup_nfs_path }}
+      {% elif backup_storage_type == 'cifs' %}
+      CIFS Share: {{ backup_cifs_share }}
+      {% endif %}
+      Mount Point: {{ backup_mount_point }}
+      Local Staging: {{ backup_local_dir }}
+      
+      ⏰ Backup Schedule:
+      Full Backup: {{ backup_full_schedule | default('0 2 * * 0') }} (Weekly)
+      Incremental: {{ backup_incremental_schedule | default('0 2 * * 1-6') }} (Daily)
+      Verification: {{ backup_verify_schedule | default('0 4 * * 0') }} (Weekly)
+      Cleanup: {{ backup_cleanup_schedule | default('0 3 * * 0') }} (Weekly)
+      
+      🔧 Backup Components:
+      • Jenkins home directory (/var/jenkins_home)
+      • Docker volumes (jenkins_data, shared_workspace)
+      • Configuration files (JCasC, systemd services)
+      • Monitoring data (Prometheus, Grafana)
+      • SSL certificates and secrets
+      
+      📊 Retention Policy:
+      Daily backups: {{ backup_daily_retention | default(30) }} days
+      Weekly backups: {{ backup_weekly_retention | default(12) }} weeks
+      Monthly backups: {{ backup_monthly_retention | default(12) }} months
+      
+      🔔 Notifications:
+      {% if backup_notifications_enabled | default(true) %}
+      Email: {{ backup_notification_email | default('admin@company.com') }}
+      Slack: {{ backup_slack_webhook | default('Not configured') }}
+      {% else %}
+      Notifications: Disabled
+      {% endif %}
+      
+      🎯 Management Commands:
+      Manual backup: sudo systemctl start jenkins-backup.service
+      Check status: {{ backup_home_dir }}/scripts/backup-master.sh --status
+      Restore: {{ backup_home_dir }}/scripts/restore-backup.sh
+      Verify: {{ backup_home_dir }}/scripts/verify-backup.sh

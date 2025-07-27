@@ -1,0 +1,187 @@
+---
+# Monitoring Role - Prometheus, Grafana, and Exporters
+# Complete monitoring stack for Jenkins infrastructure
+
+- name: Create monitoring user and group
+  group:
+    name: "{{ monitoring_group }}"
+    gid: "{{ monitoring_gid }}"
+    state: present
+  become: yes
+
+- name: Create monitoring system user
+  user:
+    name: "{{ monitoring_user }}"
+    uid: "{{ monitoring_uid }}"
+    group: "{{ monitoring_group }}"
+    home: "{{ monitoring_home_dir }}"
+    shell: /bin/bash
+    system: yes
+    create_home: yes
+  become: yes
+
+- name: Create monitoring directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  loop:
+    - "{{ monitoring_home_dir }}"
+    - "{{ monitoring_home_dir }}/prometheus"
+    - "{{ monitoring_home_dir }}/prometheus/data"
+    - "{{ monitoring_home_dir }}/prometheus/config"
+    - "{{ monitoring_home_dir }}/prometheus/rules"
+    - "{{ monitoring_home_dir }}/grafana"
+    - "{{ monitoring_home_dir }}/grafana/data"
+    - "{{ monitoring_home_dir }}/grafana/dashboards"
+    - "{{ monitoring_home_dir }}/grafana/provisioning"
+    - "{{ monitoring_home_dir }}/grafana/provisioning/dashboards"
+    - "{{ monitoring_home_dir }}/grafana/provisioning/datasources"
+    - "{{ monitoring_home_dir }}/alertmanager"
+    - "{{ monitoring_home_dir }}/exporters"
+
+- name: Include Prometheus setup tasks
+  include_tasks: prometheus.yml
+  tags: ['prometheus']
+
+- name: Include Grafana setup tasks
+  include_tasks: grafana.yml
+  tags: ['grafana']
+
+- name: Include Alertmanager setup tasks
+  include_tasks: alertmanager.yml
+  tags: ['alertmanager']
+  when: alertmanager_enabled | default(true)
+
+- name: Include Exporters setup tasks
+  include_tasks: exporters.yml
+  tags: ['exporters']
+
+- name: Create monitoring network
+  community.docker.docker_network:
+    name: "{{ monitoring_network_name }}"
+    driver: bridge
+    ipam_config:
+      - subnet: "{{ monitoring_network_subnet }}"
+
+- name: Generate monitoring stack systemd services
+  template:
+    src: "{{ item }}.service.j2"
+    dest: "/etc/systemd/system/{{ item }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - prometheus
+    - grafana
+    - alertmanager
+    - node-exporter
+  notify: reload systemd
+  become: yes
+
+- name: Force systemd to reload configs
+  systemd:
+    daemon_reload: yes
+  become: yes
+
+- name: Enable and start monitoring services
+  systemd:
+    name: "{{ item }}"
+    enabled: yes
+    state: started
+  loop:
+    - prometheus
+    - grafana
+    - alertmanager
+    - node-exporter
+  become: yes
+
+- name: Wait for Prometheus to be ready
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ prometheus_port }}/api/v1/status/config"
+    method: GET
+    timeout: 10
+  register: prometheus_ready
+  until: prometheus_ready is succeeded
+  retries: 30
+  delay: 10
+
+- name: Wait for Grafana to be ready
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}/api/health"
+    method: GET
+    timeout: 10
+  register: grafana_ready
+  until: grafana_ready is succeeded
+  retries: 30
+  delay: 10
+
+- name: Configure Grafana datasources
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}/api/datasources"
+    method: POST
+    user: "{{ grafana_admin_user }}"
+    password: "{{ grafana_admin_password }}"
+    force_basic_auth: yes
+    body_format: json
+    body: "{{ grafana_prometheus_datasource }}"
+    status_code: [200, 409]  # 409 if datasource already exists
+
+- name: Import Grafana dashboards
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}/api/dashboards/db"
+    method: POST
+    user: "{{ grafana_admin_user }}"
+    password: "{{ grafana_admin_password }}"
+    force_basic_auth: yes
+    body_format: json
+    body: "{{ lookup('file', item) | from_json }}"
+    status_code: [200, 412]  # 412 if dashboard already exists
+  loop:
+    - "{{ monitoring_home_dir }}/grafana/dashboards/jenkins-overview.json"
+    - "{{ monitoring_home_dir }}/grafana/dashboards/jenkins-builds.json"
+    - "{{ monitoring_home_dir }}/grafana/dashboards/infrastructure-health.json"
+    - "{{ monitoring_home_dir }}/grafana/dashboards/security-metrics.json"
+
+- name: Create monitoring health check script
+  template:
+    src: monitoring-health.sh.j2
+    dest: "{{ monitoring_home_dir }}/bin/monitoring-health.sh"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+
+- name: Setup monitoring health check cron job
+  cron:
+    name: "Monitoring stack health check"
+    minute: "*/5"
+    user: "{{ monitoring_user }}"
+    job: "{{ monitoring_home_dir }}/bin/monitoring-health.sh"
+    state: present
+
+- name: Display monitoring access information
+  debug:
+    msg: |
+      🎉 Monitoring Stack Deployment Completed!
+      
+      📊 Access Information:
+      Prometheus: http://{{ ansible_default_ipv4.address }}:{{ prometheus_port }}
+      Grafana: http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}
+      AlertManager: http://{{ ansible_default_ipv4.address }}:{{ alertmanager_port }}
+      
+      🔐 Grafana Credentials:
+      Username: {{ grafana_admin_user }}
+      Password: [Check vault for grafana_admin_password]
+      
+      📋 Available Dashboards:
+      • Jenkins Overview - General Jenkins metrics
+      • Jenkins Builds - Build performance and trends  
+      • Infrastructure Health - VM and container metrics
+      • Security Metrics - Security events and compliance
+      
+      🎯 Monitored Targets:
+      {% for target in prometheus_targets %}
+      • {{ target.job }}: {{ target.targets | join(', ') }}
+      {% endfor %}

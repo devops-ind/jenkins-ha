@@ -1,0 +1,108 @@
+---
+# Systemd Services for Jenkins Container Management
+# Production-grade container lifecycle management
+
+- name: Generate Jenkins master systemd service
+  template:
+    src: jenkins-master.service.j2
+    dest: /etc/systemd/system/jenkins-master.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: 
+    - reload systemd
+    - restart jenkins-master
+  when: jenkins_role == 'master' or jenkins_role is not defined
+  become: yes
+
+- name: Generate Jenkins agent systemd service
+  template:
+    src: jenkins-agent.service.j2
+    dest: /etc/systemd/system/jenkins-agent.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - reload systemd
+    - restart jenkins-agent
+  when: jenkins_role == 'agent'
+  become: yes
+
+- name: Generate HAProxy systemd service
+  template:
+    src: haproxy.service.j2
+    dest: /etc/systemd/system/jenkins-haproxy.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - reload systemd
+    - restart jenkins-haproxy
+  when: 
+    - jenkins_role == 'master' or jenkins_role is not defined
+    - haproxy_enabled | default(true)
+  become: yes
+
+- name: Create Jenkins container pre-start script
+  template:
+    src: jenkins-prestart.sh.j2
+    dest: "{{ jenkins_home_dir }}/bin/jenkins-prestart.sh"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+
+- name: Create Jenkins container health check script
+  template:
+    src: jenkins-healthcheck.sh.j2
+    dest: "{{ jenkins_home_dir }}/bin/jenkins-healthcheck.sh"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+
+- name: Force systemd to reload configs
+  systemd:
+    daemon_reload: yes
+  become: yes
+
+- name: Enable and start Jenkins master service
+  systemd:
+    name: jenkins-master
+    enabled: yes
+    state: started
+  when: jenkins_role == 'master' or jenkins_role is not defined
+  become: yes
+
+- name: Enable and start Jenkins agent service
+  systemd:
+    name: jenkins-agent
+    enabled: yes
+    state: started
+  when: jenkins_role == 'agent'
+  become: yes
+
+- name: Enable and start HAProxy service
+  systemd:
+    name: jenkins-haproxy
+    enabled: yes
+    state: started
+  when: 
+    - jenkins_role == 'master' or jenkins_role is not defined
+    - haproxy_enabled | default(true)
+  become: yes
+
+- name: Create Jenkins service monitoring script
+  template:
+    src: jenkins-monitor.sh.j2
+    dest: "{{ jenkins_home_dir }}/bin/jenkins-monitor.sh"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+
+- name: Setup Jenkins service monitoring cron job
+  cron:
+    name: "Jenkins service monitoring"
+    minute: "*/5"
+    user: "{{ jenkins_user }}"
+    job: "{{ jenkins_home_dir }}/bin/jenkins-monitor.sh"
+    state: present
+  when: jenkins_monitoring_enabled | default(true)

@@ -1,0 +1,8 @@
+---
+# Handlers for high-availability role
+- name: restart high-availability service
+  systemd:
+    name: high-availability
+    state: restarted
+    enabled: yes
+  listen: "restart high-availability"

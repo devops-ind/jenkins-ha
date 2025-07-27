@@ -1,0 +1,18 @@
+groups:
+  - name: jenkins
+    rules:
+      - alert: JenkinsDown
+        expr: up{job="jenkins"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Jenkins instance is down"
+          
+      - alert: JenkinsBuildFailure
+        expr: increase(jenkins_builds_failure_total[1h]) > 5
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High build failure rate in Jenkins"

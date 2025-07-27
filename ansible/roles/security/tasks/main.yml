@@ -1,0 +1,159 @@
+---
+# Security Hardening for Jenkins Infrastructure
+
+- name: Install security packages
+  package:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - fail2ban
+    - aide
+    - rkhunter
+    - chkrootkit
+  become: yes
+  tags: ['security', 'packages']
+
+- name: Configure fail2ban for SSH protection
+  template:
+    src: jail.local.j2
+    dest: /etc/fail2ban/jail.local
+    backup: yes
+  become: yes
+  notify: restart fail2ban
+  tags: ['security', 'fail2ban']
+
+- name: Configure SSH hardening
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    backup: yes
+  loop:
+    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+    - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+    - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
+    - { regexp: '^#?Protocol', line: 'Protocol 2' }
+    - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+    - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
+    - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
+    - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
+  become: yes
+  notify: restart sshd
+  tags: ['security', 'ssh']
+
+- name: Set secure file permissions
+  file:
+    path: "{{ item.path }}"
+    mode: "{{ item.mode }}"
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+  loop:
+    - { path: '/etc/passwd', mode: '0644' }
+    - { path: '/etc/shadow', mode: '0640', group: 'shadow' }
+    - { path: '/etc/group', mode: '0644' }
+    - { path: '/etc/gshadow', mode: '0640', group: 'shadow' }
+    - { path: '/etc/ssh/sshd_config', mode: '0600' }
+  become: yes
+  tags: ['security', 'permissions']
+
+- name: Configure Jenkins security policies
+  template:
+    src: jenkins-security.groovy.j2
+    dest: "{{ jenkins_home_dir }}/init.groovy.d/security.groovy"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  tags: ['security', 'jenkins']
+
+- name: Setup security scanning cron jobs
+  cron:
+    name: "{{ item.name }}"
+    job: "{{ item.job }}"
+    minute: "{{ item.minute | default('0') }}"
+    hour: "{{ item.hour | default('2') }}"
+    user: root
+  loop:
+    - name: "RKHunter scan"
+      job: "/usr/bin/rkhunter --check --skip-keypress --report-warnings-only"
+      hour: "3"
+    - name: "AIDE file integrity check"
+      job: "/usr/bin/aide --check"
+      hour: "4"
+  become: yes
+  when: security_scanning_enabled | default(true)
+  tags: ['security', 'scanning']
+
+- name: Configure firewall rules
+  ansible.posix.firewalld:
+    port: "{{ item }}"
+    permanent: yes
+    state: enabled
+    immediate: yes
+  loop: "{{ security_allowed_ports }}"
+  when: ansible_os_family == "RedHat"
+  become: yes
+  tags: ['security', 'firewall']
+
+- name: Configure UFW rules
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop: "{{ security_allowed_ports }}"
+  when: ansible_os_family == "Debian"
+  become: yes
+  tags: ['security', 'firewall']
+
+- name: Create security audit script
+  template:
+    src: security-audit.sh.j2
+    dest: /usr/local/bin/security-audit.sh
+    mode: '0755'
+  become: yes
+  tags: ['security', 'audit']
+
+- name: Configure system hardening
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: yes
+  loop:
+    - { name: 'net.ipv4.ip_forward', value: '0' }
+    - { name: 'net.ipv4.conf.all.send_redirects', value: '0' }
+    - { name: 'net.ipv4.conf.default.send_redirects', value: '0' }
+    - { name: 'net.ipv4.conf.all.accept_redirects', value: '0' }
+    - { name: 'net.ipv4.conf.default.accept_redirects', value: '0' }
+    - { name: 'net.ipv4.conf.all.secure_redirects', value: '0' }
+    - { name: 'net.ipv4.conf.default.secure_redirects', value: '0' }
+    - { name: 'net.ipv4.icmp_echo_ignore_broadcasts', value: '1' }
+    - { name: 'net.ipv4.icmp_ignore_bogus_error_responses', value: '1' }
+    - { name: 'kernel.dmesg_restrict', value: '1' }
+  become: yes
+  tags: ['security', 'hardening']
+
+- name: Start and enable security services
+  systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: yes
+  loop:
+    - fail2ban
+  become: yes
+  tags: ['security', 'services']
+
+- name: Display security configuration
+  debug:
+    msg: |
+      Security Configuration Applied:
+      
+      SSH Hardening: Enabled
+      Fail2ban: Enabled
+      File Integrity: {{ 'AIDE configured' if security_scanning_enabled | default(true) else 'Disabled' }}
+      Rootkit Detection: {{ 'RKHunter configured' if security_scanning_enabled | default(true) else 'Disabled' }}
+      Firewall: Configured
+      System Hardening: Applied
+      
+      Allowed Ports: {{ security_allowed_ports | join(', ') }}
+      Jenkins Security: {{ 'Enabled' if jenkins_security_enabled | default(true) else 'Disabled' }}
+  tags: ['security', 'info']

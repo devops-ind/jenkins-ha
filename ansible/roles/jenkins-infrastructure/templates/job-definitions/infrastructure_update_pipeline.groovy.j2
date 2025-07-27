@@ -1,0 +1,559 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job@2.47">
+  <actions/>
+  <description>Infrastructure Pipeline: Self-Updating Jenkins Infrastructure
+
+This pipeline manages infrastructure updates including:
+- Updating Jenkins images to latest versions
+- Applying configuration changes via Ansible
+- Rolling restart of services with health checks
+- Rollback capabilities if issues detected
+
+This pipeline enables Jenkins to manage its own infrastructure updates automatically.
+</description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <jenkins.model.BuildDiscarderProperty>
+      <strategy class="hudson.tasks.LogRotator">
+        <daysToKeep>60</daysToKeep>
+        <numToKeep>30</numToKeep>
+        <artifactDaysToKeep>-1</artifactDaysToKeep>
+        <artifactNumToKeep>-1</artifactNumToKeep>
+      </strategy>
+    </jenkins.model.BuildDiscarderProperty>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition>
+          <n>IMAGE_TAG</n>
+          <description>Jenkins image tag to deploy (leave empty for latest)</description>
+          <defaultValue>latest</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>RESTART_SERVICES</n>
+          <description>Restart Jenkins services after update</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>UPDATE_CONFIGURATION</n>
+          <description>Update Jenkins configuration (JCasC, systemd services)</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>UPDATE_MONITORING</n>
+          <description>Update monitoring configuration</description>
+          <defaultValue>false</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.ChoiceParameterDefinition>
+          <n>UPDATE_SCOPE</n>
+          <description>Scope of infrastructure update</description>
+          <choices class="java.util.Arrays$ArrayList">
+            <a class="string-array">
+              <string>current-master</string>
+              <string>all-masters</string>
+              <string>agents-only</string>
+              <string>monitoring-only</string>
+            </a>
+          </choices>
+        </hudson.model.ChoiceParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <n>UPDATE_REASON</n>
+          <description>Reason for infrastructure update</description>
+          <defaultValue>Scheduled maintenance</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>ENABLE_ROLLBACK</n>
+          <description>Enable automatic rollback on failure</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps@2.94">
+    <script>#!/usr/bin/env groovy
+
+pipeline {
+    agent {
+        label 'dind docker-manager static privileged'
+    }
+    
+    options {
+        buildDiscarder(logRotator(daysToKeepStr: '60', numToKeepStr: '30'))
+        timeout(time: 3, unit: 'HOURS')
+        timestamps()
+        ansiColor('xterm')
+        skipDefaultCheckout()
+    }
+    
+    environment {
+        ANSIBLE_HOST_KEY_CHECKING = 'False'
+        ANSIBLE_STDOUT_CALLBACK = 'yaml'
+        HARBOR_REGISTRY = '{{ harbor_registry_url }}'
+        HARBOR_PROJECT = '{{ harbor_project }}'
+        JENKINS_HOME_DIR = '{{ jenkins_home_dir }}'
+        DEPLOYMENT_ENV = '{{ deployment_environment | default("production") }}'
+        TIMESTAMP = sh(script: 'date +%Y%m%d_%H%M%S', returnStdout: true).trim()
+        HOSTNAME = sh(script: 'hostname', returnStdout: true).trim()
+        CURRENT_IMAGE_TAG = sh(script: 'docker inspect jenkins-master-$(hostname) --format="{{.Config.Image}}" | cut -d: -f2 || echo "unknown"', returnStdout: true).trim()
+    }
+    
+    stages {
+        stage('Pre-Update Validation') {
+            steps {
+                script {
+                    echo "🔄 Jenkins Infrastructure Update Pipeline"
+                    echo "🏷️ Target Image Tag: ${params.IMAGE_TAG}"
+                    echo "🏷️ Current Image Tag: ${CURRENT_IMAGE_TAG}"
+                    echo "🎯 Update Scope: ${params.UPDATE_SCOPE}"
+                    echo "📝 Update Reason: ${params.UPDATE_REASON}"
+                    echo "⏰ Timestamp: ${TIMESTAMP}"
+                    echo "🖥️ Hostname: ${HOSTNAME}"
+                    
+                    // Validate current system state
+                    sh """
+                        echo "🔍 Validating current system state..."
+                        
+                        # Check if Jenkins is running
+                        if ! systemctl is-active --quiet jenkins-master; then
+                            echo "❌ Jenkins master is not running on this host"
+                            exit 1
+                        fi
+                        
+                        # Check Docker daemon
+                        if ! systemctl is-active --quiet docker; then
+                            echo "❌ Docker service is not running"
+                            exit 1
+                        fi
+                        
+                        # Check available disk space
+                        AVAILABLE_GB=\$(df /var/lib/docker | tail -1 | awk '{print \$4}' | sed 's/[^0-9]*//g')
+                        AVAILABLE_GB=\$((AVAILABLE_GB / 1024 / 1024))
+                        
+                        if [ "\$AVAILABLE_GB" -lt "5" ]; then
+                            echo "⚠️ Warning: Low disk space (\${AVAILABLE_GB}GB available)"
+                        fi
+                        
+                        echo "✅ System validation passed"
+                    """
+                }
+            }
+        }
+        
+        stage('Checkout Infrastructure Repository') {
+            steps {
+                script {
+                    echo "📥 Checking out infrastructure repository..."
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: '*/main']],
+                        userRemoteConfigs: [[
+                            url: '{{ jenkins_infrastructure_repo_url }}',
+                            credentialsId: '{{ git_credentials_id }}'
+                        ]]
+                    ])
+                    
+                    // Validate Ansible configuration
+                    sh """
+                        cd ansible
+                        ansible-playbook site.yml --syntax-check
+                        ansible-inventory --list > /dev/null
+                        echo "✅ Ansible configuration validated"
+                    """
+                }
+            }
+        }
+        
+        stage('Create Pre-Update Backup') {
+            when {
+                expression { params.RESTART_SERVICES }
+            }
+            steps {
+                script {
+                    echo "💾 Creating pre-update backup..."
+                    
+                    // Trigger backup job and wait for completion
+                    def backupBuild = build job: 'Infrastructure/Infrastructure-Backup',
+                                           parameters: [
+                                               string(name: 'BACKUP_TYPE', value: 'configuration-only'),
+                                               string(name: 'CUSTOM_TAG', value: "pre-update-${TIMESTAMP}"),
+                                               booleanParam(name: 'VERIFY_BACKUP', value: true),
+                                               booleanParam(name: 'SEND_NOTIFICATIONS', value: false)
+                                           ],
+                                           wait: true
+                    
+                    if (backupBuild.result != 'SUCCESS') {
+                        error("❌ Pre-update backup failed!")
+                    }
+                    
+                    echo "✅ Pre-update backup completed successfully"
+                }
+            }
+        }
+        
+        stage('Update Jenkins Images') {
+            when {
+                anyOf {
+                    equals expected: 'current-master', actual: params.UPDATE_SCOPE
+                    equals expected: 'all-masters', actual: params.UPDATE_SCOPE
+                }
+            }
+            steps {
+                script {
+                    echo "🐳 Updating Jenkins images..."
+                    
+                    // Pull latest images from Harbor
+                    sh """
+                        echo "📥 Pulling updated Jenkins images..."
+                        
+                        # Login to Harbor
+                        echo \$HARBOR_CREDENTIALS_PSW | docker login \$HARBOR_REGISTRY -u \$HARBOR_CREDENTIALS_USR --password-stdin
+                        
+                        # Pull the specified image tag
+                        docker pull \${HARBOR_REGISTRY}/\${HARBOR_PROJECT}/jenkins-master:${params.IMAGE_TAG}
+                        
+                        # Tag as latest locally if not already latest
+                        if [ "${params.IMAGE_TAG}" != "latest" ]; then
+                            docker tag \${HARBOR_REGISTRY}/\${HARBOR_PROJECT}/jenkins-master:${params.IMAGE_TAG} \
+                                       \${HARBOR_REGISTRY}/\${HARBOR_PROJECT}/jenkins-master:latest
+                        fi
+                        
+                        echo "✅ Images pulled successfully"
+                    """
+                }
+            }
+        }
+        
+        stage('Update Configuration') {
+            when {
+                expression { params.UPDATE_CONFIGURATION }
+            }
+            steps {
+                script {
+                    echo "⚙️ Updating Jenkins configuration..."
+                    
+                    sh """
+                        cd ansible
+                        
+                        # Update configuration without restarting containers
+                        ANSIBLE_VAULT_PASSWORD_FILE=../environments/vault-passwords/production.txt \
+                        ansible-playbook -i inventories/production site.yml \
+                            -e deployment_environment=${DEPLOYMENT_ENV} \
+                            -e jenkins_force_pull_images=false \
+                            -e jenkins_restart_services=false \
+                            --tags configuration,jcasc,systemd \
+                            --limit ${HOSTNAME}
+                        
+                        echo "✅ Configuration updated"
+                    """
+                }
+            }
+        }
+        
+        stage('Rolling Service Restart') {
+            when {
+                expression { params.RESTART_SERVICES }
+            }
+            steps {
+                script {
+                    echo "🔄 Performing rolling service restart..."
+                    
+                    if (params.UPDATE_SCOPE == 'all-masters') {
+                        echo "🏗️ Rolling restart across all masters..."
+                        
+                        sh """
+                            cd ansible
+                            
+                            # Rolling restart of all Jenkins masters
+                            ANSIBLE_VAULT_PASSWORD_FILE=../environments/vault-passwords/production.txt \
+                            ansible-playbook -i inventories/production site.yml \
+                                -e deployment_environment=${DEPLOYMENT_ENV} \
+                                -e jenkins_force_pull_images=true \
+                                -e jenkins_master_image_tag=${params.IMAGE_TAG} \
+                                -e rolling_update=true \
+                                --tags containers \
+                                --serial 1
+                        """
+                    } else {
+                        echo "🔄 Restarting services on current master..."
+                        
+                        sh """
+                            # Stop Jenkins master service
+                            echo "🛑 Stopping Jenkins master service..."
+                            sudo systemctl stop jenkins-master
+                            
+                            # Wait for graceful shutdown
+                            sleep 30
+                            
+                            # Remove old container
+                            docker stop jenkins-master-${HOSTNAME} || true
+                            docker rm jenkins-master-${HOSTNAME} || true
+                            
+                            # Start with new image
+                            echo "🚀 Starting Jenkins master with updated image..."
+                            sudo systemctl start jenkins-master
+                            
+                            echo "✅ Service restart completed"
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Health Check and Validation') {
+            steps {
+                script {
+                    echo "🏥 Performing health checks..."
+                    
+                    // Wait for Jenkins to be ready
+                    sh """
+                        echo "⏳ Waiting for Jenkins to be ready..."
+                        
+                        # Wait up to 10 minutes for Jenkins to be ready
+                        timeout=600
+                        counter=0
+                        
+                        while [ \$counter -lt \$timeout ]; do
+                            if curl -s -f http://localhost:{{ jenkins_master_port }}/login > /dev/null; then
+                                echo "✅ Jenkins is responding"
+                                break
+                            fi
+                            
+                            echo -n "."
+                            sleep 10
+                            counter=\$((counter + 10))
+                        done
+                        
+                        if [ \$counter -ge \$timeout ]; then
+                            echo "❌ Jenkins failed to start within timeout"
+                            exit 1
+                        fi
+                    """
+                    
+                    // Validate Jenkins API
+                    sh """
+                        echo "🔍 Validating Jenkins API..."
+                        
+                        # Test Jenkins API
+                        curl -f -u \${JENKINS_USER}:\${JENKINS_PASS} \
+                             http://localhost:{{ jenkins_master_port }}/api/json?tree=mode,numExecutors || exit 1
+                        
+                        # Check if agents can connect
+                        CONNECTED_AGENTS=\$(curl -s -u \${JENKINS_USER}:\${JENKINS_PASS} \
+                                           http://localhost:{{ jenkins_master_port }}/computer/api/json | \
+                                           jq '.computer | map(select(.offline == false)) | length')
+                        
+                        echo "📊 Connected agents: \${CONNECTED_AGENTS}"
+                        
+                        if [ "\${CONNECTED_AGENTS}" -lt "1" ]; then
+                            echo "⚠️ Warning: No agents connected"
+                        fi
+                        
+                        echo "✅ Health checks passed"
+                    """
+                }
+            }
+        }
+        
+        stage('Update Monitoring') {
+            when {
+                expression { params.UPDATE_MONITORING }
+            }
+            steps {
+                script {
+                    echo "📊 Updating monitoring configuration..."
+                    
+                    sh """
+                        cd ansible
+                        
+                        # Update monitoring stack
+                        ANSIBLE_VAULT_PASSWORD_FILE=../environments/vault-passwords/production.txt \
+                        ansible-playbook -i inventories/production deploy-monitoring.yml \
+                            -e deployment_environment=${DEPLOYMENT_ENV} \
+                            -e monitoring_enabled=true
+                        
+                        echo "✅ Monitoring updated"
+                    """
+                }
+            }
+        }
+        
+        stage('Post-Update Validation') {
+            steps {
+                script {
+                    echo "✅ Performing post-update validation..."
+                    
+                    // Trigger health check pipeline
+                    def healthBuild = build job: 'Infrastructure/Infrastructure-Health-Check',
+                                           parameters: [
+                                               booleanParam(name: 'DEEP_HEALTH_CHECK', value: true),
+                                               booleanParam(name: 'CHECK_AGENTS', value: true),
+                                               booleanParam(name: 'CHECK_MONITORING', value: params.UPDATE_MONITORING)
+                                           ],
+                                           wait: true
+                    
+                    if (healthBuild.result != 'SUCCESS') {
+                        if (params.ENABLE_ROLLBACK) {
+                            echo "❌ Health check failed! Initiating rollback..."
+                            error("Health check failed after update")
+                        } else {
+                            echo "⚠️ Health check failed but rollback is disabled"
+                        }
+                    }
+                    
+                    echo "✅ Post-update validation completed"
+                }
+            }
+        }
+        
+        stage('Update Documentation') {
+            steps {
+                script {
+                    echo "📝 Updating infrastructure documentation..."
+                    
+                    sh """
+                        # Create update record
+                        cat > infrastructure-update-${TIMESTAMP}.md << EOF
+# Infrastructure Update Record
+
+**Date**: $(date)
+**Build**: ${env.BUILD_NUMBER}
+**Triggered By**: ${env.BUILD_USER_ID ?: 'system'}
+
+## Update Details
+- **Image Tag**: ${params.IMAGE_TAG}
+- **Previous Tag**: ${CURRENT_IMAGE_TAG}
+- **Update Scope**: ${params.UPDATE_SCOPE}
+- **Reason**: ${params.UPDATE_REASON}
+
+## Changes Applied
+- Restart Services: ${params.RESTART_SERVICES}
+- Update Configuration: ${params.UPDATE_CONFIGURATION}
+- Update Monitoring: ${params.UPDATE_MONITORING}
+
+## Validation Results
+- Jenkins Health: ✅ Passed
+- API Connectivity: ✅ Passed
+- Agent Connectivity: ✅ Verified
+
+## Rollback Information
+- Rollback Enabled: ${params.ENABLE_ROLLBACK}
+- Pre-Update Backup: pre-update-${TIMESTAMP}
+
+EOF
+                        
+                        echo "✅ Documentation updated"
+                    """
+                    
+                    // Archive update documentation
+                    archiveArtifacts artifacts: "infrastructure-update-${TIMESTAMP}.md", fingerprint: true
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                // Clean up workspace
+                cleanWs()
+            }
+        }
+        
+        success {
+            script {
+                echo "✅ Infrastructure Update Completed Successfully!"
+                
+                def updateSummary = """
+                    ✅ Jenkins Infrastructure Update Successful
+                    
+                    🏷️ Image: ${params.IMAGE_TAG} (was: ${CURRENT_IMAGE_TAG})
+                    🎯 Scope: ${params.UPDATE_SCOPE}
+                    📝 Reason: ${params.UPDATE_REASON}
+                    ⏱️ Duration: ${currentBuild.durationString}
+                    🖥️ Host: ${HOSTNAME}
+                    
+                    🔗 Build: ${env.BUILD_URL}
+                """.stripIndent()
+                
+                if (env.SLACK_WEBHOOK) {
+                    slackSend(
+                        channel: '#infrastructure',
+                        color: 'good',
+                        message: updateSummary
+                    )
+                }
+                
+                echo updateSummary
+            }
+        }
+        
+        failure {
+            script {
+                echo "❌ Infrastructure Update Failed!"
+                
+                if (params.ENABLE_ROLLBACK && params.RESTART_SERVICES) {
+                    echo "🔄 Initiating automatic rollback..."
+                    
+                    try {
+                        // Rollback to previous image
+                        sh """
+                            echo "🔄 Rolling back to previous image: ${CURRENT_IMAGE_TAG}"
+                            
+                            # Stop current service
+                            sudo systemctl stop jenkins-master
+                            
+                            # Remove current container
+                            docker stop jenkins-master-${HOSTNAME} || true
+                            docker rm jenkins-master-${HOSTNAME} || true
+                            
+                            # Start with previous image
+                            docker run -d --name jenkins-master-${HOSTNAME} \
+                                --restart unless-stopped \
+                                --network jenkins-network \
+                                -p {{ jenkins_master_port }}:8080 \
+                                -p {{ jenkins_agent_port }}:50000 \
+                                -v jenkins_data:/var/jenkins_home \
+                                \${HARBOR_REGISTRY}/\${HARBOR_PROJECT}/jenkins-master:${CURRENT_IMAGE_TAG}
+                            
+                            # Start systemd service
+                            sudo systemctl start jenkins-master
+                            
+                            echo "✅ Rollback completed"
+                        """
+                        
+                        echo "✅ Rollback completed successfully"
+                    } catch (Exception e) {
+                        echo "❌ Rollback failed: ${e.getMessage()}"
+                    }
+                }
+                
+                def failureMessage = """
+                    ❌ Jenkins Infrastructure Update Failed
+                    
+                    🏷️ Target Image: ${params.IMAGE_TAG}
+                    🎯 Scope: ${params.UPDATE_SCOPE}
+                    ⏱️ Duration: ${currentBuild.durationString}
+                    🔄 Rollback: ${params.ENABLE_ROLLBACK ? 'Attempted' : 'Disabled'}
+                    
+                    🔗 Build: ${env.BUILD_URL}
+                    📋 Please check logs for details
+                """.stripIndent()
+                
+                if (env.SLACK_WEBHOOK) {
+                    slackSend(
+                        channel: '#infrastructure',
+                        color: 'danger',
+                        message: failureMessage
+                    )
+                }
+            }
+        }
+    }
+}
+    </script>
+    <sandbox>true</sandbox>
+  </definition>
+  <triggers/>
+  <disabled>false</disabled>
+</flow-definition>

@@ -1,0 +1,8 @@
+---
+# Handlers for monitoring role
+- name: restart monitoring service
+  systemd:
+    name: monitoring
+    state: restarted
+    enabled: yes
+  listen: "restart monitoring"

@@ -1,0 +1,10 @@
+---
+jenkins_version: "2.426.1"
+jenkins_port: 8080
+jenkins_home: "/opt/jenkins"
+jenkins_plugins:
+  - workflow-aggregator
+  - docker-workflow
+  - kubernetes
+  - prometheus
+  - configuration-as-code

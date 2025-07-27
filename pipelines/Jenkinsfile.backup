@@ -1,0 +1,32 @@
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['staging', 'production'],
+            description: 'Target environment'
+        )
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        
+        stage('backup') {
+            steps {
+                echo "Running backup pipeline"
+                // Add your pipeline steps here
+            }
+        }
+    }
+    
+    post {
+        always {
+            cleanWs()
+        }
+    }
+}

@@ -1,0 +1,74 @@
+ARG AGENT_VERSION={{ jenkins_agent_version | default('latest') }}
+FROM jenkins/inbound-agent:${AGENT_VERSION}
+
+# Build arguments
+ARG BUILD_DATE
+ARG VCS_REF
+
+# Metadata
+LABEL maintainer="DevOps Team" \
+      org.label-schema.build-date=${BUILD_DATE} \
+      org.label-schema.vcs-ref=${VCS_REF} \
+      org.label-schema.version=${AGENT_VERSION} \
+      org.label-schema.schema-version="1.0" \
+      description="Jenkins Agent with Docker-in-Docker capabilities"
+
+# Switch to root to install packages
+USER root
+
+# Install Docker and additional tools
+RUN apt-get update && apt-get install -y \
+    apt-transport-https \
+    ca-certificates \
+    curl \
+    gnupg \
+    lsb-release \
+    git \
+    unzip \
+    wget \
+    vim \
+    sudo \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y docker-ce docker-ce-cli containerd.io \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Docker Compose
+RUN curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose \
+    && chmod +x /usr/local/bin/docker-compose
+
+# Add jenkins user to docker group
+RUN usermod -aG docker jenkins
+
+# Create docker socket directory
+RUN mkdir -p /var/run/docker
+
+# Install additional build tools
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    make \
+    gcc \
+    g++ \
+    python3 \
+    python3-pip \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Switch back to jenkins user
+USER jenkins
+
+# Set environment variables
+ENV DOCKER_HOST=unix:///var/run/docker.sock
+ENV DOCKER_TLS_CERTDIR=""
+
+# Create workspace directory
+RUN mkdir -p /home/jenkins/workspace
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD docker version || exit 1
+
+# Entry point for the agent
+ENTRYPOINT ["jenkins-agent"]

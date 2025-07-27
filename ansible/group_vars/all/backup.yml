@@ -1,0 +1,8 @@
+---
+backup_script_path: "/usr/local/bin/jenkins-backup.sh"
+backup_log_file: "/var/log/jenkins-backup.log"
+backup_compression: "gzip"
+backup_exclude_patterns:
+  - "*.tmp"
+  - "workspace/*"
+  - "caches/*"

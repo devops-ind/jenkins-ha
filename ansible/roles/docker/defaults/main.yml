@@ -1,0 +1,70 @@
+---
+# Default variables for docker role
+
+# Docker installation
+docker_enabled: true
+docker_version: "24.0.*"
+docker_edition: "ce"
+docker_package: "docker-{{ docker_edition }}"
+
+# Docker daemon configuration
+docker_daemon_options:
+  log-driver: "json-file"
+  log-opts:
+    max-size: "10m"
+    max-file: "3"
+  storage-driver: "overlay2"
+  live-restore: true
+  userland-proxy: false
+  experimental: false
+  default-ulimits:
+    nofile:
+      soft: 65536
+      hard: 65536
+
+# Docker Compose
+docker_compose_enabled: true
+docker_compose_version: "2.21.0"
+docker_compose_path: "/usr/local/bin/docker-compose"
+
+# Docker registry configuration
+docker_registry_mirrors: []
+docker_insecure_registries: []
+
+# Docker users
+docker_users:
+  - "{{ ansible_user }}"
+  - jenkins
+
+# Docker networks
+docker_networks:
+  - name: jenkins-network
+    driver: bridge
+    ipam_config:
+      - subnet: "172.20.0.0/16"
+
+# Docker volumes
+docker_volumes:
+  - jenkins_home
+  - jenkins_shared
+  - harbor_data
+  - prometheus_data
+  - grafana_data
+
+# Docker service configuration
+docker_service_state: started
+docker_service_enabled: true
+docker_restart_handler_state: restarted
+
+# Docker cleanup
+docker_cleanup_enabled: true
+docker_cleanup_cron:
+  minute: "0"
+  hour: "2"
+  day: "*"
+  month: "*"
+  weekday: "0"  # Sunday
+
+# Security settings
+docker_enable_audit: true
+docker_socket_group: docker

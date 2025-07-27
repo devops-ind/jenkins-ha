@@ -1,0 +1,4 @@
+---
+# Default variables for monitoring role
+monitoring_enabled: true
+monitoring_version: "latest"

@@ -1,0 +1,650 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job@2.47">
+  <actions/>
+  <description>Infrastructure Pipeline: Comprehensive Health Check
+
+This pipeline performs comprehensive health checks of the Jenkins infrastructure:
+- Jenkins master and agent connectivity
+- Docker container health status
+- System resource utilization
+- Network connectivity tests
+- Security compliance validation
+- Monitoring stack health
+- Backup system verification
+
+Runs automatically every 15 minutes and on-demand for troubleshooting.
+</description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <jenkins.model.BuildDiscarderProperty>
+      <strategy class="hudson.tasks.LogRotator">
+        <daysToKeep>7</daysToKeep>
+        <numToKeep>100</numToKeep>
+        <artifactDaysToKeep>-1</artifactDaysToKeep>
+        <artifactNumToKeep>-1</artifactNumToKeep>
+      </strategy>
+    </jenkins.model.BuildDiscarderProperty>
+    <org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>
+      <triggers>
+        <hudson.triggers.TimerTrigger>
+          <spec>*/15 * * * *</spec>
+        </hudson.triggers.TimerTrigger>
+      </triggers>
+    </org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.BooleanParameterDefinition>
+          <n>DEEP_HEALTH_CHECK</n>
+          <description>Perform deep health check including performance tests</description>
+          <defaultValue>false</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>CHECK_AGENTS</n>
+          <description>Check Jenkins agent connectivity and provisioning</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>CHECK_MONITORING</n>
+          <description>Check monitoring stack (Prometheus, Grafana)</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>CHECK_BACKUP</n>
+          <description>Check backup system status</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>CHECK_SECURITY</n>
+          <description>Perform security compliance checks</description>
+          <defaultValue>false</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>SEND_NOTIFICATIONS</n>
+          <description>Send health check notifications</description>
+          <defaultValue>false</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps@2.94">
+    <script>#!/usr/bin/env groovy
+
+pipeline {
+    agent {
+        label 'dind docker-manager static privileged'
+    }
+    
+    options {
+        buildDiscarder(logRotator(daysToKeepStr: '7', numToKeepStr: '100'))
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+        ansiColor('xterm')
+        skipDefaultCheckout()
+    }
+    
+    environment {
+        TIMESTAMP = sh(script: 'date +%Y%m%d_%H%M%S', returnStdout: true).trim()
+        HOSTNAME = sh(script: 'hostname', returnStdout: true).trim()
+        JENKINS_URL_INTERNAL = "http://localhost:{{ jenkins_master_port }}"
+        HEALTH_CHECK_DIR = "/tmp/health-check-${env.BUILD_NUMBER}"
+    }
+    
+    stages {
+        stage('Initialize Health Check') {
+            steps {
+                script {
+                    echo "🏥 Jenkins Infrastructure Health Check"
+                    echo "⏰ Timestamp: ${TIMESTAMP}"
+                    echo "🖥️ Hostname: ${HOSTNAME}"
+                    echo "🔍 Deep Check: ${params.DEEP_HEALTH_CHECK}"
+                    echo "🤖 Check Agents: ${params.CHECK_AGENTS}"
+                    echo "📊 Check Monitoring: ${params.CHECK_MONITORING}"
+                    echo "💾 Check Backup: ${params.CHECK_BACKUP}"
+                    echo "🔒 Check Security: ${params.CHECK_SECURITY}"
+                    
+                    // Create temporary directory for health check results
+                    sh """
+                        mkdir -p ${HEALTH_CHECK_DIR}
+                        echo "Health Check Started: $(date)" > ${HEALTH_CHECK_DIR}/health-check.log
+                    """
+                    
+                    // Initialize health check results
+                    currentBuild.description = "Health Check - ${TIMESTAMP}"
+                }
+            }
+        }
+        
+        stage('System Health') {
+            parallel {
+                stage('Docker Health') {
+                    steps {
+                        script {
+                            echo "🐳 Checking Docker daemon health..."
+                            
+                            sh """
+                                echo "=== Docker Health Check ===" >> ${HEALTH_CHECK_DIR}/health-check.log
+                                
+                                # Check Docker daemon status
+                                if systemctl is-active --quiet docker; then
+                                    echo "✅ Docker daemon: RUNNING" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                else
+                                    echo "❌ Docker daemon: STOPPED" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                    exit 1
+                                fi
+                                
+                                # Check Docker socket permissions
+                                if [ -S /var/run/docker.sock ]; then
+                                    echo "✅ Docker socket: ACCESSIBLE" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                else
+                                    echo "❌ Docker socket: NOT ACCESSIBLE" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                    exit 1
+                                fi
+                                
+                                # Check Docker disk usage
+                                DOCKER_DISK_USAGE=\$(docker system df --format "table {{.Type}}\\t{{.Size}}" | tail -n +2 | awk '{sum+=\$2} END {print sum}')
+                                echo "📊 Docker disk usage: \${DOCKER_DISK_USAGE}B" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                
+                                # List running containers
+                                echo "📦 Running containers:" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                docker ps --format "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                            """
+                        }
+                    }
+                }
+                
+                stage('System Resources') {
+                    steps {
+                        script {
+                            echo "💻 Checking system resources..."
+                            
+                            sh """
+                                echo "=== System Resources ===" >> ${HEALTH_CHECK_DIR}/health-check.log
+                                
+                                # Memory usage
+                                FREE_MEM=\$(free -m | awk 'NR==2{printf "%.1f%%", \$3*100/\$2}')
+                                echo "🧠 Memory usage: \${FREE_MEM}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                
+                                # CPU usage
+                                CPU_USAGE=\$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\\([0-9.]*\\)%* id.*/\\1/" | awk '{print 100 - \$1"%"}')
+                                echo "⚡ CPU usage: \${CPU_USAGE}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                
+                                # Disk usage
+                                echo "💾 Disk usage:" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                df -h | grep -E '^/dev/' | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                
+                                # Load average
+                                LOAD_AVG=\$(uptime | awk -F'load average:' '{ print \$2 }')
+                                echo "📈 Load average:\${LOAD_AVG}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                
+                                # Check critical disk space
+                                ROOT_USAGE=\$(df / | tail -1 | awk '{print \$5}' | sed 's/%//')
+                                if [ "\$ROOT_USAGE" -gt "85" ]; then
+                                    echo "⚠️ WARNING: Root filesystem usage is \${ROOT_USAGE}%" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                fi
+                            """
+                        }
+                    }
+                }
+                
+                stage('Network Connectivity') {
+                    steps {
+                        script {
+                            echo "🌐 Checking network connectivity..."
+                            
+                            sh """
+                                echo "=== Network Connectivity ===" >> ${HEALTH_CHECK_DIR}/health-check.log
+                                
+                                # Check Jenkins master port
+                                if netstat -tlnp | grep -q ":{{ jenkins_master_port }}"; then
+                                    echo "✅ Jenkins port {{ jenkins_master_port }}: LISTENING" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                else
+                                    echo "❌ Jenkins port {{ jenkins_master_port }}: NOT LISTENING" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                fi
+                                
+                                # Check Jenkins agent port
+                                if netstat -tlnp | grep -q ":{{ jenkins_agent_port }}"; then
+                                    echo "✅ Jenkins agent port {{ jenkins_agent_port }}: LISTENING" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                else
+                                    echo "❌ Jenkins agent port {{ jenkins_agent_port }}: NOT LISTENING" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                fi
+                                
+                                # Check Harbor registry connectivity
+                                if timeout 10 curl -s -f {{ harbor_registry_url }}/api/v2.0/systeminfo > /dev/null; then
+                                    echo "✅ Harbor registry: ACCESSIBLE" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                else
+                                    echo "⚠️ Harbor registry: NOT ACCESSIBLE" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                fi
+                                
+                                # Check DNS resolution
+                                if nslookup google.com > /dev/null 2>&1; then
+                                    echo "✅ DNS resolution: WORKING" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                else
+                                    echo "❌ DNS resolution: FAILED" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                                fi
+                            """
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Jenkins Master Health') {
+            steps {
+                script {
+                    echo "🏗️ Checking Jenkins master health..."
+                    
+                    sh """
+                        echo "=== Jenkins Master Health ===" >> ${HEALTH_CHECK_DIR}/health-check.log
+                        
+                        # Check Jenkins service status
+                        if systemctl is-active --quiet jenkins-master; then
+                            echo "✅ Jenkins systemd service: ACTIVE" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        else
+                            echo "❌ Jenkins systemd service: INACTIVE" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                            exit 1
+                        fi
+                        
+                        # Check Jenkins container status
+                        CONTAINER_STATUS=\$(docker inspect jenkins-master-${HOSTNAME} --format='{{.State.Status}}' 2>/dev/null || echo "not_found")
+                        echo "📦 Jenkins container status: \${CONTAINER_STATUS}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        
+                        if [ "\$CONTAINER_STATUS" != "running" ]; then
+                            echo "❌ Jenkins container is not running" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                            exit 1
+                        fi
+                        
+                        # Check Jenkins web interface
+                        if curl -s -f ${JENKINS_URL_INTERNAL}/login > /dev/null; then
+                            echo "✅ Jenkins web interface: ACCESSIBLE" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        else
+                            echo "❌ Jenkins web interface: NOT ACCESSIBLE" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                            exit 1
+                        fi
+                        
+                        # Check Jenkins API
+                        if curl -s -f ${JENKINS_URL_INTERNAL}/api/json > /dev/null; then
+                            echo "✅ Jenkins API: RESPONSIVE" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        else
+                            echo "❌ Jenkins API: NOT RESPONSIVE" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        fi
+                        
+                        # Get Jenkins version
+                        JENKINS_VERSION=\$(curl -s ${JENKINS_URL_INTERNAL}/api/json | jq -r '.version' 2>/dev/null || echo "unknown")
+                        echo "📋 Jenkins version: \${JENKINS_VERSION}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                    """
+                }
+            }
+        }
+        
+        stage('Jenkins Agent Health') {
+            when {
+                expression { params.CHECK_AGENTS }
+            }
+            steps {
+                script {
+                    echo "🤖 Checking Jenkins agent health..."
+                    
+                    sh """
+                        echo "=== Jenkins Agent Health ===" >> ${HEALTH_CHECK_DIR}/health-check.log
+                        
+                        # Check static DIND agent
+                        DIND_STATUS=\$(docker inspect jenkins-agent-dind --format='{{.State.Status}}' 2>/dev/null || echo "not_found")
+                        echo "🐳 DIND agent status: \${DIND_STATUS}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        
+                        # Get agent information via API
+                        AGENTS_INFO=\$(curl -s -u \${JENKINS_USER}:\${JENKINS_PASS} \
+                                     ${JENKINS_URL_INTERNAL}/computer/api/json 2>/dev/null || echo '{"computer":[]}')
+                        
+                        TOTAL_AGENTS=\$(echo "\$AGENTS_INFO" | jq '.computer | length' 2>/dev/null || echo 0)
+                        ONLINE_AGENTS=\$(echo "\$AGENTS_INFO" | jq '.computer | map(select(.offline == false)) | length' 2>/dev/null || echo 0)
+                        OFFLINE_AGENTS=\$(echo "\$AGENTS_INFO" | jq '.computer | map(select(.offline == true)) | length' 2>/dev/null || echo 0)
+                        
+                        echo "📊 Total agents: \${TOTAL_AGENTS}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        echo "✅ Online agents: \${ONLINE_AGENTS}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        echo "❌ Offline agents: \${OFFLINE_AGENTS}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        
+                        # List agent details
+                        echo "Agent details:" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        echo "\$AGENTS_INFO" | jq -r '.computer[] | "  \(.displayName): \(if .offline then "OFFLINE" else "ONLINE" end)"' 2>/dev/null | tee -a ${HEALTH_CHECK_DIR}/health-check.log || echo "  Could not retrieve agent details"
+                        
+                        # Test dynamic agent provisioning if deep check enabled
+                        if [ "${params.DEEP_HEALTH_CHECK}" = "true" ]; then
+                            echo "🧪 Testing dynamic agent provisioning..." | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                            
+                            # Check Docker cloud configuration
+                            DOCKER_CLOUDS=\$(curl -s -u \${JENKINS_USER}:\${JENKINS_PASS} \
+                                           ${JENKINS_URL_INTERNAL}/configureClouds/api/json 2>/dev/null || echo '[]')
+                            
+                            CLOUD_COUNT=\$(echo "\$DOCKER_CLOUDS" | jq 'length' 2>/dev/null || echo 0)
+                            echo "☁️ Configured clouds: \${CLOUD_COUNT}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        fi
+                    """
+                }
+            }
+        }
+        
+        stage('Monitoring Stack Health') {
+            when {
+                expression { params.CHECK_MONITORING }
+            }
+            steps {
+                script {
+                    echo "📊 Checking monitoring stack health..."
+                    
+                    sh """
+                        echo "=== Monitoring Stack Health ===" >> ${HEALTH_CHECK_DIR}/health-check.log
+                        
+                        # Check Prometheus
+                        if timeout 10 curl -s -f http://{{ ansible_default_ipv4.address | default('localhost') }}:9090/api/v1/query?query=up > /dev/null 2>&1; then
+                            echo "✅ Prometheus: ACCESSIBLE" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                            
+                            # Get Prometheus targets
+                            TARGETS_UP=\$(curl -s http://{{ ansible_default_ipv4.address | default('localhost') }}:9090/api/v1/query?query=up | jq '.data.result | map(select(.value[1] == "1")) | length' 2>/dev/null || echo 0)
+                            TARGETS_DOWN=\$(curl -s http://{{ ansible_default_ipv4.address | default('localhost') }}:9090/api/v1/query?query=up | jq '.data.result | map(select(.value[1] == "0")) | length' 2>/dev/null || echo 0)
+                            
+                            echo "📈 Prometheus targets UP: \${TARGETS_UP}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                            echo "📉 Prometheus targets DOWN: \${TARGETS_DOWN}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        else
+                            echo "❌ Prometheus: NOT ACCESSIBLE" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        fi
+                        
+                        # Check Grafana
+                        if timeout 10 curl -s -f http://{{ ansible_default_ipv4.address | default('localhost') }}:3000/api/health > /dev/null 2>&1; then
+                            echo "✅ Grafana: ACCESSIBLE" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        else
+                            echo "❌ Grafana: NOT ACCESSIBLE" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        fi
+                        
+                        # Check Node Exporter
+                        if timeout 10 curl -s -f http://localhost:9100/metrics > /dev/null 2>&1; then
+                            echo "✅ Node Exporter: RUNNING" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        else
+                            echo "❌ Node Exporter: NOT RUNNING" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        fi
+                    """
+                }
+            }
+        }
+        
+        stage('Backup System Health') {
+            when {
+                expression { params.CHECK_BACKUP }
+            }
+            steps {
+                script {
+                    echo "💾 Checking backup system health..."
+                    
+                    sh """
+                        echo "=== Backup System Health ===" >> ${HEALTH_CHECK_DIR}/health-check.log
+                        
+                        # Check backup mount point
+                        if mountpoint -q {{ backup_mount_point }}; then
+                            echo "✅ Backup storage: MOUNTED" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                            
+                            # Check backup storage space
+                            BACKUP_USAGE=\$(df {{ backup_mount_point }} | tail -1 | awk '{print \$5}' | sed 's/%//')
+                            echo "📊 Backup storage usage: \${BACKUP_USAGE}%" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                            
+                            if [ "\$BACKUP_USAGE" -gt "90" ]; then
+                                echo "⚠️ WARNING: Backup storage usage is high (\${BACKUP_USAGE}%)" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                            fi
+                        else
+                            echo "❌ Backup storage: NOT MOUNTED" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        fi
+                        
+                        # Check backup service status
+                        if systemctl is-enabled --quiet jenkins-backup.timer; then
+                            echo "✅ Backup timer: ENABLED" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                            
+                            LAST_BACKUP=\$(systemctl status jenkins-backup.timer | grep "Trigger:" | awk '{print \$3, \$4, \$5}' || echo "unknown")
+                            echo "⏰ Next backup: \${LAST_BACKUP}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        else
+                            echo "❌ Backup timer: DISABLED" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        fi
+                        
+                        # Check recent backup files
+                        RECENT_BACKUPS=\$(find {{ backup_mount_point }} -name "*jenkins-backup-*.tar.gz" -mtime -7 2>/dev/null | wc -l)
+                        echo "📦 Recent backups (7 days): \${RECENT_BACKUPS}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        
+                        if [ "\$RECENT_BACKUPS" -eq "0" ]; then
+                            echo "⚠️ WARNING: No recent backups found" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        fi
+                    """
+                }
+            }
+        }
+        
+        stage('Security Compliance Check') {
+            when {
+                expression { params.CHECK_SECURITY }
+            }
+            steps {
+                script {
+                    echo "🔒 Checking security compliance..."
+                    
+                    sh """
+                        echo "=== Security Compliance ===" >> ${HEALTH_CHECK_DIR}/health-check.log
+                        
+                        # Check firewall status
+                        if systemctl is-active --quiet firewalld; then
+                            echo "✅ Firewall: ACTIVE" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        else
+                            echo "⚠️ Firewall: INACTIVE" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        fi
+                        
+                        # Check SELinux status
+                        SELINUX_STATUS=\$(getenforce 2>/dev/null || echo "Unknown")
+                        echo "🛡️ SELinux: \${SELINUX_STATUS}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        
+                        # Check SSL certificate expiry
+                        if [ -f "{{ jenkins_home_dir }}/ssl/jenkins.crt" ]; then
+                            CERT_EXPIRY=\$(openssl x509 -in {{ jenkins_home_dir }}/ssl/jenkins.crt -noout -enddate 2>/dev/null | cut -d= -f2 || echo "unknown")
+                            echo "📜 SSL certificate expires: \${CERT_EXPIRY}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                            
+                            # Check if certificate expires within 30 days
+                            if openssl x509 -in {{ jenkins_home_dir }}/ssl/jenkins.crt -checkend 2592000 -noout 2>/dev/null; then
+                                echo "✅ SSL certificate: VALID" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                            else
+                                echo "⚠️ SSL certificate: EXPIRES SOON" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                            fi
+                        else
+                            echo "⚠️ SSL certificate: NOT FOUND" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        fi
+                        
+                        # Check for failed login attempts
+                        FAILED_LOGINS=\$(journalctl -u sshd --since "1 hour ago" | grep "Failed password" | wc -l 2>/dev/null || echo 0)
+                        echo "🚪 Failed SSH logins (1h): \${FAILED_LOGINS}" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        
+                        if [ "\$FAILED_LOGINS" -gt "10" ]; then
+                            echo "⚠️ WARNING: High number of failed SSH attempts" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        fi
+                    """
+                }
+            }
+        }
+        
+        stage('Performance Tests') {
+            when {
+                expression { params.DEEP_HEALTH_CHECK }
+            }
+            steps {
+                script {
+                    echo "🚀 Running performance tests..."
+                    
+                    sh """
+                        echo "=== Performance Tests ===" >> ${HEALTH_CHECK_DIR}/health-check.log
+                        
+                        # Jenkins API response time test
+                        START_TIME=\$(date +%s%N)
+                        curl -s -f ${JENKINS_URL_INTERNAL}/api/json > /dev/null
+                        END_TIME=\$(date +%s%N)
+                        API_RESPONSE_TIME=\$(echo "scale=3; (\$END_TIME - \$START_TIME) / 1000000" | bc 2>/dev/null || echo "unknown")
+                        echo "⚡ API response time: \${API_RESPONSE_TIME}ms" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        
+                        # Jenkins login page response time
+                        START_TIME=\$(date +%s%N)
+                        curl -s -f ${JENKINS_URL_INTERNAL}/login > /dev/null
+                        END_TIME=\$(date +%s%N)
+                        LOGIN_RESPONSE_TIME=\$(echo "scale=3; (\$END_TIME - \$START_TIME) / 1000000" | bc 2>/dev/null || echo "unknown")
+                        echo "🔐 Login page response time: \${LOGIN_RESPONSE_TIME}ms" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        
+                        # Docker performance test
+                        echo "🐳 Testing Docker performance..." | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        START_TIME=\$(date +%s)
+                        docker run --rm alpine:latest echo "Docker test" > /dev/null
+                        END_TIME=\$(date +%s)
+                        DOCKER_TEST_TIME=\$((END_TIME - START_TIME))
+                        echo "📦 Docker container start time: \${DOCKER_TEST_TIME}s" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        
+                        if [ "\$DOCKER_TEST_TIME" -gt "30" ]; then
+                            echo "⚠️ WARNING: Docker performance is slow" | tee -a ${HEALTH_CHECK_DIR}/health-check.log
+                        fi
+                    """
+                }
+            }
+        }
+        
+        stage('Generate Health Report') {
+            steps {
+                script {
+                    echo "📋 Generating health report..."
+                    
+                    sh """
+                        echo "=== Health Check Summary ===" >> ${HEALTH_CHECK_DIR}/health-check.log
+                        echo "Health Check Completed: \$(date)" >> ${HEALTH_CHECK_DIR}/health-check.log
+                        echo "Build Number: ${env.BUILD_NUMBER}" >> ${HEALTH_CHECK_DIR}/health-check.log
+                        echo "Duration: ${currentBuild.durationString}" >> ${HEALTH_CHECK_DIR}/health-check.log
+                        
+                        # Count issues
+                        ERRORS=\$(grep -c "❌" ${HEALTH_CHECK_DIR}/health-check.log || echo 0)
+                        WARNINGS=\$(grep -c "⚠️" ${HEALTH_CHECK_DIR}/health-check.log || echo 0)
+                        SUCCESSES=\$(grep -c "✅" ${HEALTH_CHECK_DIR}/health-check.log || echo 0)
+                        
+                        echo "" >> ${HEALTH_CHECK_DIR}/health-check.log
+                        echo "📊 Summary:" >> ${HEALTH_CHECK_DIR}/health-check.log
+                        echo "  ✅ Passed: \${SUCCESSES}" >> ${HEALTH_CHECK_DIR}/health-check.log
+                        echo "  ⚠️ Warnings: \${WARNINGS}" >> ${HEALTH_CHECK_DIR}/health-check.log
+                        echo "  ❌ Errors: \${ERRORS}" >> ${HEALTH_CHECK_DIR}/health-check.log
+                        
+                        # Set overall health status
+                        if [ "\$ERRORS" -gt "0" ]; then
+                            echo "🔴 Overall Status: CRITICAL" >> ${HEALTH_CHECK_DIR}/health-check.log
+                            echo "CRITICAL" > ${HEALTH_CHECK_DIR}/status
+                        elif [ "\$WARNINGS" -gt "0" ]; then
+                            echo "🟡 Overall Status: WARNING" >> ${HEALTH_CHECK_DIR}/health-check.log
+                            echo "WARNING" > ${HEALTH_CHECK_DIR}/status
+                        else
+                            echo "🟢 Overall Status: HEALTHY" >> ${HEALTH_CHECK_DIR}/health-check.log
+                            echo "HEALTHY" > ${HEALTH_CHECK_DIR}/status
+                        fi
+                        
+                        # Display full report
+                        echo "=========================="
+                        cat ${HEALTH_CHECK_DIR}/health-check.log
+                        echo "=========================="
+                    """
+                    
+                    // Archive health check report
+                    archiveArtifacts artifacts: "${HEALTH_CHECK_DIR.substring(1)}/**", fingerprint: true
+                    
+                    // Set build result based on health status
+                    def healthStatus = readFile("${HEALTH_CHECK_DIR}/status").trim()
+                    
+                    if (healthStatus == 'CRITICAL') {
+                        currentBuild.result = 'FAILURE'
+                        error("Health check failed with critical issues")
+                    } else if (healthStatus == 'WARNING') {
+                        currentBuild.result = 'UNSTABLE'
+                        echo "Health check completed with warnings"
+                    } else {
+                        echo "Health check passed successfully"
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                // Clean up temporary files
+                sh "rm -rf ${HEALTH_CHECK_DIR}"
+            }
+        }
+        
+        success {
+            script {
+                echo "✅ Health Check Completed Successfully!"
+                
+                if (params.SEND_NOTIFICATIONS && env.SLACK_WEBHOOK) {
+                    slackSend(
+                        channel: '#infrastructure',
+                        color: 'good',
+                        message: """
+                            ✅ Jenkins Health Check: PASSED
+                            
+                            🖥️ Host: ${HOSTNAME}
+                            ⏰ Time: ${TIMESTAMP}
+                            🔍 Deep Check: ${params.DEEP_HEALTH_CHECK}
+                            ⏱️ Duration: ${currentBuild.durationString}
+                            
+                            All systems operational
+                        """.stripIndent()
+                    )
+                }
+            }
+        }
+        
+        failure {
+            script {
+                echo "❌ Health Check Failed!"
+                
+                if (params.SEND_NOTIFICATIONS && env.SLACK_WEBHOOK) {
+                    slackSend(
+                        channel: '#infrastructure',
+                        color: 'danger',
+                        message: """
+                            ❌ Jenkins Health Check: FAILED
+                            
+                            🖥️ Host: ${HOSTNAME}
+                            ⏰ Time: ${TIMESTAMP}
+                            ⏱️ Duration: ${currentBuild.durationString}
+                            
+                            🔗 Build: ${env.BUILD_URL}
+                            🚨 Immediate attention required!
+                        """.stripIndent()
+                    )
+                }
+            }
+        }
+        
+        unstable {
+            script {
+                echo "⚠️ Health Check Completed with Warnings!"
+                
+                if (params.SEND_NOTIFICATIONS && env.SLACK_WEBHOOK) {
+                    slackSend(
+                        channel: '#infrastructure',
+                        color: 'warning',
+                        message: """
+                            ⚠️ Jenkins Health Check: WARNINGS
+                            
+                            🖥️ Host: ${HOSTNAME}
+                            ⏰ Time: ${TIMESTAMP}
+                            ⏱️ Duration: ${currentBuild.durationString}
+                            
+                            🔗 Build: ${env.BUILD_URL}
+                            📋 Please review warnings
+                        """.stripIndent()
+                    )
+                }
+            }
+        }
+    }
+}
+    </script>
+    <sandbox>true</sandbox>
+  </definition>
+  <triggers/>
+  <disabled>false</disabled>
+</flow-definition>

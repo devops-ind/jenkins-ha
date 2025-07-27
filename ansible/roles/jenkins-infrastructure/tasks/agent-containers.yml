@@ -1,0 +1,331 @@
+---
+# Jenkins Infrastructure - Agent Container Configuration Tasks
+
+- name: Create Jenkins agent configuration directories
+  file:
+    path: "{{ jenkins_home_dir }}/agents/{{ item }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+    recurse: yes
+  loop:
+    - "dind"
+    - "maven"
+    - "python" 
+    - "nodejs"
+    - "static"
+  tags: ['agents', 'directories']
+
+- name: Generate Jenkins agent configuration files
+  template:
+    src: jenkins-agent-config.yml.j2
+    dest: "{{ jenkins_home_dir }}/agents/{{ item }}/agent-config.yml"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  loop:
+    - "dind"
+    - "maven"
+    - "python"
+    - "nodejs"
+    - "static"
+  notify: restart jenkins agents
+  tags: ['agents', 'config']
+
+- name: Create Jenkins agent systemd service files
+  template:
+    src: jenkins-agent.service.j2
+    dest: "/etc/systemd/system/jenkins-agent-{{ item }}.service"
+    mode: '0644'
+  loop:
+    - "dind"
+    - "maven"
+    - "python"
+    - "nodejs"
+    - "static"
+  notify:
+    - reload systemd
+    - restart jenkins agents
+  tags: ['agents', 'systemd']
+
+- name: Start Jenkins DIND agent containers (Docker)
+  community.docker.docker_container:
+    name: "jenkins-agent-dind"
+    image: "{{ harbor_registry_url | default('jenkins') }}/{{ harbor_project | default('library') }}/jenkins-agent-dind:{{ jenkins_agent_image_tag }}"
+    state: started
+    restart_policy: "{{ jenkins_restart_policy }}"
+    privileged: yes
+    networks:
+      - name: "{{ jenkins_network_name }}"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "jenkins-agent-dind-workspace:/home/jenkins/workspace"
+      - "jenkins-shared:{{ shared_storage_path | default('/shared/jenkins') }}"
+    env:
+      JENKINS_URL: "http://jenkins-master-1:{{ jenkins_port }}"
+      JENKINS_AGENT_NAME: "dind-agent"
+      JENKINS_SECRET: "{{ jenkins_agent_secret | default('changeme') }}"
+      JENKINS_AGENT_WORKDIR: "/home/jenkins/workspace"
+    memory: "{{ jenkins_agent_memory }}"
+    cpus: "{{ jenkins_agent_cpu_limit }}"
+    log_driver: "{{ jenkins_log_driver }}"
+    log_options:
+      max-size: "{{ jenkins_log_max_size }}"
+      max-file: "{{ jenkins_log_max_files }}"
+    labels:
+      service: "jenkins-agent"
+      type: "dind"
+      cluster: "{{ jenkins_cluster_name }}"
+    healthcheck:
+      test: ["CMD", "docker", "version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+  when: jenkins_container_runtime == 'docker'
+  tags: ['agents', 'containers', 'docker', 'dind']
+
+- name: Start Jenkins Maven agent containers (Docker)
+  community.docker.docker_container:
+    name: "jenkins-agent-maven"
+    image: "{{ harbor_registry_url | default('jenkins') }}/{{ harbor_project | default('library') }}/jenkins-agent-maven:{{ jenkins_agent_image_tag }}"
+    state: started
+    restart_policy: "{{ jenkins_restart_policy }}"
+    networks:
+      - name: "{{ jenkins_network_name }}"
+    volumes:
+      - "jenkins-agent-maven-workspace:/home/jenkins/workspace"
+      - "jenkins-shared:{{ shared_storage_path | default('/shared/jenkins') }}"
+      - "maven-cache:/home/jenkins/.m2"
+    env:
+      JENKINS_URL: "http://jenkins-master-1:{{ jenkins_port }}"
+      JENKINS_AGENT_NAME: "maven-agent"
+      JENKINS_SECRET: "{{ jenkins_agent_secret | default('changeme') }}"
+      JENKINS_AGENT_WORKDIR: "/home/jenkins/workspace"
+      MAVEN_OPTS: "-Xmx2048m"
+    memory: "{{ jenkins_agent_memory }}"
+    cpus: "{{ jenkins_agent_cpu_limit }}"
+    log_driver: "{{ jenkins_log_driver }}"
+    log_options:
+      max-size: "{{ jenkins_log_max_size }}"
+      max-file: "{{ jenkins_log_max_files }}"
+    labels:
+      service: "jenkins-agent"
+      type: "maven"
+      cluster: "{{ jenkins_cluster_name }}"
+    healthcheck:
+      test: ["CMD", "java", "-version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+  when: jenkins_container_runtime == 'docker'
+  tags: ['agents', 'containers', 'docker', 'maven']
+
+- name: Start Jenkins Python agent containers (Docker)
+  community.docker.docker_container:
+    name: "jenkins-agent-python"
+    image: "{{ harbor_registry_url | default('jenkins') }}/{{ harbor_project | default('library') }}/jenkins-agent-python:{{ jenkins_agent_image_tag }}"
+    state: started
+    restart_policy: "{{ jenkins_restart_policy }}"
+    networks:
+      - name: "{{ jenkins_network_name }}"
+    volumes:
+      - "jenkins-agent-python-workspace:/home/jenkins/workspace"
+      - "jenkins-shared:{{ shared_storage_path | default('/shared/jenkins') }}"
+      - "python-cache:/home/jenkins/.cache"
+    env:
+      JENKINS_URL: "http://jenkins-master-1:{{ jenkins_port }}"
+      JENKINS_AGENT_NAME: "python-agent"
+      JENKINS_SECRET: "{{ jenkins_agent_secret | default('changeme') }}"
+      JENKINS_AGENT_WORKDIR: "/home/jenkins/workspace"
+      PYTHONUNBUFFERED: "1"
+    memory: "{{ jenkins_agent_memory }}"
+    cpus: "{{ jenkins_agent_cpu_limit }}"
+    log_driver: "{{ jenkins_log_driver }}"
+    log_options:
+      max-size: "{{ jenkins_log_max_size }}"
+      max-file: "{{ jenkins_log_max_files }}"
+    labels:
+      service: "jenkins-agent"
+      type: "python"
+      cluster: "{{ jenkins_cluster_name }}"
+    healthcheck:
+      test: ["CMD", "python", "--version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+  when: jenkins_container_runtime == 'docker'
+  tags: ['agents', 'containers', 'docker', 'python']
+
+- name: Start Jenkins Node.js agent containers (Docker)
+  community.docker.docker_container:
+    name: "jenkins-agent-nodejs"
+    image: "{{ harbor_registry_url | default('jenkins') }}/{{ harbor_project | default('library') }}/jenkins-agent-nodejs:{{ jenkins_agent_image_tag }}"
+    state: started
+    restart_policy: "{{ jenkins_restart_policy }}"
+    networks:
+      - name: "{{ jenkins_network_name }}"
+    volumes:
+      - "jenkins-agent-nodejs-workspace:/home/jenkins/workspace"
+      - "jenkins-shared:{{ shared_storage_path | default('/shared/jenkins') }}"
+      - "nodejs-cache:/home/jenkins/.npm"
+    env:
+      JENKINS_URL: "http://jenkins-master-1:{{ jenkins_port }}"
+      JENKINS_AGENT_NAME: "nodejs-agent"
+      JENKINS_SECRET: "{{ jenkins_agent_secret | default('changeme') }}"
+      JENKINS_AGENT_WORKDIR: "/home/jenkins/workspace"
+      NODE_ENV: "development"
+    memory: "{{ jenkins_agent_memory }}"
+    cpus: "{{ jenkins_agent_cpu_limit }}"
+    log_driver: "{{ jenkins_log_driver }}"
+    log_options:
+      max-size: "{{ jenkins_log_max_size }}"
+      max-file: "{{ jenkins_log_max_files }}"
+    labels:
+      service: "jenkins-agent"
+      type: "nodejs"
+      cluster: "{{ jenkins_cluster_name }}"
+    healthcheck:
+      test: ["CMD", "node", "--version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+  when: jenkins_container_runtime == 'docker'
+  tags: ['agents', 'containers', 'docker', 'nodejs']
+
+- name: Start Jenkins agent containers (Podman)
+  containers.podman.podman_container:
+    name: "jenkins-agent-{{ item.type }}"
+    image: "{{ harbor_registry_url | default('jenkins') }}/{{ harbor_project | default('library') }}/jenkins-agent-{{ item.type }}:{{ jenkins_agent_image_tag }}"
+    state: started
+    restart_policy: "{{ jenkins_restart_policy }}"
+    privileged: "{{ item.privileged | default(false) }}"
+    networks:
+      - "{{ jenkins_network_name }}"
+    volumes: "{{ item.volumes }}"
+    env: "{{ item.env }}"
+    memory: "{{ jenkins_agent_memory }}"
+    cpus: "{{ jenkins_agent_cpu_limit }}"
+    log_driver: "{{ jenkins_log_driver }}"
+    log_opt:
+      max_size: "{{ jenkins_log_max_size }}"
+      max_file: "{{ jenkins_log_max_files }}"
+    labels:
+      service: "jenkins-agent"
+      type: "{{ item.type }}"
+      cluster: "{{ jenkins_cluster_name }}"
+    healthcheck: "{{ item.healthcheck }}"
+    healthcheck_interval: 30s
+    healthcheck_timeout: 10s
+    healthcheck_retries: 3
+    healthcheck_start_period: 30s
+  loop:
+    - type: "dind"
+      privileged: true
+      volumes:
+        - "/var/run/docker.sock:/var/run/docker.sock"
+        - "jenkins-agent-dind-workspace:/home/jenkins/workspace"
+        - "jenkins-shared:{{ shared_storage_path | default('/shared/jenkins') }}"
+      env:
+        JENKINS_URL: "http://jenkins-master-1:{{ jenkins_port }}"
+        JENKINS_AGENT_NAME: "dind-agent"
+        JENKINS_SECRET: "{{ jenkins_agent_secret | default('changeme') }}"
+      healthcheck: "docker version || exit 1"
+    - type: "maven"
+      volumes:
+        - "jenkins-agent-maven-workspace:/home/jenkins/workspace"
+        - "jenkins-shared:{{ shared_storage_path | default('/shared/jenkins') }}"
+        - "maven-cache:/home/jenkins/.m2"
+      env:
+        JENKINS_URL: "http://jenkins-master-1:{{ jenkins_port }}"
+        JENKINS_AGENT_NAME: "maven-agent"
+        JENKINS_SECRET: "{{ jenkins_agent_secret | default('changeme') }}"
+        MAVEN_OPTS: "-Xmx2048m"
+      healthcheck: "java -version || exit 1"
+    - type: "python"
+      volumes:
+        - "jenkins-agent-python-workspace:/home/jenkins/workspace"
+        - "jenkins-shared:{{ shared_storage_path | default('/shared/jenkins') }}"
+        - "python-cache:/home/jenkins/.cache"
+      env:
+        JENKINS_URL: "http://jenkins-master-1:{{ jenkins_port }}"
+        JENKINS_AGENT_NAME: "python-agent"
+        JENKINS_SECRET: "{{ jenkins_agent_secret | default('changeme') }}"
+        PYTHONUNBUFFERED: "1"
+      healthcheck: "python --version || exit 1"
+    - type: "nodejs"
+      volumes:
+        - "jenkins-agent-nodejs-workspace:/home/jenkins/workspace"
+        - "jenkins-shared:{{ shared_storage_path | default('/shared/jenkins') }}"
+        - "nodejs-cache:/home/jenkins/.npm"
+      env:
+        JENKINS_URL: "http://jenkins-master-1:{{ jenkins_port }}"
+        JENKINS_AGENT_NAME: "nodejs-agent"
+        JENKINS_SECRET: "{{ jenkins_agent_secret | default('changeme') }}"
+        NODE_ENV: "development"
+      healthcheck: "node --version || exit 1"
+  when: jenkins_container_runtime == 'podman'
+  tags: ['agents', 'containers', 'podman']
+
+- name: Enable and start Jenkins agent systemd services
+  systemd:
+    name: "jenkins-agent-{{ item }}"
+    enabled: yes
+    state: started
+    daemon_reload: yes
+  loop:
+    - "dind"
+    - "maven"
+    - "python"
+    - "nodejs"
+  when: jenkins_systemd_enabled
+  tags: ['agents', 'systemd']
+
+- name: Create agent workspace directories
+  file:
+    path: "{{ shared_storage_path | default('/shared/jenkins') }}/agents/{{ item }}/workspace"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+    recurse: yes
+  loop:
+    - "dind"
+    - "maven"
+    - "python"
+    - "nodejs"
+  tags: ['agents', 'workspace']
+
+- name: Setup Jenkins agent log rotation
+  template:
+    src: jenkins-agent-logrotate.j2
+    dest: /etc/logrotate.d/jenkins-agents
+    mode: '0644'
+  tags: ['agents', 'logging']
+
+- name: Display Jenkins agent status
+  debug:
+    msg: |
+      Jenkins Agent Deployment Status:
+      
+      Container Runtime: {{ jenkins_container_runtime }}
+      Network: {{ jenkins_network_name }}
+      Shared Storage: {{ shared_storage_path | default('/shared/jenkins') }}
+      
+      Deployed Agents:
+      - DIND Agent: jenkins-agent-dind (Docker-in-Docker builds)
+      - Maven Agent: jenkins-agent-maven (Java/Maven builds)
+      - Python Agent: jenkins-agent-python (Python development)
+      - Node.js Agent: jenkins-agent-nodejs (Node.js development)
+      
+      Agent Resources:
+        Memory: {{ jenkins_agent_memory }}
+        CPU: {{ jenkins_agent_cpu_limit }}
+        
+      Health Checks: Enabled (30s interval)
+      Logging: {{ jenkins_log_driver }} with rotation
+  tags: ['agents', 'info']

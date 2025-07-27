@@ -1,0 +1,8 @@
+---
+# Handlers for common role
+- name: restart common service
+  systemd:
+    name: common
+    state: restarted
+    enabled: yes
+  listen: "restart common"

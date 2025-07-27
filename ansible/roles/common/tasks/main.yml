@@ -1,0 +1,100 @@
+---
+# Tasks for common role
+
+- name: Update package cache
+  package:
+    update_cache: yes
+  when: common_update_packages
+
+- name: Install essential packages
+  package:
+    name: "{{ common_packages }}"
+    state: present
+  when: common_install_tools
+
+# - name: Set timezone
+#   timezone:
+#     name: "{{ common_timezone }}"
+#   notify: restart rsyslog
+
+- name: Set locale
+  locale_gen:
+    name: "{{ common_locale }}"
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Create monitoring user
+  user:
+    name: "{{ common_monitoring_user }}"
+    home: "{{ common_monitoring_user_home }}"
+    shell: /bin/bash
+    system: yes
+    create_home: yes
+
+- name: Configure SSH settings
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    backup: yes
+  loop:
+    - { regexp: '^#?Port', line: 'Port {{ common_ssh_port }}' }
+    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin {{ common_ssh_permit_root_login }}' }
+    - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication {{ common_ssh_password_authentication }}' }
+    - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries {{ common_ssh_max_auth_tries }}' }
+  notify: restart ssh
+
+- name: Install and configure UFW firewall
+  package:
+    name: ufw
+    state: present
+  when: common_firewall_enabled and ansible_os_family == "Debian"
+
+- name: Configure UFW default policies
+  ufw:
+    direction: "{{ item.direction }}"
+    policy: "{{ item.policy }}"
+  loop:
+    - { direction: 'incoming', policy: 'deny' }
+    - { direction: 'outgoing', policy: 'allow' }
+  when: common_firewall_enabled and ansible_os_family == "Debian"
+
+- name: Allow SSH and other ports through firewall
+  ufw:
+    rule: allow
+    port: "{{ item.split('/')[0] }}"
+    proto: "{{ item.split('/')[1] }}"
+  loop: "{{ common_firewall_allowed_ports }}"
+  when: common_firewall_enabled and ansible_os_family == "Debian"
+
+- name: Enable UFW firewall
+  ufw:
+    state: enabled
+  when: common_firewall_enabled and ansible_os_family == "Debian"
+
+- name: Configure NTP service
+  template:
+    src: ntp.conf.j2
+    dest: /etc/ntp.conf
+    backup: yes
+  notify: restart ntp
+  when: common_ntp_enabled
+
+- name: Start and enable NTP service
+  service:
+    name: "{{ 'ntp' if ansible_os_family == 'Debian' else 'ntpd' }}"
+    state: started
+    enabled: yes
+  when: common_ntp_enabled
+
+- name: Configure logrotate for system logs
+  template:
+    src: logrotate.j2
+    dest: /etc/logrotate.d/jenkins-system
+  when: common_logrotate_enabled
+
+- name: Ensure system is up to date
+  package:
+    name: "*"
+    state: latest
+  when: common_update_packages and ansible_os_family == "RedHat"

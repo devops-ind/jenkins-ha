@@ -1,0 +1,24 @@
+---
+# Global configuration for production environment
+jenkins_version: "2.426.1"
+docker_version: "24.0.7"
+timezone: "UTC"
+
+# Network configuration
+jenkins_network: "jenkins-net"
+monitoring_network: "monitoring-net"
+
+# Storage configuration
+jenkins_home: "/opt/jenkins"
+backup_location: "/backup/jenkins"
+shared_storage_mount: "/shared"
+
+# Security settings
+enable_ssl: true
+ssl_cert_path: "/etc/ssl/certs/jenkins.crt"
+ssl_key_path: "/etc/ssl/private/jenkins.key"
+
+# Backup configuration
+backup_enabled: true
+backup_schedule: "0 2 * * *"
+backup_retention_days: 30

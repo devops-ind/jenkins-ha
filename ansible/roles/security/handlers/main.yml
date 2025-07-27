@@ -1,0 +1,8 @@
+---
+# Handlers for security role
+- name: restart security service
+  systemd:
+    name: security
+    state: restarted
+    enabled: yes
+  listen: "restart security"

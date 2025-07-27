@@ -1,0 +1,90 @@
+ARG JDK_VERSION={{ default_jdk_version | default('11') }}
+FROM openjdk:${JDK_VERSION}-jdk
+
+# Build arguments
+ARG MAVEN_VERSION={{ maven_version | default('3.9.6') }}
+ARG BUILD_DATE
+ARG VCS_REF
+
+# Metadata
+LABEL maintainer="DevOps Team" \
+      org.label-schema.build-date=${BUILD_DATE} \
+      org.label-schema.vcs-ref=${VCS_REF} \
+      org.label-schema.version=${MAVEN_VERSION} \
+      org.label-schema.schema-version="1.0" \
+      description="Jenkins Agent with Maven and Java build capabilities"
+
+# Switch to root to install packages
+USER root
+
+# Install essential packages
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    unzip \
+    vim \
+    sudo \
+    openssh-client \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    build-essential \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Maven
+RUN curl -fsSL https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz \
+    | tar xzf - -C /opt \
+    && ln -s /opt/apache-maven-${MAVEN_VERSION} /opt/maven \
+    && ln -s /opt/maven/bin/mvn /usr/local/bin
+
+# Install Jenkins agent
+ARG AGENT_VERSION={{ jenkins_agent_version | default('latest') }}
+RUN curl --create-dirs -fsSLo /usr/share/jenkins/agent.jar \
+    https://repo.jenkins-ci.org/public/org/jenkins-ci/main/remoting/${AGENT_VERSION}/remoting-${AGENT_VERSION}.jar \
+    && chmod 755 /usr/share/jenkins \
+    && chmod 644 /usr/share/jenkins/agent.jar
+
+# Install Docker CLI for integration
+RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y docker-ce-cli \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create jenkins user
+RUN groupadd -g 1000 jenkins \
+    && useradd -u 1000 -g jenkins -m -s /bin/bash jenkins \
+    && usermod -aG docker jenkins
+
+# Set up Maven configuration
+RUN mkdir -p /home/jenkins/.m2 \
+    && chown -R jenkins:jenkins /home/jenkins
+
+# Copy Maven settings template
+COPY --chown=jenkins:jenkins maven-settings.xml /home/jenkins/.m2/settings.xml
+
+# Create workspace directory
+RUN mkdir -p /home/jenkins/workspace \
+    && chown -R jenkins:jenkins /home/jenkins/workspace
+
+# Set environment variables
+ENV JAVA_HOME=/usr/local/openjdk-${JDK_VERSION}
+ENV MAVEN_HOME=/opt/maven
+ENV PATH=${MAVEN_HOME}/bin:${PATH}
+ENV MAVEN_OPTS="-Xmx2048m -XX:MaxPermSize=512m"
+
+# Switch to jenkins user
+USER jenkins
+
+# Set working directory
+WORKDIR /home/jenkins
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD java -version && mvn -version || exit 1
+
+# Entry point for the agent
+ENTRYPOINT ["java", "-jar", "/usr/share/jenkins/agent.jar"]

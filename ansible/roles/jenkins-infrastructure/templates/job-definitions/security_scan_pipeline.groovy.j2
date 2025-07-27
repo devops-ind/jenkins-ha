@@ -1,0 +1,938 @@
+                    // Create scan directory
+                    sh """
+                        mkdir -p ${SCAN_DIR}
+                        echo "Security Scan Started: \$(date)" > ${SCAN_DIR}/security-scan.log
+                        
+                        # Install security scanning tools if not present
+                        if ! command -v trivy &> /dev/null; then
+                            echo "📦 Installing Trivy vulnerability scanner..."
+                            curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+                        fi
+                        
+                        # Install lynis for system hardening checks
+                        if ! command -v lynis &> /dev/null; then
+                            echo "📦 Installing Lynis system auditing tool..."
+                            curl -s https://downloads.cisofy.com/lynis/lynis-3.0.8.tar.gz | tar xzf - -C /tmp/
+                            chmod +x /tmp/lynis/lynis
+                            ln -sf /tmp/lynis/lynis /usr/local/bin/lynis
+                        fi
+                    """
+                    
+                    currentBuild.description = "Security Scan - ${params.SCAN_TYPE} - ${TIMESTAMP}"
+                }
+            }
+        }
+        
+        stage('Container Image Vulnerability Scanning') {
+            when {
+                anyOf {
+                    equals expected: 'full', actual: params.SCAN_TYPE
+                    equals expected: 'quick', actual: params.SCAN_TYPE
+                    equals expected: 'images-only', actual: params.SCAN_TYPE
+                }
+                expression { params.SCAN_CONTAINERS }
+            }
+            parallel {
+                stage('Scan Jenkins Master Image') {
+                    steps {
+                        script {
+                            echo "🔍 Scanning Jenkins master image..."
+                            
+                            sh """
+                                echo "=== Jenkins Master Image Scan ===" >> ${SCAN_DIR}/security-scan.log
+                                
+                                # Get current Jenkins master image
+                                MASTER_IMAGE=\$(docker inspect jenkins-master-${HOSTNAME} --format='{{.Config.Image}}' 2>/dev/null || echo "unknown")
+                                echo "📦 Scanning image: \${MASTER_IMAGE}" | tee -a ${SCAN_DIR}/security-scan.log
+                                
+                                if [ "\${MASTER_IMAGE}" != "unknown" ]; then
+                                    # Scan with Trivy
+                                    trivy image --format json --output ${SCAN_DIR}/jenkins-master-scan.json \${MASTER_IMAGE} || true
+                                    
+                                    # Generate summary
+                                    trivy image --format table \${MASTER_IMAGE} | tee -a ${SCAN_DIR}/security-scan.log || true
+                                    
+                                    # Count vulnerabilities
+                                    HIGH_VULNS=\$(cat ${SCAN_DIR}/jenkins-master-scan.json | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' 2>/dev/null || echo 0)
+                                    CRITICAL_VULNS=\$(cat ${SCAN_DIR}/jenkins-master-scan.json | jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' 2>/dev/null || echo 0)
+                                    
+                                    echo "🔴 Critical vulnerabilities: \${CRITICAL_VULNS}" | tee -a ${SCAN_DIR}/security-scan.log
+                                    echo "🟠 High vulnerabilities: \${HIGH_VULNS}" | tee -a ${SCAN_DIR}/security-scan.log
+                                    
+                                    if [ "\${CRITICAL_VULNS}" -gt "0" ]; then
+                                        echo "❌ CRITICAL: Jenkins master image has critical vulnerabilities!" | tee -a ${SCAN_DIR}/security-scan.log
+                                        echo "CRITICAL_VULNS_FOUND" > ${SCAN_DIR}/master_critical
+                                    fi
+                                else
+                                    echo "⚠️ Could not determine Jenkins master image" | tee -a ${SCAN_DIR}/security-scan.log
+                                fi
+                            """
+                        }
+                    }
+                }
+                
+                stage('Scan Agent Images') {
+                    steps {
+                        script {
+                            echo "🔍 Scanning Jenkins agent images..."
+                            
+                            sh """
+                                echo "=== Jenkins Agent Images Scan ===" >> ${SCAN_DIR}/security-scan.log
+                                
+                                # Scan DIND agent
+                                DIND_IMAGE=\$(docker inspect jenkins-agent-dind --format='{{.Config.Image}}' 2>/dev/null || echo "unknown")
+                                if [ "\${DIND_IMAGE}" != "unknown" ]; then
+                                    echo "🐳 Scanning DIND agent: \${DIND_IMAGE}" | tee -a ${SCAN_DIR}/security-scan.log
+                                    trivy image --format json --output ${SCAN_DIR}/dind-agent-scan.json \${DIND_IMAGE} || true
+                                    trivy image --format table \${DIND_IMAGE} | tee -a ${SCAN_DIR}/security-scan.log || true
+                                fi
+                                
+                                # Scan Harbor registry images
+                                echo "🏗️ Scanning images in Harbor registry..." | tee -a ${SCAN_DIR}/security-scan.log
+                                
+                                # Login to Harbor
+                                echo \$HARBOR_CREDENTIALS_PSW | docker login \$HARBOR_REGISTRY -u \$HARBOR_CREDENTIALS_USR --password-stdin
+                                
+                                # Scan latest images from Harbor
+                                for IMAGE in jenkins-master jenkins-agent-dind jenkins-agent-maven jenkins-agent-python; do
+                                    FULL_IMAGE="\${HARBOR_REGISTRY}/\${HARBOR_PROJECT}/\${IMAGE}:latest"
+                                    echo "📦 Scanning \${FULL_IMAGE}..." | tee -a ${SCAN_DIR}/security-scan.log
+                                    
+                                    # Pull and scan
+                                    docker pull \${FULL_IMAGE} > /dev/null 2>&1 || true
+                                    trivy image --format json --output ${SCAN_DIR}/\${IMAGE}-harbor-scan.json \${FULL_IMAGE} || true
+                                done
+                            """
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('System Security Compliance') {
+            when {
+                anyOf {
+                    equals expected: 'full', actual: params.SCAN_TYPE
+                    equals expected: 'compliance-only', actual: params.SCAN_TYPE
+                }
+                expression { params.CHECK_COMPLIANCE }
+            }
+            steps {
+                script {
+                    echo "📋 Checking system security compliance..."
+                    
+                    sh """
+                        echo "=== System Security Compliance ===" >> ${SCAN_DIR}/security-scan.log
+                        
+                        # Run Lynis system audit
+                        echo "🔍 Running Lynis system audit..." | tee -a ${SCAN_DIR}/security-scan.log
+                        lynis audit system --quiet --log-file ${SCAN_DIR}/lynis.log || true
+                        
+                        # Extract key findings
+                        if [ -f "${SCAN_DIR}/lynis.log" ]; then
+                            WARNINGS=\$(grep -c "Warning" ${SCAN_DIR}/lynis.log || echo 0)
+                            SUGGESTIONS=\$(grep -c "Suggestion" ${SCAN_DIR}/lynis.log || echo 0)
+                            
+                            echo "⚠️ Security warnings: \${WARNINGS}" | tee -a ${SCAN_DIR}/security-scan.log
+                            echo "💡 Security suggestions: \${SUGGESTIONS}" | tee -a ${SCAN_DIR}/security-scan.log
+                            
+                            # Extract high-priority issues
+                            echo "🔍 High priority security issues:" | tee -a ${SCAN_DIR}/security-scan.log
+                            grep -E "(Warning|Suggestion)" ${SCAN_DIR}/lynis.log | head -10 | tee -a ${SCAN_DIR}/security-scan.log || true
+                        fi
+                        
+                        # Check specific security configurations
+                        echo "🛡️ Checking security configurations..." | tee -a ${SCAN_DIR}/security-scan.log
+                        
+                        # SELinux status
+                        SELINUX_STATUS=\$(getenforce 2>/dev/null || echo "Unknown")
+                        echo "SELinux status: \${SELINUX_STATUS}" | tee -a ${SCAN_DIR}/security-scan.log
+                        
+                        if [ "\${SELINUX_STATUS}" != "Enforcing" ]; then
+                            echo "⚠️ WARNING: SELinux is not enforcing" | tee -a ${SCAN_DIR}/security-scan.log
+                        fi
+                        
+                        # Firewall status
+                        if systemctl is-active --quiet firewalld; then
+                            echo "✅ Firewall: Active" | tee -a ${SCAN_DIR}/security-scan.log
+                        else
+                            echo "❌ Firewall: Inactive" | tee -a ${SCAN_DIR}/security-scan.log
+                        fi
+                        
+                        # Check for unencrypted sensitive files
+                        echo "🔐 Checking for unencrypted sensitive files..." | tee -a ${SCAN_DIR}/security-scan.log
+                        find {{ jenkins_home_dir }} -name "*.key" -o -name "*password*" -o -name "*secret*" | \
+                        while read file; do
+                            if [ -f "\$file" ] && ! file "\$file" | grep -q "encrypted"; then
+                                echo "⚠️ Potentially unencrypted sensitive file: \$file" | tee -a ${SCAN_DIR}/security-scan.log
+                            fi
+                        done
+                        
+                        # Check file permissions
+                        echo "🔒 Checking critical file permissions..." | tee -a ${SCAN_DIR}/security-scan.log
+                        
+                        # Check Jenkins home permissions
+                        JENKINS_HOME_PERMS=\$(stat -c "%a" {{ jenkins_home_dir }} 2>/dev/null || echo "unknown")
+                        echo "Jenkins home permissions: \${JENKINS_HOME_PERMS}" | tee -a ${SCAN_DIR}/security-scan.log
+                        
+                        # Check SSL certificate permissions
+                        if [ -d "{{ jenkins_home_dir }}/ssl" ]; then
+                            find {{ jenkins_home_dir }}/ssl -name "*.key" -exec stat -c "%n %a" {} \; | tee -a ${SCAN_DIR}/security-scan.log
+                        fi
+                    """
+                }
+            }
+        }
+        
+        stage('SSL/TLS Security Check') {
+            steps {
+                script {
+                    echo "🔐 Checking SSL/TLS security..."
+                    
+                    sh """
+                        echo "=== SSL/TLS Security Check ===" >> ${SCAN_DIR}/security-scan.log
+                        
+                        # Check SSL certificate validity
+                        if [ -f "{{ jenkins_home_dir }}/ssl/jenkins.crt" ]; then
+                            echo "📜 Checking SSL certificate..." | tee -a ${SCAN_DIR}/security-scan.log
+                            
+                            # Certificate expiry
+                            CERT_EXPIRY=\$(openssl x509 -in {{ jenkins_home_dir }}/ssl/jenkins.crt -noout -enddate | cut -d= -f2)
+                            echo "Certificate expires: \${CERT_EXPIRY}" | tee -a ${SCAN_DIR}/security-scan.log
+                            
+                            # Check if certificate expires within 30 days
+                            if ! openssl x509 -in {{ jenkins_home_dir }}/ssl/jenkins.crt -checkend 2592000 -noout; then
+                                echo "❌ WARNING: SSL certificate expires within 30 days!" | tee -a ${SCAN_DIR}/security-scan.log
+                                echo "CERT_EXPIRING" > ${SCAN_DIR}/cert_warning
+                            fi
+                            
+                            # Certificate details
+                            echo "Certificate subject:" | tee -a ${SCAN_DIR}/security-scan.log
+                            openssl x509 -in {{ jenkins_home_dir }}/ssl/jenkins.crt -noout -subject | tee -a ${SCAN_DIR}/security-scan.log
+                            
+                            # Certificate algorithm
+                            CERT_ALGO=\$(openssl x509 -in {{ jenkins_home_dir }}/ssl/jenkins.crt -noout -text | grep "Signature Algorithm" | head -1)
+                            echo "\${CERT_ALGO}" | tee -a ${SCAN_DIR}/security-scan.log
+                            
+                            # Check for weak algorithms
+                            if echo "\${CERT_ALGO}" | grep -q "sha1\|md5"; then
+                                echo "⚠️ WARNING: Certificate uses weak signature algorithm" | tee -a ${SCAN_DIR}/security-scan.log
+                            fi
+                        else
+                            echo "⚠️ No SSL certificate found" | tee -a ${SCAN_DIR}/security-scan.log
+                        fi
+                        
+                        # Test SSL configuration if Jenkins is accessible
+                        if curl -s -f https://localhost:443 > /dev/null 2>&1; then
+                            echo "🔍 Testing SSL configuration..." | tee -a ${SCAN_DIR}/security-scan.log
+                            
+                            # Use openssl to test SSL
+                            echo | openssl s_client -connect localhost:443 -servername {{ jenkins_domain }} 2>/dev/null | \
+                            openssl x509 -noout -subject -dates | tee -a ${SCAN_DIR}/security-scan.log || true
+                        else
+                            echo "ℹ️ HTTPS not accessible for testing" | tee -a ${SCAN_DIR}/security-scan.log
+                        fi
+                    """
+                }
+            }
+        }
+        
+        stage('Network Security Scan') {
+            when {
+                anyOf {
+                    equals expected: 'full', actual: params.SCAN_TYPE
+                    equals expected: 'network-only', actual: params.SCAN_TYPE
+                }
+                expression { params.NETWORK_SCAN }
+            }
+            steps {
+                script {
+                    echo "🌐 Performing network security scan..."
+                    
+                    sh """
+                        echo "=== Network Security Scan ===" >> ${SCAN_DIR}/security-scan.log
+                        
+                        # Check open ports
+                        echo "🔍 Checking open ports..." | tee -a ${SCAN_DIR}/security-scan.log
+                        netstat -tlnp | tee ${SCAN_DIR}/open_ports.txt
+                        
+                        # Count open ports
+                        OPEN_PORTS=\$(netstat -tln | grep LISTEN | wc -l)
+                        echo "📊 Total open ports: \${OPEN_PORTS}" | tee -a ${SCAN_DIR}/security-scan.log
+                        
+                        # Check for unexpected ports
+                        echo "🚨 Unexpected open ports:" | tee -a ${SCAN_DIR}/security-scan.log
+                        netstat -tln | grep LISTEN | grep -v -E ":(22|80|443|{{ jenkins_master_port }}|{{ jenkins_agent_port }}|9090|3000|9100|8404|8405)\\s" | tee -a ${SCAN_DIR}/security-scan.log || echo "None found"
+                        
+                        # Check firewall rules
+                        echo "🛡️ Checking firewall configuration..." | tee -a ${SCAN_DIR}/security-scan.log
+                        if command -v firewall-cmd &> /dev/null; then
+                            firewall-cmd --list-all | tee -a ${SCAN_DIR}/security-scan.log
+                        elif command -v iptables &> /dev/null; then
+                            iptables -L -n | tee -a ${SCAN_DIR}/security-scan.log
+                        else
+                            echo "⚠️ No firewall management tool found" | tee -a ${SCAN_DIR}/security-scan.log
+                        fi
+                        
+                        # Check for suspicious network connections
+                        echo "🔍 Checking active network connections..." | tee -a ${SCAN_DIR}/security-scan.log
+                        EXTERNAL_CONNECTIONS=\$(netstat -tn | grep ESTABLISHED | grep -v "127.0.0.1\|::1" | wc -l)
+                        echo "📊 External connections: \${EXTERNAL_CONNECTIONS}" | tee -a ${SCAN_DIR}/security-scan.log
+                        
+                        if [ "\${EXTERNAL_CONNECTIONS}" -gt "20" ]; then
+                            echo "⚠️ WARNING: High number of external connections" | tee -a ${SCAN_DIR}/security-scan.log
+                        fi
+                    """
+                }
+            }
+        }
+        
+        stage('Docker Security Assessment') {
+            when {
+                anyOf {
+                    equals expected: 'full', actual: params.SCAN_TYPE
+                    equals expected: 'quick', actual: params.SCAN_TYPE
+                }
+            }
+            steps {
+                script {
+                    echo "🐳 Assessing Docker security..."
+                    
+                    sh """
+                        echo "=== Docker Security Assessment ===" >> ${SCAN_DIR}/security-scan.log
+                        
+                        # Check Docker daemon configuration
+                        echo "🔍 Checking Docker daemon security..." | tee -a ${SCAN_DIR}/security-scan.log
+                        
+                        # Docker socket permissions
+                        DOCKER_SOCKET_PERMS=\$(stat -c "%a" /var/run/docker.sock 2>/dev/null || echo "unknown")
+                        echo "Docker socket permissions: \${DOCKER_SOCKET_PERMS}" | tee -a ${SCAN_DIR}/security-scan.log
+                        
+                        if [ "\${DOCKER_SOCKET_PERMS}" = "666" ] || [ "\${DOCKER_SOCKET_PERMS}" = "777" ]; then
+                            echo "⚠️ WARNING: Docker socket has overly permissive permissions" | tee -a ${SCAN_DIR}/security-scan.log
+                        fi
+                        
+                        # Check running containers security
+                        echo "🔍 Checking container security configurations..." | tee -a ${SCAN_DIR}/security-scan.log
+                        
+                        # Check for privileged containers
+                        PRIVILEGED_CONTAINERS=\$(docker ps --format "table {{.Names}}\\t{{.Command}}" --filter "label=privileged=true" | tail -n +2 | wc -l 2>/dev/null || echo 0)
+                        echo "⚡ Privileged containers: \${PRIVILEGED_CONTAINERS}" | tee -a ${SCAN_DIR}/security-scan.log
+                        
+                        # Check container users
+                        echo "👤 Container user configurations:" | tee -a ${SCAN_DIR}/security-scan.log
+                        docker ps --format "table {{.Names}}" | tail -n +2 | while read container; do
+                            USER_INFO=\$(docker inspect \$container --format '{{.Config.User}}' 2>/dev/null || echo "unknown")
+                            echo "  \$container: \${USER_INFO}" | tee -a ${SCAN_DIR}/security-scan.log
+                            
+                            if [ "\${USER_INFO}" = "" ] || [ "\${USER_INFO}" = "root" ] || [ "\${USER_INFO}" = "0" ]; then
+                                echo "  ⚠️ WARNING: \$container running as root" | tee -a ${SCAN_DIR}/security-scan.log
+                            fi
+                        done
+                        
+                        # Check for containers with host network
+                        HOST_NETWORK_CONTAINERS=\$(docker ps --filter "network=host" --format "{{.Names}}" | wc -l 2>/dev/null || echo 0)
+                        echo "🌐 Containers using host network: \${HOST_NETWORK_CONTAINERS}" | tee -a ${SCAN_DIR}/security-scan.log
+                        
+                        if [ "\${HOST_NETWORK_CONTAINERS}" -gt "0" ]; then
+                            echo "⚠️ WARNING: Containers using host network detected" | tee -a ${SCAN_DIR}/security-scan.log
+                        fi
+                        
+                        # Check Docker secrets
+                        echo "🔐 Checking Docker secrets..." | tee -a ${SCAN_DIR}/security-scan.log
+                        docker secret ls 2>/dev/null | tee -a ${SCAN_DIR}/security-scan.log || echo "No Docker Swarm secrets configured"
+                    """
+                }
+            }
+        }
+        
+        stage('Access Control Verification') {
+            steps {
+                script {
+                    echo "🔑 Verifying access controls..."
+                    
+                    sh """
+                        echo "=== Access Control Verification ===" >> ${SCAN_DIR}/security-scan.log
+                        
+                        # Check user accounts
+                        echo "👥 Checking user accounts..." | tee -a ${SCAN_DIR}/security-scan.log
+                        
+                        # List users with shell access
+                        SHELL_USERS=\$(grep -E "/bin/(bash|sh|zsh)" /etc/passwd | wc -l)
+                        echo "Users with shell access: \${SHELL_USERS}" | tee -a ${SCAN_DIR}/security-scan.log
+                        
+                        # Check for users with UID 0 (root privileges)
+                        ROOT_USERS=\$(awk -F: '\$3 == 0 {print \$1}' /etc/passwd | grep -v '^root<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job@2.47">
+  <actions/>
+  <description>Infrastructure Pipeline: Security Scanning and Compliance
+
+This pipeline performs comprehensive security scanning including:
+- Container image vulnerability scanning via Harbor
+- System security compliance checks
+- SSL/TLS certificate validation
+- Network security assessment
+- Access control verification
+- Security policy compliance
+- Automated remediation recommendations
+
+Runs daily at 3 AM and on-demand for security audits.
+</description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <jenkins.model.BuildDiscarderProperty>
+      <strategy class="hudson.tasks.LogRotator">
+        <daysToKeep>90</daysToKeep>
+        <numToKeep>50</numToKeep>
+        <artifactDaysToKeep>-1</artifactDaysToKeep>
+        <artifactNumToKeep>-1</artifactNumToKeep>
+      </strategy>
+    </jenkins.model.BuildDiscarderProperty>
+    <org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>
+      <triggers>
+        <hudson.triggers.TimerTrigger>
+          <spec>0 3 * * *</spec>
+        </hudson.triggers.TimerTrigger>
+      </triggers>
+    </org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.ChoiceParameterDefinition>
+          <n>SCAN_TYPE</n>
+          <description>Type of security scan to perform</description>
+          <choices class="java.util.Arrays$ArrayList">
+            <a class="string-array">
+              <string>full</string>
+              <string>quick</string>
+              <string>images-only</string>
+              <string>compliance-only</string>
+              <string>network-only</string>
+            </a>
+          </choices>
+        </hudson.model.ChoiceParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>SCAN_CONTAINERS</n>
+          <description>Scan running containers for vulnerabilities</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>CHECK_COMPLIANCE</n>
+          <description>Check security compliance (CIS benchmarks)</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>NETWORK_SCAN</n>
+          <description>Perform network security scanning</description>
+          <defaultValue>false</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>GENERATE_REPORT</n>
+          <description>Generate detailed security report</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>SEND_NOTIFICATIONS</n>
+          <description>Send security scan notifications</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps@2.94">
+    <script>#!/usr/bin/env groovy
+
+pipeline {
+    agent {
+        label 'dind docker-manager static privileged'
+    }
+    
+    options {
+        buildDiscarder(logRotator(daysToKeepStr: '90', numToKeepStr: '50'))
+        timeout(time: 2, unit: 'HOURS')
+        timestamps()
+        ansiColor('xterm')
+        skipDefaultCheckout()
+    }
+    
+    environment {
+        HARBOR_REGISTRY = '{{ harbor_registry_url }}'
+        HARBOR_PROJECT = '{{ harbor_project }}'
+        HARBOR_CREDENTIALS = credentials('harbor-registry')
+        TIMESTAMP = sh(script: 'date +%Y%m%d_%H%M%S', returnStdout: true).trim()
+        HOSTNAME = sh(script: 'hostname', returnStdout: true).trim()
+        SCAN_DIR = "/tmp/security-scan-${env.BUILD_NUMBER}"
+        JENKINS_HOME_DIR = '{{ jenkins_home_dir }}'
+    }
+    
+    stages {
+        stage('Initialize Security Scan') {
+            steps {
+                script {
+                    echo "🔒 Jenkins Infrastructure Security Scan"
+                    echo "🎯 Scan Type: ${params.SCAN_TYPE}"
+                    echo "⏰ Timestamp: ${TIMESTAMP}"
+                    echo "🖥️ Hostname: ${HOSTNAME}"
+                    echo "🐳 Scan Containers: ${params.SCAN_CONTAINERS}"
+                    echo "📋 Check Compliance: ${params.CHECK_COMPLIANCE}"
+                    echo "🌐 Network Scan: ${params.NETWORK_SCAN}"
+                    
+                    // Create scan directory
+                    sh """
+                        mkdir -p ${SCAN_DIR}
+                        echo "Security Scan Started: \$(date)" > ${SCAN | wc -l)
+                        echo "Non-root users with UID 0: \${ROOT_USERS}" | tee -a ${SCAN_DIR}/security-scan.log
+                        
+                        if [ "\${ROOT_USERS}" -gt "0" ]; then
+                            echo "❌ WARNING: Non-root users with root privileges found!" | tee -a ${SCAN_DIR}/security-scan.log
+                            awk -F: '\$3 == 0 {print \$1}' /etc/passwd | grep -v '^root<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job@2.47">
+  <actions/>
+  <description>Infrastructure Pipeline: Security Scanning and Compliance
+
+This pipeline performs comprehensive security scanning including:
+- Container image vulnerability scanning via Harbor
+- System security compliance checks
+- SSL/TLS certificate validation
+- Network security assessment
+- Access control verification
+- Security policy compliance
+- Automated remediation recommendations
+
+Runs daily at 3 AM and on-demand for security audits.
+</description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <jenkins.model.BuildDiscarderProperty>
+      <strategy class="hudson.tasks.LogRotator">
+        <daysToKeep>90</daysToKeep>
+        <numToKeep>50</numToKeep>
+        <artifactDaysToKeep>-1</artifactDaysToKeep>
+        <artifactNumToKeep>-1</artifactNumToKeep>
+      </strategy>
+    </jenkins.model.BuildDiscarderProperty>
+    <org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>
+      <triggers>
+        <hudson.triggers.TimerTrigger>
+          <spec>0 3 * * *</spec>
+        </hudson.triggers.TimerTrigger>
+      </triggers>
+    </org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.ChoiceParameterDefinition>
+          <n>SCAN_TYPE</n>
+          <description>Type of security scan to perform</description>
+          <choices class="java.util.Arrays$ArrayList">
+            <a class="string-array">
+              <string>full</string>
+              <string>quick</string>
+              <string>images-only</string>
+              <string>compliance-only</string>
+              <string>network-only</string>
+            </a>
+          </choices>
+        </hudson.model.ChoiceParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>SCAN_CONTAINERS</n>
+          <description>Scan running containers for vulnerabilities</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>CHECK_COMPLIANCE</n>
+          <description>Check security compliance (CIS benchmarks)</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>NETWORK_SCAN</n>
+          <description>Perform network security scanning</description>
+          <defaultValue>false</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>GENERATE_REPORT</n>
+          <description>Generate detailed security report</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>SEND_NOTIFICATIONS</n>
+          <description>Send security scan notifications</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps@2.94">
+    <script>#!/usr/bin/env groovy
+
+pipeline {
+    agent {
+        label 'dind docker-manager static privileged'
+    }
+    
+    options {
+        buildDiscarder(logRotator(daysToKeepStr: '90', numToKeepStr: '50'))
+        timeout(time: 2, unit: 'HOURS')
+        timestamps()
+        ansiColor('xterm')
+        skipDefaultCheckout()
+    }
+    
+    environment {
+        HARBOR_REGISTRY = '{{ harbor_registry_url }}'
+        HARBOR_PROJECT = '{{ harbor_project }}'
+        HARBOR_CREDENTIALS = credentials('harbor-registry')
+        TIMESTAMP = sh(script: 'date +%Y%m%d_%H%M%S', returnStdout: true).trim()
+        HOSTNAME = sh(script: 'hostname', returnStdout: true).trim()
+        SCAN_DIR = "/tmp/security-scan-${env.BUILD_NUMBER}"
+        JENKINS_HOME_DIR = '{{ jenkins_home_dir }}'
+    }
+    
+    stages {
+        stage('Initialize Security Scan') {
+            steps {
+                script {
+                    echo "🔒 Jenkins Infrastructure Security Scan"
+                    echo "🎯 Scan Type: ${params.SCAN_TYPE}"
+                    echo "⏰ Timestamp: ${TIMESTAMP}"
+                    echo "🖥️ Hostname: ${HOSTNAME}"
+                    echo "🐳 Scan Containers: ${params.SCAN_CONTAINERS}"
+                    echo "📋 Check Compliance: ${params.CHECK_COMPLIANCE}"
+                    echo "🌐 Network Scan: ${params.NETWORK_SCAN}"
+                    
+                    // Create scan directory
+                    sh """
+                        mkdir -p ${SCAN_DIR}
+                        echo "Security Scan Started: \$(date)" > ${SCAN | tee -a ${SCAN_DIR}/security-scan.log
+                        fi
+                        
+                        # Check sudo access
+                        echo "🔐 Checking sudo access..." | tee -a ${SCAN_DIR}/security-scan.log
+                        if [ -f "/etc/sudoers" ]; then
+                            SUDO_USERS=\$(grep -E "^[^#]*ALL.*ALL" /etc/sudoers /etc/sudoers.d/* 2>/dev/null | wc -l)
+                            echo "Sudo rules: \${SUDO_USERS}" | tee -a ${SCAN_DIR}/security-scan.log
+                        fi
+                        
+                        # Check SSH configuration
+                        echo "🔑 Checking SSH configuration..." | tee -a ${SCAN_DIR}/security-scan.log
+                        if [ -f "/etc/ssh/sshd_config" ]; then
+                            # Root login
+                            ROOT_LOGIN=\$(grep "^PermitRootLogin" /etc/ssh/sshd_config | awk '{print \$2}' || echo "unknown")
+                            echo "SSH root login: \${ROOT_LOGIN}" | tee -a ${SCAN_DIR}/security-scan.log
+                            
+                            if [ "\${ROOT_LOGIN}" = "yes" ]; then
+                                echo "⚠️ WARNING: SSH root login is enabled" | tee -a ${SCAN_DIR}/security-scan.log
+                            fi
+                            
+                            # Password authentication
+                            PASS_AUTH=\$(grep "^PasswordAuthentication" /etc/ssh/sshd_config | awk '{print \$2}' || echo "unknown")
+                            echo "SSH password authentication: \${PASS_AUTH}" | tee -a ${SCAN_DIR}/security-scan.log
+                        fi
+                        
+                        # Check Jenkins security
+                        echo "🏗️ Checking Jenkins security configuration..." | tee -a ${SCAN_DIR}/security-scan.log
+                        
+                        # Check if security is enabled
+                        if curl -s -f ${JENKINS_URL_INTERNAL}/api/json | grep -q '"useSecurity":true'; then
+                            echo "✅ Jenkins security is enabled" | tee -a ${SCAN_DIR}/security-scan.log
+                        else
+                            echo "❌ WARNING: Jenkins security may be disabled!" | tee -a ${SCAN_DIR}/security-scan.log
+                        fi
+                    """
+                }
+            }
+        }
+        
+        stage('Generate Security Report') {
+            when {
+                expression { params.GENERATE_REPORT }
+            }
+            steps {
+                script {
+                    echo "📋 Generating comprehensive security report..."
+                    
+                    sh """
+                        echo "=== Security Scan Summary ===" >> ${SCAN_DIR}/security-scan.log
+                        echo "Scan completed: \$(date)" >> ${SCAN_DIR}/security-scan.log
+                        echo "Scan type: ${params.SCAN_TYPE}" >> ${SCAN_DIR}/security-scan.log
+                        echo "Build number: ${env.BUILD_NUMBER}" >> ${SCAN_DIR}/security-scan.log
+                        
+                        # Count issues
+                        CRITICAL_ISSUES=\$(grep -c "❌" ${SCAN_DIR}/security-scan.log || echo 0)
+                        WARNINGS=\$(grep -c "⚠️" ${SCAN_DIR}/security-scan.log || echo 0)
+                        PASSED_CHECKS=\$(grep -c "✅" ${SCAN_DIR}/security-scan.log || echo 0)
+                        
+                        echo "" >> ${SCAN_DIR}/security-scan.log
+                        echo "📊 Security Scan Summary:" >> ${SCAN_DIR}/security-scan.log
+                        echo "  ✅ Passed checks: \${PASSED_CHECKS}" >> ${SCAN_DIR}/security-scan.log
+                        echo "  ⚠️ Warnings: \${WARNINGS}" >> ${SCAN_DIR}/security-scan.log
+                        echo "  ❌ Critical issues: \${CRITICAL_ISSUES}" >> ${SCAN_DIR}/security-scan.log
+                        
+                        # Determine overall security status
+                        if [ "\${CRITICAL_ISSUES}" -gt "0" ]; then
+                            echo "🔴 Overall Security Status: CRITICAL" >> ${SCAN_DIR}/security-scan.log
+                            echo "CRITICAL" > ${SCAN_DIR}/security_status
+                        elif [ "\${WARNINGS}" -gt "5" ]; then
+                            echo "🟡 Overall Security Status: NEEDS ATTENTION" >> ${SCAN_DIR}/security-scan.log
+                            echo "WARNING" > ${SCAN_DIR}/security_status
+                        else
+                            echo "🟢 Overall Security Status: GOOD" >> ${SCAN_DIR}/security-scan.log
+                            echo "GOOD" > ${SCAN_DIR}/security_status
+                        fi
+                        
+                        # Create recommendations
+                        echo "" >> ${SCAN_DIR}/security-scan.log
+                        echo "💡 Security Recommendations:" >> ${SCAN_DIR}/security-scan.log
+                        
+                        if [ "\${CRITICAL_ISSUES}" -gt "0" ]; then
+                            echo "  🚨 Address critical security issues immediately" >> ${SCAN_DIR}/security-scan.log
+                        fi
+                        
+                        if [ -f "${SCAN_DIR}/master_critical" ]; then
+                            echo "  📦 Update Jenkins master image to fix vulnerabilities" >> ${SCAN_DIR}/security-scan.log
+                        fi
+                        
+                        if [ -f "${SCAN_DIR}/cert_warning" ]; then
+                            echo "  📜 Renew SSL certificates before expiration" >> ${SCAN_DIR}/security-scan.log
+                        fi
+                        
+                        if [ "\${WARNINGS}" -gt "0" ]; then
+                            echo "  🔧 Review and address security warnings" >> ${SCAN_DIR}/security-scan.log
+                            echo "  📋 Run compliance hardening procedures" >> ${SCAN_DIR}/security-scan.log
+                        fi
+                        
+                        echo "  🔄 Schedule regular security scans" >> ${SCAN_DIR}/security-scan.log
+                        echo "  📚 Review security documentation and policies" >> ${SCAN_DIR}/security-scan.log
+                        
+                        # Display full report
+                        echo "=========================="
+                        cat ${SCAN_DIR}/security-scan.log
+                        echo "=========================="
+                    """
+                    
+                    // Archive all scan results
+                    archiveArtifacts artifacts: "${SCAN_DIR.substring(1)}/**", fingerprint: true
+                    
+                    // Set build result based on security status
+                    def securityStatus = readFile("${SCAN_DIR}/security_status").trim()
+                    
+                    if (securityStatus == 'CRITICAL') {
+                        currentBuild.result = 'FAILURE'
+                        error("Critical security issues found!")
+                    } else if (securityStatus == 'WARNING') {
+                        currentBuild.result = 'UNSTABLE'
+                        echo "Security scan completed with warnings"
+                    } else {
+                        echo "Security scan passed successfully"
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                // Clean up temporary files
+                sh "rm -rf ${SCAN_DIR}"
+            }
+        }
+        
+        success {
+            script {
+                echo "✅ Security Scan Completed Successfully!"
+                
+                if (params.SEND_NOTIFICATIONS && env.SLACK_WEBHOOK) {
+                    slackSend(
+                        channel: '#security',
+                        color: 'good',
+                        message: """
+                            ✅ Security Scan: PASSED
+                            
+                            🎯 Scan Type: ${params.SCAN_TYPE}
+                            🖥️ Host: ${HOSTNAME}
+                            ⏰ Time: ${TIMESTAMP}
+                            ⏱️ Duration: ${currentBuild.durationString}
+                            
+                            🔒 Security status: GOOD
+                            🔗 Report: ${env.BUILD_URL}
+                        """.stripIndent()
+                    )
+                }
+            }
+        }
+        
+        failure {
+            script {
+                echo "❌ Security Scan Failed - Critical Issues Found!"
+                
+                if (params.SEND_NOTIFICATIONS && env.SLACK_WEBHOOK) {
+                    slackSend(
+                        channel: '#security',
+                        color: 'danger',
+                        message: """
+                            🚨 Security Scan: CRITICAL ISSUES FOUND
+                            
+                            🎯 Scan Type: ${params.SCAN_TYPE}
+                            🖥️ Host: ${HOSTNAME}
+                            ⏰ Time: ${TIMESTAMP}
+                            ⏱️ Duration: ${currentBuild.durationString}
+                            
+                            🔒 Security status: CRITICAL
+                            🔗 Report: ${env.BUILD_URL}
+                            
+                            🚨 IMMEDIATE ACTION REQUIRED!
+                        """.stripIndent()
+                    )
+                }
+            }
+        }
+        
+        unstable {
+            script {
+                echo "⚠️ Security Scan Completed with Warnings!"
+                
+                if (params.SEND_NOTIFICATIONS && env.SLACK_WEBHOOK) {
+                    slackSend(
+                        channel: '#security',
+                        color: 'warning',
+                        message: """
+                            ⚠️ Security Scan: WARNINGS FOUND
+                            
+                            🎯 Scan Type: ${params.SCAN_TYPE}
+                            🖥️ Host: ${HOSTNAME}
+                            ⏰ Time: ${TIMESTAMP}
+                            ⏱️ Duration: ${currentBuild.durationString}
+                            
+                            🔒 Security status: NEEDS ATTENTION
+                            🔗 Report: ${env.BUILD_URL}
+                            
+                            📋 Please review warnings and take action
+                        """.stripIndent()
+                    )
+                }
+            }
+        }
+    }
+}
+    </script>
+    <sandbox>true</sandbox>
+  </definition>
+  <triggers/>
+  <disabled>false</disabled>
+</flow-definition><?xml version='1.1' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job@2.47">
+  <actions/>
+  <description>Infrastructure Pipeline: Security Scanning and Compliance
+
+This pipeline performs comprehensive security scanning including:
+- Container image vulnerability scanning via Harbor
+- System security compliance checks
+- SSL/TLS certificate validation
+- Network security assessment
+- Access control verification
+- Security policy compliance
+- Automated remediation recommendations
+
+Runs daily at 3 AM and on-demand for security audits.
+</description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <jenkins.model.BuildDiscarderProperty>
+      <strategy class="hudson.tasks.LogRotator">
+        <daysToKeep>90</daysToKeep>
+        <numToKeep>50</numToKeep>
+        <artifactDaysToKeep>-1</artifactDaysToKeep>
+        <artifactNumToKeep>-1</artifactNumToKeep>
+      </strategy>
+    </jenkins.model.BuildDiscarderProperty>
+    <org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>
+      <triggers>
+        <hudson.triggers.TimerTrigger>
+          <spec>0 3 * * *</spec>
+        </hudson.triggers.TimerTrigger>
+      </triggers>
+    </org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.ChoiceParameterDefinition>
+          <n>SCAN_TYPE</n>
+          <description>Type of security scan to perform</description>
+          <choices class="java.util.Arrays$ArrayList">
+            <a class="string-array">
+              <string>full</string>
+              <string>quick</string>
+              <string>images-only</string>
+              <string>compliance-only</string>
+              <string>network-only</string>
+            </a>
+          </choices>
+        </hudson.model.ChoiceParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>SCAN_CONTAINERS</n>
+          <description>Scan running containers for vulnerabilities</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>CHECK_COMPLIANCE</n>
+          <description>Check security compliance (CIS benchmarks)</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>NETWORK_SCAN</n>
+          <description>Perform network security scanning</description>
+          <defaultValue>false</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>GENERATE_REPORT</n>
+          <description>Generate detailed security report</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <n>SEND_NOTIFICATIONS</n>
+          <description>Send security scan notifications</description>
+          <defaultValue>true</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps@2.94">
+    <script>#!/usr/bin/env groovy
+
+pipeline {
+    agent {
+        label 'dind docker-manager static privileged'
+    }
+    
+    options {
+        buildDiscarder(logRotator(daysToKeepStr: '90', numToKeepStr: '50'))
+        timeout(time: 2, unit: 'HOURS')
+        timestamps()
+        ansiColor('xterm')
+        skipDefaultCheckout()
+    }
+    
+    environment {
+        HARBOR_REGISTRY = '{{ harbor_registry_url }}'
+        HARBOR_PROJECT = '{{ harbor_project }}'
+        HARBOR_CREDENTIALS = credentials('harbor-registry')
+        TIMESTAMP = sh(script: 'date +%Y%m%d_%H%M%S', returnStdout: true).trim()
+        HOSTNAME = sh(script: 'hostname', returnStdout: true).trim()
+        SCAN_DIR = "/tmp/security-scan-${env.BUILD_NUMBER}"
+        JENKINS_HOME_DIR = '{{ jenkins_home_dir }}'
+    }
+    
+    stages {
+        stage('Initialize Security Scan') {
+            steps {
+                script {
+                    echo "🔒 Jenkins Infrastructure Security Scan"
+                    echo "🎯 Scan Type: ${params.SCAN_TYPE}"
+                    echo "⏰ Timestamp: ${TIMESTAMP}"
+                    echo "🖥️ Hostname: ${HOSTNAME}"
+                    echo "🐳 Scan Containers: ${params.SCAN_CONTAINERS}"
+                    echo "📋 Check Compliance: ${params.CHECK_COMPLIANCE}"
+                    echo "🌐 Network Scan: ${params.NETWORK_SCAN}"
+                    
+                    // Create scan directory
+                    sh """
+                        mkdir -p ${SCAN_DIR}
+                        echo "Security Scan Started: \$(date)" > ${SCAN

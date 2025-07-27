@@ -1,0 +1,60 @@
+---
+# Default variables for high-availability role
+
+# HA Configuration
+ha_enabled: true
+jenkins_ha_enabled: true
+jenkins_ha_mode: "active-passive"  # active-passive or active-active
+jenkins_master_count: 2
+
+# Load Balancer Configuration (HAProxy)
+haproxy_enabled: true
+haproxy_stats_enabled: true
+haproxy_stats_port: 8404
+haproxy_stats_uri: "/stats"
+haproxy_stats_user: "admin"
+haproxy_stats_password: "changeme"
+haproxy_check_interval: "2s"
+haproxy_check_fall: 3
+haproxy_check_rise: 2
+
+# Virtual IP Configuration (keepalived)
+keepalived_enabled: false
+jenkins_vip: ""  # Set this to enable VIP
+keepalived_interface: "{{ ansible_default_ipv4.interface }}"
+keepalived_priority: 100  # Higher number = higher priority
+keepalived_vrid: 51
+keepalived_advert_int: 1
+keepalived_auth_pass: "changeme"
+
+# Health Check Configuration
+health_check_enabled: true
+health_check_interval: 30
+health_check_timeout: 10
+health_check_retries: 3
+health_check_path: "/login"
+
+# Failover Configuration
+failover_enabled: true
+failover_timeout: 60
+failover_max_attempts: 3
+failover_notification_enabled: false
+
+# SSL Configuration
+ssl_enabled: false
+ssl_cert_path: "/etc/ssl/certs/jenkins.crt"
+ssl_key_path: "/etc/ssl/private/jenkins.key"
+ssl_redirect_http: true
+
+# Backend Server Configuration
+backend_check_enabled: true
+backend_check_interval: "5s"
+backend_check_timeout: "10s"
+backend_max_connections: 100
+backend_balance_method: "roundrobin"  # roundrobin, leastconn, source
+
+# Monitoring Configuration
+monitoring_enabled: true
+monitoring_interval: 120  # seconds
+monitoring_log_file: "/var/log/jenkins-ha-monitor.log"
+monitoring_alert_enabled: false

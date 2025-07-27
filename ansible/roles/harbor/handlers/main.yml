@@ -1,0 +1,8 @@
+---
+# Handlers for harbor role
+- name: restart harbor service
+  systemd:
+    name: harbor
+    state: restarted
+    enabled: yes
+  listen: "restart harbor"

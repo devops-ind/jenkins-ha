@@ -1,0 +1,8 @@
+---
+- name: monitoring-setup playbook
+  hosts: all
+  become: yes
+  tasks:
+    - name: Execute monitoring-setup
+      debug:
+        msg: "Running monitoring-setup tasks"

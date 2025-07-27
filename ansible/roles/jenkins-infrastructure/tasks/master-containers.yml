@@ -1,0 +1,166 @@
+---
+# Jenkins Infrastructure - Master Container Configuration Tasks
+
+- name: Create Jenkins master configuration directory
+  file:
+    path: "{{ jenkins_home_dir }}/master-{{ item }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
+  tags: ['master', 'directories']
+
+- name: Generate Jenkins master container configuration
+  template:
+    src: jenkins-master-container.yml.j2
+    dest: "{{ jenkins_home_dir }}/master-{{ item }}/container-config.yml"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
+  notify: restart jenkins master containers
+  tags: ['master', 'config']
+
+- name: Create Jenkins master systemd service files
+  template:
+    src: jenkins-master.service.j2
+    dest: "/etc/systemd/system/jenkins-master-{{ item }}.service"
+    mode: '0644'
+  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
+  notify:
+    - reload systemd
+    - restart jenkins master containers
+  tags: ['master', 'systemd']
+
+- name: Start and enable Jenkins master containers (Docker)
+  community.docker.docker_container:
+    name: "jenkins-master-{{ item }}"
+    image: "{{ harbor_registry_url | default('jenkins') }}/{{ harbor_project | default('library') }}/jenkins-master:{{ jenkins_master_image_tag }}"
+    state: started
+    restart_policy: "{{ jenkins_restart_policy }}"
+    networks:
+      - name: "{{ jenkins_network_name }}"
+    ports:
+      - "{{ jenkins_port + item - 1 }}:{{ jenkins_port }}"
+      - "{{ jenkins_agent_port + item - 1 }}:{{ jenkins_agent_port }}"
+    volumes:
+      - "jenkins-home-{{ item }}:{{ jenkins_home_dir }}"
+      - "jenkins-shared:{{ shared_storage_path | default('/shared/jenkins') }}"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    env: "{{ jenkins_env_vars }}"
+    memory: "{{ jenkins_master_memory }}"
+    cpus: "{{ jenkins_master_cpu_limit }}"
+    log_driver: "{{ jenkins_log_driver }}"
+    log_options:
+      max-size: "{{ jenkins_log_max_size }}"
+      max-file: "{{ jenkins_log_max_files }}"
+    labels:
+      service: "jenkins-master"
+      instance: "{{ item }}"
+      cluster: "{{ jenkins_cluster_name }}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_port }}/login"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
+  when: jenkins_container_runtime == 'docker'
+  register: jenkins_masters_docker
+  tags: ['master', 'containers', 'docker']
+
+- name: Start and enable Jenkins master containers (Podman)
+  containers.podman.podman_container:
+    name: "jenkins-master-{{ item }}"
+    image: "{{ harbor_registry_url | default('jenkins') }}/{{ harbor_project | default('library') }}/jenkins-master:{{ jenkins_master_image_tag }}"
+    state: started
+    restart_policy: "{{ jenkins_restart_policy }}"
+    networks:
+      - "{{ jenkins_network_name }}"
+    ports:
+      - "{{ jenkins_port + item - 1 }}:{{ jenkins_port }}"
+      - "{{ jenkins_agent_port + item - 1 }}:{{ jenkins_agent_port }}"
+    volumes:
+      - "jenkins-home-{{ item }}:{{ jenkins_home_dir }}"
+      - "jenkins-shared:{{ shared_storage_path | default('/shared/jenkins') }}"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    env: "{{ jenkins_env_vars }}"
+    memory: "{{ jenkins_master_memory }}"
+    cpus: "{{ jenkins_master_cpu_limit }}"
+    log_driver: "{{ jenkins_log_driver }}"
+    log_opt:
+      max_size: "{{ jenkins_log_max_size }}"
+      max_file: "{{ jenkins_log_max_files }}"
+    labels:
+      service: "jenkins-master"
+      instance: "{{ item }}"
+      cluster: "{{ jenkins_cluster_name }}"
+    healthcheck: "curl -f http://localhost:{{ jenkins_port }}/login || exit 1"
+    healthcheck_interval: 30s
+    healthcheck_timeout: 10s
+    healthcheck_retries: 3
+    healthcheck_start_period: 60s
+  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
+  when: jenkins_container_runtime == 'podman'
+  register: jenkins_masters_podman
+  tags: ['master', 'containers', 'podman']
+
+- name: Enable and start Jenkins master systemd services
+  systemd:
+    name: "jenkins-master-{{ item }}"
+    enabled: yes
+    state: started
+    daemon_reload: yes
+  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
+  when: jenkins_systemd_enabled
+  tags: ['master', 'systemd']
+
+- name: Wait for Jenkins masters to be ready
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_port + item - 1 }}/login"
+    method: GET
+    status_code: 200
+  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
+  retries: 30
+  delay: 10
+  tags: ['master', 'health-check']
+
+- name: Create Jenkins master monitoring scripts
+  template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+  loop:
+    - { src: 'jenkins-healthcheck.sh.j2', dest: "{{ jenkins_home_dir }}/scripts/healthcheck.sh" }
+    - { src: 'jenkins-monitor.sh.j2', dest: "{{ jenkins_home_dir }}/scripts/monitor.sh" }
+    - { src: 'jenkins-prestart.sh.j2', dest: "{{ jenkins_home_dir }}/scripts/prestart.sh" }
+  tags: ['master', 'scripts']
+
+- name: Setup Jenkins master log rotation
+  template:
+    src: jenkins-logrotate.j2
+    dest: /etc/logrotate.d/jenkins-master
+    mode: '0644'
+  tags: ['master', 'logging']
+
+- name: Display Jenkins master status
+  debug:
+    msg: |
+      Jenkins Master Deployment Status:
+      
+      {% for i in range(1, jenkins_master_count + 1) %}
+      Master {{ i }}:
+        URL: http://{{ ansible_default_ipv4.address }}:{{ jenkins_port + i - 1 }}
+        Agent Port: {{ jenkins_agent_port + i - 1 }}
+        Container: jenkins-master-{{ i }}
+        Service: jenkins-master-{{ i }}.service
+      {% endfor %}
+      
+      Runtime: {{ jenkins_container_runtime }}
+      Network: {{ jenkins_network_name }}
+      Shared Storage: {{ shared_storage_path | default('/shared/jenkins') }}
+      HA Mode: {{ jenkins_ha_mode }}
+  tags: ['master', 'info']

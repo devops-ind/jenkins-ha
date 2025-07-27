@@ -1,0 +1,95 @@
+---
+# Default variables for jenkins-infrastructure role
+
+# Core Jenkins Configuration
+jenkins_enabled: true
+jenkins_version: "2.426.1"
+jenkins_user: "jenkins"
+jenkins_group: "jenkins"
+jenkins_uid: 1000
+jenkins_gid: 1000
+jenkins_home_dir: "/opt/jenkins"
+jenkins_port: 8080
+jenkins_agent_port: 50000
+jenkins_context_path: ""
+
+# Jenkins Master Configuration
+jenkins_master_count: 2
+jenkins_master_memory: "2g"
+jenkins_master_cpu_limit: "1.0"
+jenkins_master_image_tag: "latest"
+jenkins_master_java_opts: "-Djenkins.install.runSetupWizard=false -Dhudson.DNSMultiCast.disabled=true"
+
+# Jenkins Agent Configuration
+jenkins_agent_memory: "1g"
+jenkins_agent_cpu_limit: "0.5"
+jenkins_agent_image_tag: "latest"
+jenkins_agent_version: "latest"
+
+# High Availability Configuration
+jenkins_ha_enabled: true
+jenkins_ha_mode: "active-passive"
+jenkins_vip: ""
+jenkins_cluster_name: "jenkins-ha-cluster"
+
+# Container Runtime Configuration
+jenkins_container_runtime: "podman"  # podman or docker
+jenkins_restart_policy: "unless-stopped"
+jenkins_log_driver: "journald"
+jenkins_log_max_size: "10m"
+jenkins_log_max_files: "3"
+
+# Network Configuration
+jenkins_network_name: "jenkins-network"
+jenkins_network_driver: "bridge"
+jenkins_network_subnet: "172.20.0.0/16"
+jenkins_network_gateway: "172.20.0.1"
+
+# Volume Configuration
+jenkins_volumes:
+  - name: "jenkins-home"
+    type: "named"
+    driver: "local"
+  - name: "jenkins-shared"
+    type: "bind"
+    source: "{{ shared_storage_path | default('/shared/jenkins') }}"
+  - name: "docker-sock"
+    type: "bind"
+    source: "/var/run/docker.sock"
+
+# Service Configuration
+jenkins_systemd_enabled: true
+jenkins_systemd_restart: "always"
+jenkins_systemd_restart_sec: 30
+
+# Build Tools Versions
+maven_version: "3.9.6"
+python_version: "3.11"
+nodejs_version: "18"
+default_jdk_version: "11"
+
+# Security Configuration
+jenkins_security_enabled: true
+jenkins_csrf_protection: true
+jenkins_agent_protocols: ["JNLP4-connect", "Ping"]
+
+# Image Build Configuration
+jenkins_images_build_dir: "/tmp/jenkins-images"
+jenkins_images_push: true
+jenkins_images_force_rebuild: false
+jenkins_images_cleanup: true
+
+# Resource Limits
+jenkins_master_resources:
+  memory: "{{ jenkins_master_memory }}"
+  cpu: "{{ jenkins_master_cpu_limit }}"
+  
+jenkins_agent_resources:
+  memory: "{{ jenkins_agent_memory }}"
+  cpu: "{{ jenkins_agent_cpu_limit }}"
+
+# Environment Variables
+jenkins_env_vars:
+  JAVA_OPTS: "{{ jenkins_master_java_opts }}"
+  JENKINS_OPTS: "--httpPort={{ jenkins_port }} --prefix={{ jenkins_context_path }}"
+  TZ: "{{ common_timezone | default('UTC') }}"

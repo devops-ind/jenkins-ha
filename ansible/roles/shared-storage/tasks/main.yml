@@ -1,0 +1,200 @@
+---
+# Shared Storage Configuration for Jenkins HA
+
+- name: Install NFS utilities (RHEL/CentOS)
+  package:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - nfs-utils
+    - rpcbind
+  when: 
+    - ansible_os_family == "RedHat"
+    - shared_storage_type == "nfs"
+  become: yes
+  tags: ['shared-storage', 'nfs']
+
+- name: Install NFS utilities (Debian/Ubuntu)
+  package:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - nfs-common
+    - rpcbind
+  when: 
+    - ansible_os_family == "Debian"
+    - shared_storage_type == "nfs"
+  become: yes
+  tags: ['shared-storage', 'nfs']
+
+- name: Install GlusterFS client
+  package:
+    name: glusterfs-client
+    state: present
+  when: shared_storage_type == "glusterfs"
+  become: yes
+  tags: ['shared-storage', 'glusterfs']
+
+- name: Create shared storage mount point
+  file:
+    path: "{{ shared_storage_path }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+  become: yes
+  tags: ['shared-storage', 'mount']
+
+- name: Create NFS export directories (on NFS server)
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+    recurse: yes
+  loop:
+    - "{{ nfs_export_path }}/jenkins"
+    - "{{ nfs_export_path }}/jenkins/home"
+    - "{{ nfs_export_path }}/jenkins/workspace"
+    - "{{ nfs_export_path }}/jenkins/builds"
+    - "{{ nfs_export_path }}/jenkins/jobs"
+    - "{{ nfs_export_path }}/jenkins/plugins"
+    - "{{ nfs_export_path }}/jenkins/logs"
+    - "{{ nfs_export_path }}/jenkins/backup"
+  when: 
+    - shared_storage_type == "nfs"
+    - nfs_server_role | default(false)
+  become: yes
+  tags: ['shared-storage', 'nfs', 'server']
+
+- name: Configure NFS exports
+  template:
+    src: exports.j2
+    dest: /etc/exports
+    backup: yes
+  when: 
+    - shared_storage_type == "nfs"
+    - nfs_server_role | default(false)
+  become: yes
+  notify: 
+    - restart nfs-server
+    - exportfs
+  tags: ['shared-storage', 'nfs', 'server']
+
+- name: Start and enable NFS services (server)
+  systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: yes
+  loop:
+    - rpcbind
+    - nfs-server
+  when: 
+    - shared_storage_type == "nfs"
+    - nfs_server_role | default(false)
+  become: yes
+  tags: ['shared-storage', 'nfs', 'server']
+
+- name: Start and enable NFS services (client)
+  systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: yes
+  loop:
+    - rpcbind
+  when: 
+    - shared_storage_type == "nfs"
+    - not (nfs_server_role | default(false))
+  become: yes
+  tags: ['shared-storage', 'nfs', 'client']
+
+- name: Mount NFS shared storage
+  mount:
+    path: "{{ shared_storage_path }}"
+    src: "{{ nfs_server }}:{{ nfs_export_path }}/jenkins"
+    fstype: nfs
+    opts: "{{ nfs_mount_options }}"
+    state: mounted
+  when: 
+    - shared_storage_type == "nfs"
+    - not (nfs_server_role | default(false))
+  become: yes
+  tags: ['shared-storage', 'nfs', 'mount']
+
+- name: Mount GlusterFS shared storage
+  mount:
+    path: "{{ shared_storage_path }}"
+    src: "{{ glusterfs_servers | join(',') }}:{{ glusterfs_volume }}"
+    fstype: glusterfs
+    opts: "{{ glusterfs_mount_options }}"
+    state: mounted
+  when: shared_storage_type == "glusterfs"
+  become: yes
+  tags: ['shared-storage', 'glusterfs', 'mount']
+
+- name: Create shared storage subdirectories
+  file:
+    path: "{{ shared_storage_path }}/{{ item }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+  loop:
+    - "home"
+    - "workspace"
+    - "builds"
+    - "jobs"
+    - "plugins"
+    - "logs"
+    - "backup"
+    - "secrets"
+    - "casc_configs"
+  tags: ['shared-storage', 'directories']
+
+- name: Set up storage permissions
+  file:
+    path: "{{ shared_storage_path }}"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+    recurse: yes
+  tags: ['shared-storage', 'permissions']
+
+- name: Create storage configuration file
+  template:
+    src: storage-config.yml.j2
+    dest: "{{ shared_storage_path }}/storage-config.yml"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  tags: ['shared-storage', 'config']
+
+- name: Test shared storage connectivity
+  command: "test -w {{ shared_storage_path }}"
+  register: storage_test
+  changed_when: false
+  failed_when: storage_test.rc != 0
+  tags: ['shared-storage', 'test']
+
+- name: Display shared storage configuration
+  debug:
+    msg: |
+      Shared Storage Configuration:
+      
+      Type: {{ shared_storage_type }}
+      Mount Path: {{ shared_storage_path }}
+      {% if shared_storage_type == "nfs" %}
+      NFS Server: {{ nfs_server | default('localhost') }}
+      Export Path: {{ nfs_export_path }}/jenkins
+      Mount Options: {{ nfs_mount_options }}
+      Server Role: {{ 'Yes' if nfs_server_role | default(false) else 'No' }}
+      {% elif shared_storage_type == "glusterfs" %}
+      GlusterFS Servers: {{ glusterfs_servers | join(', ') }}
+      Volume: {{ glusterfs_volume }}
+      Mount Options: {{ glusterfs_mount_options }}
+      {% endif %}
+      
+      Storage Test: {{ 'Passed' if storage_test.rc == 0 else 'Failed' }}
+      Jenkins User: {{ jenkins_user }}:{{ jenkins_group }}
+  tags: ['shared-storage', 'info']

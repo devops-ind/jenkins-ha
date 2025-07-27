@@ -1,0 +1,26 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Jenkins Overview",
+    "tags": ["jenkins"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Build Success Rate",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(jenkins_builds_success_total[1h])",
+            "legendFormat": "Success Rate"
+          }
+        ]
+      }
+    ],
+    "time": {
+      "from": "now-6h",
+      "to": "now"
+    },
+    "refresh": "30s"
+  }
+}

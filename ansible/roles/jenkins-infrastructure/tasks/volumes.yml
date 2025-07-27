@@ -1,0 +1,151 @@
+---
+# Jenkins Infrastructure - Volume Configuration Tasks
+
+- name: Create Jenkins home directory
+  file:
+    path: "{{ jenkins_home_dir }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+    recurse: yes
+  tags: ['volumes', 'directories']
+
+- name: Create Jenkins shared storage directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+    recurse: yes
+  loop:
+    - "{{ shared_storage_path | default('/shared/jenkins') }}"
+    - "{{ shared_storage_path | default('/shared/jenkins') }}/workspace"
+    - "{{ shared_storage_path | default('/shared/jenkins') }}/builds"
+    - "{{ shared_storage_path | default('/shared/jenkins') }}/jobs"
+    - "{{ shared_storage_path | default('/shared/jenkins') }}/plugins"
+    - "{{ shared_storage_path | default('/shared/jenkins') }}/logs"
+  when: shared_storage_enabled | default(true)
+  tags: ['volumes', 'shared-storage']
+
+- name: Create Docker volumes for Jenkins
+  community.docker.docker_volume:
+    name: "{{ item.name }}"
+    driver: "{{ item.driver | default('local') }}"
+    state: present
+  loop: "{{ jenkins_volumes | selectattr('type', 'equalto', 'named') | list }}"
+  when: jenkins_container_runtime == 'docker'
+  tags: ['volumes', 'docker']
+
+- name: Create Podman volumes for Jenkins
+  containers.podman.podman_volume:
+    name: "{{ item.name }}"
+    driver: "{{ item.driver | default('local') }}"
+    state: present
+  loop: "{{ jenkins_volumes | selectattr('type', 'equalto', 'named') | list }}"
+  when: jenkins_container_runtime == 'podman'
+  tags: ['volumes', 'podman']
+
+- name: Create bind mount source directories
+  file:
+    path: "{{ item.source }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+    recurse: yes
+  loop: "{{ jenkins_volumes | selectattr('type', 'equalto', 'bind') | list }}"
+  when: item.source != '/var/run/docker.sock'
+  tags: ['volumes', 'bind-mounts']
+
+- name: Set Docker socket permissions for Jenkins user
+  file:
+    path: /var/run/docker.sock
+    group: docker
+    mode: '0660'
+  when: 
+    - jenkins_container_runtime == 'docker'
+    - jenkins_volumes | selectattr('source', 'equalto', '/var/run/docker.sock') | list | length > 0
+  tags: ['volumes', 'docker-socket']
+
+- name: Create Jenkins workspace directories
+  file:
+    path: "{{ jenkins_home_dir }}/{{ item }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+  loop:
+    - "workspace"
+    - "builds"
+    - "jobs"
+    - "plugins"
+    - "logs"
+    - "secrets"
+    - "casc_configs"
+    - "init.groovy.d"
+    - "scripts"
+  tags: ['volumes', 'workspace']
+
+- name: Create backup directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+    recurse: yes
+  loop:
+    - "{{ backup_local_path | default('/backup/jenkins') }}"
+    - "{{ backup_local_path | default('/backup/jenkins') }}/daily"
+    - "{{ backup_local_path | default('/backup/jenkins') }}/weekly"
+    - "{{ backup_local_path | default('/backup/jenkins') }}/monthly"
+  when: backup_enabled | default(true)
+  tags: ['volumes', 'backup']
+
+- name: Set up volume permissions
+  file:
+    path: "{{ item.source if item.type == 'bind' else jenkins_home_dir + '/' + item.name }}"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+    recurse: yes
+  loop: "{{ jenkins_volumes }}"
+  when: item.source != '/var/run/docker.sock'
+  tags: ['volumes', 'permissions']
+
+- name: Create volume configuration file
+  template:
+    src: volume-config.yml.j2
+    dest: "{{ jenkins_home_dir }}/volume-config.yml"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  tags: ['volumes', 'config']
+
+- name: Verify volume configuration
+  command: >
+    {% if jenkins_container_runtime == 'docker' %}
+    docker volume ls --format "table {{.Name}}\t{{.Driver}}\t{{.Mountpoint}}"
+    {% else %}
+    podman volume ls --format "table {{.Name}}\t{{.Driver}}\t{{.Mountpoint}}"
+    {% endif %}
+  register: volume_info
+  changed_when: false
+  tags: ['volumes', 'verify']
+
+- name: Display volume configuration
+  debug:
+    msg: |
+      Jenkins Volume Configuration:
+      Home Directory: {{ jenkins_home_dir }}
+      Shared Storage: {{ shared_storage_path | default('/shared/jenkins') }}
+      Backup Path: {{ backup_local_path | default('/backup/jenkins') }}
+      Container Runtime: {{ jenkins_container_runtime }}
+      
+      Configured Volumes:
+      {% for volume in jenkins_volumes %}
+      - {{ volume.name }}: {{ volume.type }} ({{ volume.source if volume.type == 'bind' else 'managed' }})
+      {% endfor %}
+  tags: ['volumes', 'info']

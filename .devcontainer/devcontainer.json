@@ -1,0 +1,53 @@
+{
+  "name": "Ansible Infrastructure Dev Environment",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "..",
+    "args": {
+      "USER_UID": "1001",
+      "USER_GID": "1001"
+    }
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "enableNonRootDocker": "true",
+      "moby": "true"
+    },
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": "true",
+      "installOhMyZsh": "true",
+      "upgradePackages": "true"
+    }
+  },
+  "mounts": [
+    "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+    "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
+  ],
+  "containerEnv": {
+    "ANSIBLE_HOST_KEY_CHECKING": "False",
+    "ANSIBLE_STDOUT_CALLBACK": "default",
+    "ANSIBLE_INVENTORY": "/workspace/ansible/inventory",
+    "PYTHONPATH": "/workspace/ansible",
+    "DOCKER_HOST": "unix:///var/run/docker.sock"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "redhat.ansible",
+        "ms-python.python", 
+        "ms-vscode.docker",
+        "ms-vscode.yaml",
+        "ms-vscode.json",
+        "wholroyd.jinja",
+        "timonwong.shellcheck"
+      ]
+    }
+  },
+  "forwardPorts": [],
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "remoteUser": "ansible",
+  "runArgs": ["--init"],
+  "updateRemoteUserUID": true,
+  "onCreateCommand": "sudo chown ansible:docker /var/run/docker.sock 2>/dev/null || true"
+}

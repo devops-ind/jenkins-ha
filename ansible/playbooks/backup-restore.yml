@@ -1,0 +1,8 @@
+---
+- name: backup-restore playbook
+  hosts: all
+  become: yes
+  tasks:
+    - name: Execute backup-restore
+      debug:
+        msg: "Running backup-restore tasks"

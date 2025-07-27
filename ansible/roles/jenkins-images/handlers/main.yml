@@ -1,0 +1,8 @@
+---
+# Handlers for jenkins-images role
+- name: restart jenkins-images service
+  systemd:
+    name: jenkins-images
+    state: restarted
+    enabled: yes
+  listen: "restart jenkins-images"
