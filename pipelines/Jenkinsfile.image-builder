@@ -1,32 +1,185 @@
+#!/usr/bin/env groovy
+
 pipeline {
-    agent any
+    agent {
+        label 'dind docker-manager static privileged'
+    }
     
-    parameters {
-        choice(
-            name: 'ENVIRONMENT',
-            choices: ['staging', 'production'],
-            description: 'Target environment'
-        )
+    options {
+        buildDiscarder(logRotator(daysToKeepStr: '30', numToKeepStr: '20'))
+        timeout(time: 2, unit: 'HOURS')
+        timestamps()
+        ansiColor('xterm')
+    }
+    
+    environment {
+        HARBOR_REGISTRY = "${HARBOR_REGISTRY_URL}"
+        HARBOR_PROJECT = "${HARBOR_PROJECT_NAME}"
+        HARBOR_CREDENTIALS = credentials('harbor-registry')
+        JENKINS_VERSION = "${JENKINS_VERSION}"
+        AGENT_VERSION = "${JENKINS_AGENT_VERSION}"
+        BUILD_DATE = sh(script: 'date -u +"%Y-%m-%dT%H:%M:%SZ"', returnStdout: true).trim()
+        GIT_COMMIT = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
+        IMAGE_TAG = "${params.IMAGE_TAG ?: env.BUILD_NUMBER}"
+        DOCKER_BUILDKIT = '1'
+        COMPOSE_DOCKER_CLI_BUILD = '1'
     }
     
     stages {
-        stage('Checkout') {
+        stage('Preparation') {
             steps {
-                checkout scm
+                script {
+                    echo "🚀 Jenkins Infrastructure Image Builder Pipeline"
+                    echo "📦 Harbor Registry: ${HARBOR_REGISTRY}/${HARBOR_PROJECT}"
+                    echo "🏷️ Image Tag: ${IMAGE_TAG}"
+                    echo "🔨 Force Rebuild: ${params.FORCE_REBUILD}"
+                    echo "📤 Push to Harbor: ${params.PUSH_TO_HARBOR}"
+                    echo "🎯 Images to Build: ${params.IMAGES_TO_BUILD}"
+                    
+                    // Login to Harbor registry
+                    sh """
+                        echo "🔐 Logging into Harbor registry..."
+                        echo \$HARBOR_CREDENTIALS_PSW | docker login \$HARBOR_REGISTRY -u \$HARBOR_CREDENTIALS_USR --password-stdin
+                    """
+                }
             }
         }
         
-        stage('image-builder') {
+        stage('Build Images with Ansible') {
             steps {
-                echo "Running image-builder pipeline"
-                // Add your pipeline steps here
+                script {
+                    echo "🏗️ Building Jenkins Images using Ansible jenkins-images role..."
+                    
+                    // Prepare ansible variables for image building
+                    def extraVars = [
+                        "jenkins_master_image_tag=${IMAGE_TAG}",
+                        "jenkins_agent_image_tag=${IMAGE_TAG}",
+                        "jenkins_images_force_rebuild=${params.FORCE_REBUILD}",
+                        "jenkins_images_push=${params.PUSH_TO_HARBOR}",
+                        "harbor_registry_url=${HARBOR_REGISTRY}",
+                        "harbor_project=${HARBOR_PROJECT}"
+                    ]
+                    
+                    // Execute ansible playbook
+                    sh """
+                        echo "🚀 Executing Ansible playbook to build images..."
+                        ansible-playbook -i ansible/inventories/production/hosts.yml \
+                            ansible/deploy-images.yml \
+                            --extra-vars '${extraVars.join(' ')}' \
+                            --extra-vars "images_to_build=${params.IMAGES_TO_BUILD}" \
+                            -v
+                    """
+                }
+            }
+        }
+        
+        stage('Security Scanning') {
+            when {
+                expression { params.PUSH_TO_HARBOR }
+            }
+            steps {
+                script {
+                    echo "🔍 Images will be automatically scanned by Harbor registry..."
+                    echo "📊 Built images for: ${params.IMAGES_TO_BUILD}"
+                    echo "🏷️ Image tag: ${IMAGE_TAG}"
+                    echo "📤 Check Harbor UI at ${HARBOR_REGISTRY} for vulnerability reports"
+                }
+            }
+        }
+        
+        stage('Trigger Infrastructure Update') {
+            when {
+                allOf {
+                    expression { params.PUSH_TO_HARBOR }
+                    equals expected: 'all', actual: params.IMAGES_TO_BUILD
+                }
+            }
+            steps {
+                script {
+                    echo "🔄 Triggering infrastructure update with new images..."
+                    
+                    // Trigger the infrastructure update job
+                    build job: 'Infrastructure/Infrastructure-Update',
+                          parameters: [
+                              string(name: 'IMAGE_TAG', value: "${IMAGE_TAG}"),
+                              booleanParam(name: 'RESTART_SERVICES', value: true),
+                              string(name: 'UPDATE_REASON', value: "New images built: ${IMAGE_TAG}")
+                          ],
+                          wait: false
+                }
             }
         }
     }
     
     post {
         always {
-            cleanWs()
+            script {
+                echo "📊 Build Summary:"
+                echo "Images Built: ${params.IMAGES_TO_BUILD}"
+                echo "Image Tag: ${IMAGE_TAG}"
+                echo "Force Rebuild: ${params.FORCE_REBUILD}"
+                echo "Pushed to Harbor: ${params.PUSH_TO_HARBOR}"
+                
+                // Archive build artifacts
+                archiveArtifacts artifacts: '**/Dockerfile*', allowEmptyArchive: true
+                
+                // Clean workspace
+                cleanWs()
+            }
+        }
+        
+        success {
+            script {
+                echo "✅ Jenkins Images Build Pipeline Completed Successfully!"
+                
+                // Send notification if configured
+                if (env.SLACK_WEBHOOK) {
+                    slackSend(
+                        channel: '#infrastructure',
+                        color: 'good',
+                        message: """
+                            ✅ Jenkins Images Build Successful
+                            
+                            📦 Images: ${params.IMAGES_TO_BUILD}
+                            🏷️ Tag: ${IMAGE_TAG}
+                            📤 Registry: ${HARBOR_REGISTRY}/${HARBOR_PROJECT}
+                            ⏱️ Duration: ${currentBuild.durationString}
+                            
+                            🔗 Build: ${env.BUILD_URL}
+                        """.stripIndent()
+                    )
+                }
+            }
+        }
+        
+        failure {
+            script {
+                echo "❌ Jenkins Images Build Pipeline Failed!"
+                
+                // Send failure notification
+                if (env.SLACK_WEBHOOK) {
+                    slackSend(
+                        channel: '#infrastructure',
+                        color: 'danger',
+                        message: """
+                            ❌ Jenkins Images Build Failed
+                            
+                            📦 Images: ${params.IMAGES_TO_BUILD}
+                            🏷️ Tag: ${IMAGE_TAG}
+                            ⏱️ Duration: ${currentBuild.durationString}
+                            
+                            🔗 Build: ${env.BUILD_URL}
+                            📋 Please check logs for details
+                        """.stripIndent()
+                    )
+                }
+            }
+        }
+        
+        unstable {
+            script {
+                echo "⚠️ Jenkins Images Build Pipeline Unstable!"
+            }
         }
     }
 }

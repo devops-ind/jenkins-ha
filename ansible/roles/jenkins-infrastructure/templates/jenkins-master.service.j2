@@ -1,5 +1,5 @@
 [Unit]
-Description=Jenkins Master {{ item }} Container
+Description=Jenkins Master {{ ansible_hostname }} Container with JCasC
 Requires={% if jenkins_container_runtime == 'docker' %}docker.service{% else %}podman.service{% endif %}
 After={% if jenkins_container_runtime == 'docker' %}docker.service{% else %}podman.service{% endif %} network.target
 Wants=network.target
@@ -8,17 +8,23 @@ Wants=network.target
 Type=forking
 User={{ jenkins_user }}
 Group={{ jenkins_group }}
-ExecStartPre=-{% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} stop jenkins-master-{{ item }}
-ExecStartPre=-{% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} rm jenkins-master-{{ item }}
-ExecStart={% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} run --name jenkins-master-{{ item }} \
+EnvironmentFile=/etc/default/jenkins-{{ ansible_hostname }}
+ExecStartPre=-{% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} stop jenkins-master-{{ ansible_hostname }}
+ExecStartPre=-{% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} rm jenkins-master-{{ ansible_hostname }}
+ExecStart={% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} run --name jenkins-master-{{ ansible_hostname }} \
   --network {{ jenkins_network_name }} \
-  -p {{ jenkins_port + item - 1 }}:{{ jenkins_port }} \
-  -p {{ jenkins_agent_port + item - 1 }}:{{ jenkins_agent_port }} \
-  -v jenkins-home-{{ item }}:{{ jenkins_home_dir }} \
+  -p {{ jenkins_master_port }}:8080 \
+  -p {{ jenkins_agent_port }}:50000 \
+  -v jenkins-home-{{ ansible_hostname }}:{{ jenkins_home_dir }} \
   -v jenkins-shared:{{ shared_storage_path | default('/shared/jenkins') }} \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -e JAVA_OPTS="{{ jenkins_master_java_opts }}" \
-  -e JENKINS_OPTS="--httpPort={{ jenkins_port }} --prefix={{ jenkins_context_path }}" \
+  -e JAVA_OPTS="${JAVA_OPTS}" \
+  -e JENKINS_OPTS="--httpPort=8080" \
+  -e CASC_JENKINS_CONFIG="${CASC_JENKINS_CONFIG}" \
+  -e HARBOR_REGISTRY_URL="${HARBOR_REGISTRY_URL}" \
+  -e HARBOR_PROJECT_NAME="${HARBOR_PROJECT_NAME}" \
+  -e JENKINS_VERSION="${JENKINS_VERSION}" \
+  -e JENKINS_AGENT_VERSION="${JENKINS_AGENT_VERSION}" \
   -e TZ="{{ common_timezone | default('UTC') }}" \
   --memory {{ jenkins_master_memory }} \
   --cpus {{ jenkins_master_cpu_limit }} \
@@ -27,9 +33,10 @@ ExecStart={% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %
   --log-opt max-file={{ jenkins_log_max_files }} \
   --restart {{ jenkins_restart_policy }} \
   --label service=jenkins-master \
-  --label instance={{ item }} \
+  --label instance={{ ansible_hostname }} \
   --label cluster={{ jenkins_cluster_name }} \
-  --health-cmd="curl -f http://localhost:{{ jenkins_port }}/login || exit 1" \
+  --label jcasc=enabled \
+  --health-cmd="curl -f http://localhost:8080/login || exit 1" \
   --health-interval=30s \
   --health-timeout=10s \
   --health-retries=3 \
@@ -37,8 +44,8 @@ ExecStart={% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %
   --detach \
   {{ harbor_registry_url | default('jenkins') }}/{{ harbor_project | default('library') }}/jenkins-master:{{ jenkins_master_image_tag }}
 
-ExecStop={% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} stop jenkins-master-{{ item }}
-ExecStopPost={% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} rm jenkins-master-{{ item }}
+ExecStop={% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} stop jenkins-master-{{ ansible_hostname }}
+ExecStopPost={% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} rm jenkins-master-{{ ansible_hostname }}
 Restart={{ jenkins_systemd_restart }}
 RestartSec={{ jenkins_systemd_restart_sec }}
 TimeoutStartSec=300

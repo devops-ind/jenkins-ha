@@ -1,0 +1,302 @@
+---
+# Jenkins Configuration as Code (JCasC) - Main Configuration
+# This file contains the main Jenkins configuration using JCasC format
+
+jenkins:
+  systemMessage: |
+    Jenkins High Availability Infrastructure
+    Environment: {{ environment_name | default('production') }}
+    Managed by Ansible and JCasC
+    Last Updated: {{ ansible_date_time.iso8601 }}
+
+  numExecutors: {{ jenkins_master_executors | default(2) }}
+  mode: EXCLUSIVE
+  scmCheckoutRetryCount: 3
+  
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "{{ jenkins_admin_username }}"
+          password: "{{ jenkins_admin_password }}"
+          properties:
+            - "hudson.security.HudsonPrivateSecurityRealm$Details":
+                passwordHash: "{{ jenkins_admin_password_hash | default('#jbcrypt:$2a$10$...') }}"
+            - "jenkins.security.ApiTokenProperty":
+                apiTokens:
+                  - name: "automation-token"
+                    value: "{{ jenkins_admin_api_token }}"
+
+  authorizationStrategy:
+    globalMatrix:
+      permissions:
+        - "Overall/Administer:{{ jenkins_admin_username }}"
+        - "Overall/Read:authenticated"
+        - "Job/Build:authenticated"
+        - "Job/Cancel:authenticated"
+        - "Job/Read:authenticated"
+        - "Job/Workspace:authenticated"
+        - "View/Read:authenticated"
+
+  remotingSecurity:
+    enabled: true
+
+  crumbIssuer:
+    standard:
+      excludeClientIPFromCrumb: false
+
+  clouds:
+    - docker:
+        name: "docker-cloud"
+        dockerApi:
+          dockerHost:
+            uri: "unix:///var/run/docker.sock"
+        templates:
+          - labelString: "dind docker-manager static privileged"
+            name: "dind-agent"
+            dockerTemplateBase:
+              image: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-dind-agent:{{ jenkins_agent_image_tag }}"
+              privileged: true
+              tty: true
+              bindAllPorts: false
+              bindPorts: ""
+              memoryLimit: {{ jenkins_dind_agent_memory | default(2048) }}
+              memorySwap: 0
+              cpuShares: 0
+              dnsString: ""
+              volumes:
+                - "/var/run/docker.sock:/var/run/docker.sock:rw"
+                - "{{ jenkins_shared_workspace }}:/shared-workspace:rw"
+              environment:
+                - "JENKINS_URL={{ jenkins_master_url }}"
+                - "JENKINS_AGENT_NAME=${NODE_NAME}"
+              pullStrategy: PULL_ALWAYS
+            remoteFs: "/home/jenkins/agent"
+            connector:
+              attach:
+                user: "jenkins"
+            instanceCapStr: "3"
+            retentionStrategy:
+              idleMinutes: 10
+
+          - labelString: "maven java-build static"
+            name: "maven-agent"
+            dockerTemplateBase:
+              image: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-maven-agent:{{ jenkins_agent_image_tag }}"
+              tty: true
+              memoryLimit: {{ jenkins_maven_agent_memory | default(4096) }}
+              volumes:
+                - "maven-cache:/home/jenkins/.m2:rw"
+                - "{{ jenkins_shared_workspace }}:/shared-workspace:rw"
+              environment:
+                - "JAVA_OPTS=-Xmx{{ jenkins_maven_agent_heap | default('3g') }}"
+                - "MAVEN_OPTS=-Xmx{{ jenkins_maven_agent_heap | default('3g') }}"
+            remoteFs: "/home/jenkins/agent"
+            connector:
+              attach:
+                user: "jenkins"
+            instanceCapStr: "5"
+            retentionStrategy:
+              idleMinutes: 15
+
+          - labelString: "python python-build static"
+            name: "python-agent"
+            dockerTemplateBase:
+              image: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-python-agent:{{ jenkins_agent_image_tag }}"
+              tty: true
+              memoryLimit: {{ jenkins_python_agent_memory | default(2048) }}
+              volumes:
+                - "pip-cache:/home/jenkins/.cache/pip:rw"
+                - "{{ jenkins_shared_workspace }}:/shared-workspace:rw"
+              environment:
+                - "PYTHONPATH=/home/jenkins/agent"
+                - "PIP_CACHE_DIR=/home/jenkins/.cache/pip"
+            remoteFs: "/home/jenkins/agent"
+            connector:
+              attach:
+                user: "jenkins"
+            instanceCapStr: "4"
+            retentionStrategy:
+              idleMinutes: 15
+
+          - labelString: "nodejs frontend-build static"
+            name: "nodejs-agent"
+            dockerTemplateBase:
+              image: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-nodejs-agent:{{ jenkins_agent_image_tag }}"
+              tty: true
+              memoryLimit: {{ jenkins_nodejs_agent_memory | default(3072) }}
+              volumes:
+                - "npm-cache:/home/jenkins/.npm:rw"
+                - "{{ jenkins_shared_workspace }}:/shared-workspace:rw"
+              environment:
+                - "NODE_ENV=production"
+                - "NPM_CONFIG_CACHE=/home/jenkins/.npm"
+            remoteFs: "/home/jenkins/agent"
+            connector:
+              attach:
+                user: "jenkins"
+            instanceCapStr: "4"
+            retentionStrategy:
+              idleMinutes: 15
+
+security:
+  globalJobDslSecurityConfiguration:
+    useScriptSecurity: false
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: "harbor-registry"
+              username: "{{ harbor_username }}"
+              password: "{{ harbor_password }}"
+              description: "Harbor Registry Credentials"
+          
+          - usernamePassword:
+              scope: GLOBAL
+              id: "{{ git_credentials_id }}"
+              username: "{{ git_username }}"
+              password: "{{ git_password }}"
+              description: "Git Repository Credentials"
+          
+          - string:
+              scope: GLOBAL
+              id: "slack-webhook"
+              secret: "{{ slack_webhook_url }}"
+              description: "Slack Webhook for Notifications"
+{% if backup_method == 'borg' %}
+          - string:
+              scope: GLOBAL
+              id: "borg-passphrase"
+              secret: "{{ borg_backup_passphrase }}"
+              description: "Borg Backup Passphrase"
+{% endif %}
+
+tool:
+  git:
+    installations:
+      - name: "Default"
+        home: "/usr/bin/git"
+
+  maven:
+    installations:
+      - name: "Maven-3.8"
+        properties:
+          - installSource:
+              installers:
+                - maven:
+                    id: "3.8.6"
+
+  jdk:
+    installations:
+      - name: "OpenJDK-11"
+        home: "/opt/java/openjdk"
+      - name: "OpenJDK-17"
+        properties:
+          - installSource:
+              installers:
+                - adoptOpenJdkInstaller:
+                    id: "jdk-17.0.2+8"
+
+  nodejs:
+    installations:
+      - name: "NodeJS-18"
+        properties:
+          - installSource:
+              installers:
+                - nodeJSInstaller:
+                    id: "18.17.0"
+                    npmPackages: "yarn@latest"
+
+  dockerTool:
+    installations:
+      - name: "Docker"
+        properties:
+          - installSource:
+              installers:
+                - fromDocker:
+                    version: "latest"
+
+unclassified:
+  location:
+    adminAddress: "{{ jenkins_admin_email }}"
+    url: "{{ jenkins_master_url }}"
+
+  globalLibraries:
+    libraries:
+      - name: "jenkins-shared-library"
+        defaultVersion: "main"
+        retriever:
+          modernSCM:
+            scm:
+              git:
+                remote: "{{ jenkins_shared_library_repo }}"
+                credentialsId: "{{ git_credentials_id }}"
+
+  slackNotifier:
+    teamDomain: "{{ slack_team_domain }}"
+    token: "{{ slack_bot_token }}"
+    botUser: true
+    room: "#infrastructure"
+
+  prometheusConfiguration:
+    useAuthenticatedEndpoint: false
+    defaultNamespace: "jenkins"
+    path: "/prometheus"
+    collectingMetricsPeriodInSeconds: 30
+    countSuccessfulBuilds: true
+    countUnstableBuilds: true
+    countFailedBuilds: true
+    countNotBuiltBuilds: true
+    countAbortedBuilds: true
+    fetchTestResults: true
+
+  timestamper:
+    allPipelines: true
+    elapsedTimeFormat: "HH:mm:ss.S"
+    systemTimeFormat: "HH:mm:ss"
+
+  ansiColorBuildWrapper:
+    globalColorMapName: "xterm"
+
+  buildDiscarders:
+    configuredBuildDiscarders:
+      - "jobBuildDiscarder"
+      - "simpleBuildDiscarder":
+          discarder:
+            logRotator:
+              daysToKeepStr: "30"
+              numToKeepStr: "100"
+
+  defaultFolderConfiguration:
+    healthMetrics:
+      - worstChildHealthMetric:
+          recursive: true
+
+  gitSCM:
+    createAccountBasedOnEmail: false
+    showEntireCommitSummaryInChanges: false
+    useExistingAccountWithSameEmail: false
+
+  mailer:
+    adminAddress: "{{ jenkins_admin_email }}"
+    charset: "UTF-8"
+    defaultSuffix: "{{ email_domain | default('@company.com') }}"
+    smtpHost: "{{ smtp_host | default('localhost') }}"
+    smtpPort: "{{ smtp_port | default('25') }}"
+    useSsl: {{ smtp_use_ssl | default(false) }}
+    useTls: {{ smtp_use_tls | default(false) }}
+
+  pollSCM:
+    pollingThreadCount: 10
+
+  scmGit:
+    addGitTagAction: false
+    allowSecondFetch: false
+    createAccountBasedOnEmail: false
+    disableGitToolChooser: false
+    hideCredentials: false
+    showEntireCommitSummaryInChanges: false
+    useExistingAccountWithSameEmail: false

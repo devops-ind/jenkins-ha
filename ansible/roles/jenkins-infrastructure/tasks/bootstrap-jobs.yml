@@ -1,81 +1,63 @@
 ---
-# Bootstrap Jenkins Pipeline Jobs
-# Creates self-management jobs for image building, backup, and infrastructure updates
+# Bootstrap Jenkins Configuration as Code (JCasC)
+# Deploys Jenkins configuration and jobs using JCasC YAML files
 
-- name: Create Jenkins job definitions directory
+- name: Create JCasC configuration directory
   file:
-    path: "{{ jenkins_home_dir }}/job-definitions"
+    path: "{{ jenkins_home_dir }}/casc_configs"
     state: directory
     owner: "{{ jenkins_user }}"
     group: "{{ jenkins_group }}"
     mode: '0755'
 
-- name: Generate image builder pipeline job
+- name: Generate Jenkins JCasC main configuration
   template:
-    src: job-definitions/image-builder-pipeline.groovy.j2
-    dest: "{{ jenkins_home_dir }}/job-definitions/image-builder-pipeline.groovy"
+    src: jcasc/jenkins-config.yml.j2
+    dest: "{{ jenkins_home_dir }}/casc_configs/jenkins-config.yml"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  notify: restart jenkins
+
+- name: Generate Jenkins JCasC jobs configuration
+  template:
+    src: jcasc/jenkins-jobs.yml.j2
+    dest: "{{ jenkins_home_dir }}/casc_configs/jenkins-jobs.yml"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  notify: restart jenkins
+
+- name: Set CASC_JENKINS_CONFIG environment variable
+  lineinfile:
+    path: "{{ jenkins_home_dir }}/.bashrc"
+    line: "export CASC_JENKINS_CONFIG={{ jenkins_home_dir }}/casc_configs"
+    create: yes
     owner: "{{ jenkins_user }}"
     group: "{{ jenkins_group }}"
     mode: '0644'
 
-- name: Generate backup pipeline job
+- name: Create JCasC environment file for systemd
   template:
-    src: job-definitions/backup-pipeline.groovy.j2
-    dest: "{{ jenkins_home_dir }}/job-definitions/backup-pipeline.groovy"
-    owner: "{{ jenkins_user }}"
-    group: "{{ jenkins_group }}"
+    src: jenkins-environment.j2
+    dest: "/etc/default/jenkins-{{ ansible_hostname }}"
     mode: '0644'
+  notify: restart jenkins
 
-- name: Generate infrastructure update pipeline job
+- name: Update Jenkins systemd service to include JCasC configuration
   template:
-    src: job-definitions/infrastructure-update.groovy.j2
-    dest: "{{ jenkins_home_dir }}/job-definitions/infrastructure-update.groovy"
-    owner: "{{ jenkins_user }}"
-    group: "{{ jenkins_group }}"
+    src: jenkins-master.service.j2
+    dest: "/etc/systemd/system/jenkins-master-{{ ansible_hostname }}.service"
     mode: '0644'
+  notify:
+    - reload systemd
+    - restart jenkins
 
-- name: Generate health check pipeline job
-  template:
-    src: job-definitions/health-check-pipeline.groovy.j2
-    dest: "{{ jenkins_home_dir }}/job-definitions/health-check-pipeline.groovy"
-    owner: "{{ jenkins_user }}"
-    group: "{{ jenkins_group }}"
-    mode: '0644'
-
-- name: Generate security scan pipeline job
-  template:
-    src: job-definitions/security-scan-pipeline.groovy.j2
-    dest: "{{ jenkins_home_dir }}/job-definitions/security-scan-pipeline.groovy"
-    owner: "{{ jenkins_user }}"
-    group: "{{ jenkins_group }}"
-    mode: '0644'
-
-- name: Generate monitoring setup pipeline job
-  template:
-    src: job-definitions/monitoring-pipeline.groovy.j2
-    dest: "{{ jenkins_home_dir }}/job-definitions/monitoring-pipeline.groovy"
-    owner: "{{ jenkins_user }}"
-    group: "{{ jenkins_group }}"
-    mode: '0644'
-
-- name: Create Jenkins CLI jar download script
-  template:
-    src: download-jenkins-cli.sh.j2
-    dest: "{{ jenkins_home_dir }}/bin/download-jenkins-cli.sh"
-    owner: "{{ jenkins_user }}"
-    group: "{{ jenkins_group }}"
-    mode: '0755'
-
-- name: Download Jenkins CLI jar
-  command: "{{ jenkins_home_dir }}/bin/download-jenkins-cli.sh"
-  args:
-    creates: "{{ jenkins_home_dir }}/jenkins-cli.jar"
-
-- name: Wait for Jenkins to be fully ready
+- name: Wait for Jenkins to be fully ready with JCasC
   uri:
     url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/api/json"
     method: GET
-    user: "{{ jenkins_admin_user }}"
+    user: "{{ jenkins_admin_username }}"
     password: "{{ jenkins_admin_password }}"
     force_basic_auth: yes
     timeout: 10
@@ -84,140 +66,56 @@
   retries: 30
   delay: 10
 
-- name: Create pipeline jobs using Jenkins CLI
-  command: >
-    java -jar {{ jenkins_home_dir }}/jenkins-cli.jar
-    -s http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}
-    -auth {{ jenkins_admin_user }}:{{ jenkins_admin_password }}
-    create-job "{{ item.name }}"
-  args:
-    stdin: "{{ lookup('file', jenkins_home_dir + '/job-definitions/' + item.file) }}"
-  loop:
-    - { name: "Infrastructure-Image-Builder", file: "image-builder-pipeline.groovy" }
-    - { name: "Infrastructure-Backup", file: "backup-pipeline.groovy" }
-    - { name: "Infrastructure-Update", file: "infrastructure-update.groovy" }
-    - { name: "Infrastructure-Health-Check", file: "health-check-pipeline.groovy" }
-    - { name: "Infrastructure-Security-Scan", file: "security-scan-pipeline.groovy" }
-    - { name: "Infrastructure-Monitoring", file: "monitoring-pipeline.groovy" }
-  register: job_creation
-  failed_when: 
-    - job_creation.rc != 0
-    - "'already exists' not in job_creation.stderr"
-
-- name: Create Infrastructure folder in Jenkins
-  command: >
-    java -jar {{ jenkins_home_dir }}/jenkins-cli.jar
-    -s http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}
-    -auth {{ jenkins_admin_user }}:{{ jenkins_admin_password }}
-    groovy =
-  args:
-    stdin: |
-      import com.cloudbees.hudson.plugins.folder.Folder
-      import jenkins.model.Jenkins
-      
-      def jenkins = Jenkins.getInstance()
-      def folderName = "Infrastructure"
-      
-      if (jenkins.getItem(folderName) == null) {
-          def folder = new Folder(jenkins, folderName)
-          jenkins.putItem(folder)
-          jenkins.save()
-          println "Created Infrastructure folder"
-      } else {
-          println "Infrastructure folder already exists"
-      }
-  register: folder_creation
-  failed_when: folder_creation.rc != 0
-
-- name: Move jobs to Infrastructure folder
-  command: >
-    java -jar {{ jenkins_home_dir }}/jenkins-cli.jar
-    -s http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}
-    -auth {{ jenkins_admin_user }}:{{ jenkins_admin_password }}
-    groovy =
-  args:
-    stdin: |
-      import jenkins.model.Jenkins
-      import com.cloudbees.hudson.plugins.folder.Folder
-      
-      def jenkins = Jenkins.getInstance()
-      def folder = jenkins.getItem("Infrastructure")
-      
-      def jobsToMove = [
-          "Infrastructure-Image-Builder",
-          "Infrastructure-Backup", 
-          "Infrastructure-Update",
-          "Infrastructure-Health-Check",
-          "Infrastructure-Security-Scan",
-          "Infrastructure-Monitoring"
-      ]
-      
-      jobsToMove.each { jobName ->
-          def job = jenkins.getItem(jobName)
-          if (job != null && folder != null) {
-              try {
-                  Items.move(job, folder)
-                  println "Moved ${jobName} to Infrastructure folder"
-              } catch (Exception e) {
-                  println "Job ${jobName} already in folder or error: ${e.message}"
-              }
-          }
-      }
-
-- name: Schedule initial infrastructure jobs
+- name: Verify JCasC configuration is loaded
   uri:
-    url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/job/Infrastructure/job/{{ item }}/build"
-    method: POST
-    user: "{{ jenkins_admin_user }}"
+    url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/configuration-as-code/"
+    method: GET
+    user: "{{ jenkins_admin_username }}"
     password: "{{ jenkins_admin_password }}"
     force_basic_auth: yes
-    status_code: [201, 302]
-  loop:
-    - "Infrastructure-Health-Check"
-    - "Infrastructure-Security-Scan"
-  when: jenkins_schedule_initial_jobs | default(true)
+    timeout: 10
+  register: jcasc_status
+  until: jcasc_status is succeeded
+  retries: 10
+  delay: 5
 
-- name: Create Jenkins job management script
-  template:
-    src: manage-jenkins-jobs.sh.j2
-    dest: "{{ jenkins_home_dir }}/bin/manage-jenkins-jobs.sh"
-    owner: "{{ jenkins_user }}"
-    group: "{{ jenkins_group }}"
-    mode: '0755'
+- name: Trigger JCasC configuration reload if needed
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/configuration-as-code/reload"
+    method: POST
+    user: "{{ jenkins_admin_username }}"
+    password: "{{ jenkins_admin_password }}"
+    force_basic_auth: yes
+    status_code: [200, 302]
+  when: jenkins_force_casc_reload | default(false)
 
-- name: Setup Jenkins job monitoring
-  cron:
-    name: "Jenkins infrastructure jobs monitoring"
-    minute: "*/15"
-    user: "{{ jenkins_user }}"
-    job: "{{ jenkins_home_dir }}/bin/manage-jenkins-jobs.sh --monitor"
-    state: present
-
-- name: Display bootstrap jobs information
+- name: Display JCasC bootstrap information
   debug:
     msg: |
-      🤖 Jenkins Bootstrap Jobs Created Successfully!
+      🤖 Jenkins Configuration as Code (JCasC) Bootstrap Complete!
       
-      📋 Infrastructure Jobs:
-      • Infrastructure-Image-Builder - Builds and pushes Jenkins images to Harbor
-      • Infrastructure-Backup - Automated backup operations and verification
-      • Infrastructure-Update - Self-updating Jenkins infrastructure
-      • Infrastructure-Health-Check - Monitors Jenkins and infrastructure health
-      • Infrastructure-Security-Scan - Security scanning and compliance checks
-      • Infrastructure-Monitoring - Monitoring stack management
+      📋 Infrastructure Jobs (Auto-created via JCasC):
+      • Infrastructure/Image-Builder - Builds and pushes Jenkins images to Harbor
+      • Infrastructure/Backup-Pipeline - Automated backup operations and verification
+      • Infrastructure/Infrastructure-Update - Self-updating Jenkins infrastructure
+      • Infrastructure/Health-Check - Monitors Jenkins and infrastructure health
+      • Infrastructure/Security-Scan - Security scanning and compliance checks
+      • Infrastructure/Monitoring-Setup - Monitoring stack management
       
-      📁 Job Organization:
-      All infrastructure jobs are organized under the "Infrastructure" folder
+      📁 JCasC Configuration:
+      • Main Config: {{ jenkins_home_dir }}/casc_configs/jenkins-config.yml
+      • Jobs Config: {{ jenkins_home_dir }}/casc_configs/jenkins-jobs.yml
+      • Environment: CASC_JENKINS_CONFIG={{ jenkins_home_dir }}/casc_configs
       
-      ⏰ Automatic Scheduling:
+      ⏰ Automatic Scheduling (via JCasC):
       • Health checks run every 15 minutes
-      • Security scans run daily at 3 AM
-      • Backups run according to backup schedule
-      • Image building is triggered manually or via webhook
+      • Security scans run weekly on Monday at 3 AM
+      • Backups run according to configured schedule
+      • Image building runs weekly on Sunday at 1 AM
       
       🔧 Management:
-      Job management script: {{ jenkins_home_dir }}/bin/manage-jenkins-jobs.sh
-      CLI jar location: {{ jenkins_home_dir }}/jenkins-cli.jar
+      • JCasC Web UI: http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/configuration-as-code/
+      • Reload Config: http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/configuration-as-code/reload
       
       🎯 Access:
       Infrastructure Jobs: http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/job/Infrastructure/

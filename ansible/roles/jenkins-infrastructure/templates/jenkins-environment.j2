@@ -1,0 +1,55 @@
+# Jenkins Environment Configuration for JCasC
+# This file is used by systemd to set environment variables for Jenkins
+
+# JCasC Configuration Directory
+CASC_JENKINS_CONFIG={{ jenkins_home_dir }}/casc_configs
+
+# Jenkins Basic Configuration
+JENKINS_HOME={{ jenkins_home_dir }}
+JENKINS_PORT={{ jenkins_master_port }}
+JENKINS_ARGS="--httpPort=${JENKINS_PORT}"
+
+# JVM Configuration
+JAVA_OPTS="-Djava.awt.headless=true -Xmx{{ jenkins_master_heap_size | default('2g') }} -Xms{{ jenkins_master_initial_heap | default('512m') }}"
+
+# Harbor Registry Configuration
+HARBOR_REGISTRY_URL={{ harbor_registry_url }}
+HARBOR_PROJECT_NAME={{ harbor_project }}
+
+# Jenkins Version Information
+JENKINS_VERSION={{ jenkins_version }}
+JENKINS_AGENT_VERSION={{ jenkins_agent_version }}
+
+# Security Configuration
+JENKINS_ENABLE_ACCESS_LOG=yes
+JENKINS_LOG_FILE={{ jenkins_home_dir }}/logs/jenkins.log
+
+# JCasC Plugin Configuration
+CASC_JENKINS_CONFIG_PATH={{ jenkins_home_dir }}/casc_configs
+CASC_MERGE_STRATEGY=override
+
+# Jenkins Plugin Configuration
+JENKINS_UC_DOWNLOAD={{ jenkins_plugin_update_center | default('https://updates.jenkins.io') }}
+
+# Disable Jenkins Setup Wizard (since we use JCasC)
+JAVA_OPTS="$JAVA_OPTS -Djenkins.install.runSetupWizard=false"
+
+# Enable JCasC
+JAVA_OPTS="$JAVA_OPTS -Dcasc.jenkins.config={{ jenkins_home_dir }}/casc_configs"
+
+# Additional Security Settings
+JAVA_OPTS="$JAVA_OPTS -Djava.security.egd=file:/dev/./urandom"
+JAVA_OPTS="$JAVA_OPTS -Dhudson.diyChunking=false"
+
+# Performance Tuning
+JAVA_OPTS="$JAVA_OPTS -server"
+JAVA_OPTS="$JAVA_OPTS -XX:+UseG1GC"
+JAVA_OPTS="$JAVA_OPTS -XX:+UseStringDeduplication"
+JAVA_OPTS="$JAVA_OPTS -XX:MaxGCPauseMillis=200"
+
+# Enable JMX for monitoring
+JAVA_OPTS="$JAVA_OPTS -Dcom.sun.management.jmxremote=true"
+JAVA_OPTS="$JAVA_OPTS -Dcom.sun.management.jmxremote.port={{ jenkins_jmx_port | default('9999') }}"
+JAVA_OPTS="$JAVA_OPTS -Dcom.sun.management.jmxremote.local.only=false"
+JAVA_OPTS="$JAVA_OPTS -Dcom.sun.management.jmxremote.authenticate=false"
+JAVA_OPTS="$JAVA_OPTS -Dcom.sun.management.jmxremote.ssl=false"
