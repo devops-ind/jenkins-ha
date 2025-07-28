@@ -108,16 +108,16 @@
     dest: /etc/logrotate.d/docker
   when: docker_cleanup_enabled
 
-- name: Setup Docker cleanup cron job
-  cron:
-    name: "Docker system cleanup"
-    minute: "{{ docker_cleanup_cron.minute }}"
-    hour: "{{ docker_cleanup_cron.hour }}"
-    day: "{{ docker_cleanup_cron.day }}"
-    month: "{{ docker_cleanup_cron.month }}"
-    weekday: "{{ docker_cleanup_cron.weekday }}"
-    job: "/usr/bin/docker system prune -af --volumes > /dev/null 2>&1"
-  when: docker_cleanup_enabled
+# - name: Setup Docker cleanup cron job
+#   cron:
+#     name: "Docker system cleanup"
+#     minute: "{{ docker_cleanup_cron.minute }}"
+#     hour: "{{ docker_cleanup_cron.hour }}"
+#     day: "{{ docker_cleanup_cron.day }}"
+#     month: "{{ docker_cleanup_cron.month }}"
+#     weekday: "{{ docker_cleanup_cron.weekday }}"
+#     job: "/usr/bin/docker system prune -af --volumes > /dev/null 2>&1"
+#   when: docker_cleanup_enabled
 
 - name: Configure Docker socket permissions
   file:

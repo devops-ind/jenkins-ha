@@ -57,9 +57,9 @@
     - role: docker
       tags: ['docker', 'containers']
       
-    - role: harbor
-      tags: ['harbor', 'registry']
-      when: harbor_integration_enabled | default(true)
+    # - role: harbor
+    #   tags: ['harbor', 'registry']
+    #   when: harbor_integration_enabled | default(true)
       
     - role: jenkins-images
       tags: ['images', 'build']

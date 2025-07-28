@@ -33,8 +33,8 @@ docker_insecure_registries: []
 
 # Docker users
 docker_users:
-  - "{{ ansible_user }}"
-  - jenkins
+  - "vscode"
+  - "jenkins"
 
 # Docker networks
 docker_networks:

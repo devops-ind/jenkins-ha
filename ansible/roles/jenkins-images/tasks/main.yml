@@ -84,13 +84,13 @@
     - { src: 'docker-entrypoint.sh', dest: "{{ jenkins_images_build_dir }}/docker-entrypoint.sh", mode: '0755' }
     - { src: 'healthcheck.sh', dest: "{{ jenkins_images_build_dir }}/healthcheck.sh", mode: '0755' }
 
-- name: Login to Harbor registry
-  community.docker.docker_login:
-    registry_url: "{{ harbor_registry_url }}"
-    username: "{{ harbor_username }}"
-    password: "{{ harbor_password }}"
-    email: "{{ harbor_email | default(omit) }}"
-  when: harbor_integration_enabled | default(true)
+# - name: Login to Harbor registry
+#   community.docker.docker_login:
+#     registry_url: "{{ harbor_registry_url }}"
+#     username: "{{ harbor_username }}"
+#     password: "{{ harbor_password }}"
+#     email: "{{ harbor_email | default(omit) }}"
+#   when: harbor_integration_enabled | default(true)
 
 - name: Build Jenkins master image
   community.docker.docker_image:
@@ -107,7 +107,7 @@
         VCS_REF: "{{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
     source: build
     state: present
-    push: "{{ jenkins_images_push | default(true) }}"
+    push: "{{ jenkins_images_push | default(false) }}"
   register: master_image_build
 
 - name: Build DIND agent image
@@ -125,7 +125,7 @@
         VCS_REF: "{{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
     source: build
     state: present
-    push: "{{ jenkins_images_push | default(true) }}"
+    push: "{{ jenkins_images_push | default(false) }}"
   register: dind_image_build
 
 - name: Build Maven agent image
@@ -144,7 +144,7 @@
         VCS_REF: "{{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
     source: build
     state: present
-    push: "{{ jenkins_images_push | default(true) }}"
+    push: "{{ jenkins_images_push | default(false) }}"
   register: maven_image_build
 
 - name: Build Python agent image
@@ -162,7 +162,7 @@
         VCS_REF: "{{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
     source: build
     state: present
-    push: "{{ jenkins_images_push | default(true) }}"
+    push: "{{ jenkins_images_push | default(false) }}"
   register: python_image_build
 
 - name: Build Node.js agent image
@@ -180,7 +180,7 @@
         VCS_REF: "{{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
     source: build
     state: present
-    push: "{{ jenkins_images_push | default(true) }}"
+    push: "{{ jenkins_images_push | default(false) }}"
   register: nodejs_image_build
 
 - name: Clean up old images (keep last 3 versions)
