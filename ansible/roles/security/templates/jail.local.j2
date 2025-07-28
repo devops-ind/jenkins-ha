@@ -1,0 +1,51 @@
+# Fail2ban local jail configuration
+# Managed by Ansible - DO NOT EDIT MANUALLY
+
+[DEFAULT]
+# Ban hosts for one hour:
+bantime = 3600
+
+# Override /etc/fail2ban/jail.d/00-firewalld.conf:
+banaction = iptables-multiport
+
+# A host is banned if it has generated "maxretry" during the last "findtime" seconds.
+findtime = 600
+maxretry = 3
+
+# Email settings (configure if needed)
+#destemail = {{ security_alert_email }}
+#sender = fail2ban@{{ ansible_hostname }}
+#mta = sendmail
+#action = %(action_mwl)s
+
+{% for jail in fail2ban_jail_configs %}
+[{{ jail.name }}]
+enabled = {{ jail.enabled | lower }}
+port = {{ jail.port }}
+filter = {{ jail.filter }}
+logpath = {{ jail.logpath }}
+maxretry = {{ jail.maxretry }}
+findtime = {{ jail.findtime }}
+bantime = {{ jail.bantime }}
+
+{% endfor %}
+
+# Additional protection for Jenkins
+[jenkins-auth]
+enabled = true
+port = 8080,8081
+filter = jenkins-auth
+logpath = /var/log/jenkins/jenkins.log
+maxretry = 5
+findtime = 300
+bantime = 1800
+
+# SSH brute force protection
+[sshd]
+enabled = true
+port = {{ ssh_port }}
+filter = sshd
+logpath = /var/log/auth.log
+maxretry = {{ ssh_max_auth_tries }}
+findtime = 600
+bantime = 3600

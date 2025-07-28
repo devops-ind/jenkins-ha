@@ -1,0 +1,150 @@
+#!/bin/bash
+# Security audit script for Jenkins infrastructure
+# Managed by Ansible - DO NOT EDIT MANUALLY
+
+set -euo pipefail
+
+# Configuration
+LOG_FILE="{{ security_log_file }}"
+LOG_LEVEL="{{ security_log_level }}"
+ALERT_EMAIL="{{ security_alert_email }}"
+HOSTNAME="{{ ansible_hostname }}"
+DATE=$(date '+%Y-%m-%d %H:%M:%S')
+
+# Logging function
+log() {
+    local level=$1
+    shift
+    echo "[$DATE] [$level] $*" | tee -a "$LOG_FILE"
+}
+
+# Check if running as root
+if [[ $EUID -ne 0 ]]; then
+   log "ERROR" "This script must be run as root"
+   exit 1
+fi
+
+log "INFO" "Starting security audit on $HOSTNAME"
+
+# Check SSH security
+check_ssh_security() {
+    log "INFO" "Checking SSH security configuration"
+    
+    # Check SSH port
+    local ssh_port=$(grep "^Port" /etc/ssh/sshd_config | awk '{print $2}' || echo "22")
+    log "INFO" "SSH port: $ssh_port"
+    
+    # Check root login
+    local root_login=$(grep "^PermitRootLogin" /etc/ssh/sshd_config | awk '{print $2}' || echo "unknown")
+    if [[ "$root_login" == "no" ]]; then
+        log "INFO" "Root login properly disabled"
+    else
+        log "WARN" "Root login not properly configured: $root_login"
+    fi
+    
+    # Check password authentication
+    local pass_auth=$(grep "^PasswordAuthentication" /etc/ssh/sshd_config | awk '{print $2}' || echo "unknown")
+    if [[ "$pass_auth" == "no" ]]; then
+        log "INFO" "Password authentication properly disabled"
+    else
+        log "WARN" "Password authentication enabled: $pass_auth"
+    fi
+}
+
+# Check firewall status
+check_firewall() {
+    log "INFO" "Checking firewall status"
+    
+    if command -v ufw &> /dev/null; then
+        local ufw_status=$(ufw status | head -1)
+        log "INFO" "UFW status: $ufw_status"
+    elif command -v iptables &> /dev/null; then
+        local iptables_rules=$(iptables -L INPUT | wc -l)
+        log "INFO" "Iptables rules count: $iptables_rules"
+    else
+        log "WARN" "No firewall detected"
+    fi
+}
+
+# Check Jenkins security
+check_jenkins_security() {
+    log "INFO" "Checking Jenkins security"
+    
+    # Check if Jenkins is running
+    if systemctl is-active --quiet jenkins-master-* 2>/dev/null; then
+        log "INFO" "Jenkins master service is running"
+        
+        # Check Jenkins log for security events
+        if [[ -f "/var/log/jenkins/jenkins.log" ]]; then
+            local failed_logins=$(grep -c "Failed to authenticate" /var/log/jenkins/jenkins.log 2>/dev/null || echo "0")
+            log "INFO" "Failed login attempts in Jenkins log: $failed_logins"
+        fi
+    else
+        log "WARN" "Jenkins master service not running"
+    fi
+}
+
+# Check system updates
+check_system_updates() {
+    log "INFO" "Checking system updates"
+    
+    if command -v apt &> /dev/null; then
+        apt list --upgradable 2>/dev/null | grep -c upgradable || log "INFO" "System is up to date"
+    elif command -v yum &> /dev/null; then
+        local updates=$(yum check-update --quiet 2>/dev/null | wc -l || echo "0")
+        log "INFO" "Available updates: $updates"
+    fi
+}
+
+# Check for suspicious processes
+check_processes() {
+    log "INFO" "Checking for suspicious processes"
+    
+    # Check for high CPU processes
+    local high_cpu=$(ps aux --sort=-%cpu | head -6 | tail -5)
+    log "INFO" "Top CPU processes:\n$high_cpu"
+    
+    # Check for unusual network connections
+    local connections=$(netstat -tuln | grep LISTEN | wc -l)
+    log "INFO" "Listening ports count: $connections"
+}
+
+# Check fail2ban status
+check_fail2ban() {
+    log "INFO" "Checking fail2ban status"
+    
+    if systemctl is-active --quiet fail2ban 2>/dev/null; then
+        log "INFO" "Fail2ban is active"
+        
+        # Check banned IPs
+        local banned_ips=$(fail2ban-client status | grep "Jail list" | cut -d: -f2 | tr ',' '\n' | wc -l)
+        log "INFO" "Active jails: $banned_ips"
+    else
+        log "WARN" "Fail2ban is not active"
+    fi
+}
+
+# Main execution
+main() {
+    check_ssh_security
+    check_firewall
+    check_jenkins_security
+    check_system_updates
+    check_processes
+    check_fail2ban
+    
+    log "INFO" "Security audit completed"
+    
+    # Send email alert if configured
+    if [[ -n "$ALERT_EMAIL" ]]; then
+        mail -s "Security Audit Report - $HOSTNAME" "$ALERT_EMAIL" < "$LOG_FILE" 2>/dev/null || log "WARN" "Failed to send email alert"
+    fi
+}
+
+# Create log directory if it doesn't exist
+mkdir -p "$(dirname "$LOG_FILE")"
+
+# Run main function
+main
+
+exit 0

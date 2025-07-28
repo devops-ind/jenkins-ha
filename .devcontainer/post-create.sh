@@ -28,6 +28,14 @@ mkdir -p /workspace/ansible/logs
 mkdir -p /workspace/jenkins-deploy
 mkdir -p /home/ansible/.ansible/tmp
 
+# Setup ansible user in sudoers for passwordless sudo
+echo "ansible ALL=(ALL) NOPASSWD:ALL" | sudo tee -a /etc/sudoers
+
+# Create jenkins user and directories
+sudo useradd -m -s /bin/bash jenkins || true
+sudo mkdir -p /var/jenkins
+sudo chown jenkins:jenkins -R /var/jenkins
+
 # Ansible configuration
 if [ ! -f "/home/ansible/.ansible.cfg" ]; then
     echo "⚙️  Creating Ansible user configuration..."
@@ -40,6 +48,10 @@ stdout_callback = default
 callbacks_enabled = profile_tasks, timer
 log_path = /workspace/ansible/logs/ansible.log
 deprecation_warnings = False
+become = False
+become_method = sudo
+become_user = root
+become_ask_pass = False
 
 [ssh_connection]
 ssh_args = -o ControlMaster=auto -o ControlPersist=60s -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no
@@ -102,7 +114,7 @@ export JENKINS_ADMIN_PASSWORD=admin123
 export JENKINS_DOMAIN=jenkins.dev.local
 
 cd /workspace/ansible
-if ansible-playbook deploy-local.yml -e deployment_mode=devcontainer; then
+if ansible-playbook deploy-local.yml -e deployment_mode=devcontainer --become; then
     echo ""
     echo "🎉 Jenkins deployment completed successfully!"
     echo ""

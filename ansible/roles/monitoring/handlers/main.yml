@@ -6,3 +6,8 @@
     state: restarted
     enabled: yes
   listen: "restart monitoring"
+
+- name: reload systemd
+  systemd:
+    daemon_reload: yes
+  listen: "reload systemd"

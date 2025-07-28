@@ -1,0 +1,60 @@
+// Jenkins security configuration script
+// Managed by Ansible - DO NOT EDIT MANUALLY
+
+import jenkins.model.*
+import hudson.security.*
+import hudson.security.csrf.DefaultCrumbIssuer
+import jenkins.security.s2m.AdminWhitelistRule
+import hudson.plugins.emailext.*
+import jenkins.CLI
+
+def instance = Jenkins.getInstance()
+
+// Configure CSRF Protection
+{% if jenkins_csrf_protection %}
+if (!instance.getCrumbIssuer()) {
+    instance.setCrumbIssuer(new DefaultCrumbIssuer(true))
+    println "CSRF Protection enabled"
+}
+{% endif %}
+
+// Disable CLI over remoting
+{% if jenkins_disable_cli %}
+CLI.get().setEnabled(false)
+println "Jenkins CLI disabled"
+{% endif %}
+
+// Configure agent protocols
+{% if jenkins_agent_protocols %}
+Set<String> agentProtocolsList = new HashSet<String>()
+{% for protocol in jenkins_agent_protocols %}
+agentProtocolsList.add("{{ protocol }}")
+{% endfor %}
+instance.setAgentProtocols(agentProtocolsList)
+println "Agent protocols configured: {{ jenkins_agent_protocols | join(', ') }}"
+{% endif %}
+
+// Disable JNLP3 if configured
+{% if jenkins_disable_jnlp3 %}
+instance.getDescriptor("jenkins.CLI").get().setEnabled(false)
+{% endif %}
+
+// Configure security realm and authorization strategy
+// Note: This should be customized based on your authentication method
+// This example uses Jenkins built-in user database
+
+def hudsonRealm = new HudsonPrivateSecurityRealm(false)
+instance.setSecurityRealm(hudsonRealm)
+
+// Set up authorization strategy
+def strategy = new FullControlOnceLoggedInAuthorizationStrategy()
+strategy.setAllowAnonymousRead(false)
+instance.setAuthorizationStrategy(strategy)
+
+// Configure agent-to-master security
+instance.getInjector().getInstance(AdminWhitelistRule.class)
+    .setMasterKillSwitch(false)
+
+// Save configuration
+instance.save()
+println "Jenkins security configuration completed"

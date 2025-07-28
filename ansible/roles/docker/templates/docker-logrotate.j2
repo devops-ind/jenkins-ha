@@ -1,0 +1,25 @@
+# Docker container logs logrotate configuration
+# Managed by Ansible - DO NOT EDIT MANUALLY
+
+/var/lib/docker/containers/*/*.log {
+    daily
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    copytruncate
+    notifempty
+    create 0644 root root
+    maxage 7
+}
+
+# Docker system logs
+/var/log/docker.log {
+    daily
+    missingok
+    rotate 30
+    compress
+    delaycompress
+    notifempty
+    create 0644 root root
+}

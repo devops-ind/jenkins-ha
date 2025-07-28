@@ -1,0 +1,35 @@
+{{ backup_log_dir | default('/var/log/jenkins-backup') }}/*.log {
+    daily
+    missingok
+    rotate {{ backup_log_rotate_count | default('30') }}
+    compress
+    delaycompress
+    notifempty
+    create 640 {{ backup_user | default('jenkins') }} {{ backup_group | default('jenkins') }}
+    sharedscripts
+    postrotate
+        /bin/systemctl reload rsyslog > /dev/null 2>&1 || true
+    endscript
+}
+
+{{ backup_log_dir | default('/var/log/jenkins-backup') }}/backup-*.log {
+    weekly
+    missingok
+    rotate {{ backup_log_rotate_count | default('12') }}
+    compress
+    delaycompress
+    notifempty
+    create 640 {{ backup_user | default('jenkins') }} {{ backup_group | default('jenkins') }}
+    sharedscripts
+}
+
+{{ backup_log_dir | default('/var/log/jenkins-backup') }}/restore-*.log {
+    weekly
+    missingok
+    rotate {{ backup_log_rotate_count | default('12') }}
+    compress
+    delaycompress
+    notifempty
+    create 640 {{ backup_user | default('jenkins') }} {{ backup_group | default('jenkins') }}
+    sharedscripts
+}

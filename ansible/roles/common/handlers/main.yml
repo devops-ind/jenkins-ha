@@ -6,3 +6,17 @@
     state: restarted
     enabled: yes
   listen: "restart common"
+
+- name: restart ssh
+  systemd:
+    name: ssh
+    state: restarted
+  listen: "restart ssh"
+
+- name: restart ntp
+  systemd:
+    name: "{{ ntp_service_name }}"
+    state: restarted
+    enabled: yes
+  listen: "restart ntp"
+  when: ntp_service_name is defined and ntp_service_name != ""

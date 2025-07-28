@@ -10,9 +10,9 @@ RUN set -eux; \
     apt-get update && apt-get install -y \
     python3 python3-pip python3-yaml python3-jinja2 python3-requests \
     python3-urllib3 python3-cryptography python3-venv python3-packaging \
-    ansible openssh-client sshpass git curl wget vim nano jq tree htop \
+    ansible openssh-client openssh-server sshpass git curl wget vim nano jq tree htop \
     net-tools iputils-ping telnet unzip ca-certificates gnupg lsb-release \
-    podman podman-compose \
+    podman podman-compose ntp \
     sudo \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*

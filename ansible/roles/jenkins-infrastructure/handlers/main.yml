@@ -6,3 +6,33 @@
     state: restarted
     enabled: yes
   listen: "restart jenkins-infrastructure"
+
+- name: restart jenkins
+  systemd:
+    name: jenkins
+    state: restarted
+    enabled: yes
+  listen: "restart jenkins"
+
+- name: restart jenkins master containers
+  docker_container:
+    name: "{{ item }}"
+    state: started
+    restart: yes
+  with_items: "{{ jenkins_masters | default([]) }}"
+  listen: "restart jenkins master containers"
+
+- name: restart jenkins agents
+  docker_container:
+    name: "{{ item }}"
+    state: started
+    restart: yes
+  with_items: "{{ jenkins_agents | default([]) }}"
+  listen: "restart jenkins agents"
+
+- name: restart firewalld
+  systemd:
+    name: firewalld
+    state: restarted
+    enabled: yes
+  listen: "restart firewalld"

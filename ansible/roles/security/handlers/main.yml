@@ -6,3 +6,16 @@
     state: restarted
     enabled: yes
   listen: "restart security"
+
+- name: restart sshd
+  systemd:
+    name: sshd
+    state: restarted
+  listen: "restart sshd"
+
+- name: restart fail2ban
+  systemd:
+    name: fail2ban
+    state: restarted
+    enabled: yes
+  listen: "restart fail2ban"

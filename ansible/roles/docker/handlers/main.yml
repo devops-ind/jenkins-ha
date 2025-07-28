@@ -6,3 +6,10 @@
     state: restarted
     enabled: yes
   listen: "restart docker"
+
+- name: restart auditd
+  systemd:
+    name: auditd
+    state: restarted
+    enabled: yes
+  listen: "restart auditd"

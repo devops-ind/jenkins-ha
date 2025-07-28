@@ -1,0 +1,34 @@
+{
+  "log-driver": "{{ docker_daemon_options['log-driver'] }}",
+  "log-opts": {
+{% for key, value in docker_daemon_options['log-opts'].items() %}
+    "{{ key }}": "{{ value }}"{% if not loop.last %},{% endif %}
+{% endfor %}
+  },
+  "storage-driver": "{{ docker_daemon_options['storage-driver'] }}",
+  "live-restore": {{ docker_daemon_options['live-restore'] | lower }},
+  "userland-proxy": {{ docker_daemon_options['userland-proxy'] | lower }},
+  "experimental": {{ docker_daemon_options['experimental'] | lower }},
+  "default-ulimits": {
+{% for ulimit, values in docker_daemon_options['default-ulimits'].items() %}
+    "{{ ulimit }}": {
+      "soft": {{ values.soft }},
+      "hard": {{ values.hard }}
+    }{% if not loop.last %},{% endif %}
+{% endfor %}
+  }{% if docker_registry_mirrors or docker_insecure_registries %},{% endif %}
+{% if docker_registry_mirrors %}
+  "registry-mirrors": [
+{% for mirror in docker_registry_mirrors %}
+    "{{ mirror }}"{% if not loop.last %},{% endif %}
+{% endfor %}
+  ]{% if docker_insecure_registries %},{% endif %}
+{% endif %}
+{% if docker_insecure_registries %}
+  "insecure-registries": [
+{% for registry in docker_insecure_registries %}
+    "{{ registry }}"{% if not loop.last %},{% endif %}
+{% endfor %}
+  ]
+{% endif %}
+}

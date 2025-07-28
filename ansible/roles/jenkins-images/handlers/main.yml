@@ -6,3 +6,58 @@
     state: restarted
     enabled: yes
   listen: "restart jenkins-images"
+
+- name: build jenkins master image
+  docker_image:
+    name: "{{ jenkins_master_image_name | default('jenkins-master') }}"
+    build:
+      path: "{{ jenkins_master_dockerfile_dir | default('/tmp/jenkins-master') }}"
+      dockerfile: Dockerfile.master
+    source: build
+    state: present
+    force_source: yes
+  listen: "build jenkins master image"
+
+- name: build dind agent image
+  docker_image:
+    name: "{{ jenkins_dind_agent_image_name | default('jenkins-dind-agent') }}"
+    build:
+      path: "{{ jenkins_dind_agent_dockerfile_dir | default('/tmp/jenkins-dind-agent') }}"
+      dockerfile: Dockerfile.dind-agent
+    source: build
+    state: present
+    force_source: yes
+  listen: "build dind agent image"
+
+- name: build maven agent image
+  docker_image:
+    name: "{{ jenkins_maven_agent_image_name | default('jenkins-maven-agent') }}"
+    build:
+      path: "{{ jenkins_maven_agent_dockerfile_dir | default('/tmp/jenkins-maven-agent') }}"
+      dockerfile: Dockerfile.maven-agent
+    source: build
+    state: present
+    force_source: yes
+  listen: "build maven agent image"
+
+- name: build python agent image
+  docker_image:
+    name: "{{ jenkins_python_agent_image_name | default('jenkins-python-agent') }}"
+    build:
+      path: "{{ jenkins_python_agent_dockerfile_dir | default('/tmp/jenkins-python-agent') }}"
+      dockerfile: Dockerfile.python-agent
+    source: build
+    state: present
+    force_source: yes
+  listen: "build python agent image"
+
+- name: build nodejs agent image
+  docker_image:
+    name: "{{ jenkins_nodejs_agent_image_name | default('jenkins-nodejs-agent') }}"
+    build:
+      path: "{{ jenkins_nodejs_agent_dockerfile_dir | default('/tmp/jenkins-nodejs-agent') }}"
+      dockerfile: Dockerfile.nodejs-agent
+    source: build
+    state: present
+    force_source: yes
+  listen: "build nodejs agent image"

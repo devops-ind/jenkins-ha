@@ -1,0 +1,40 @@
+# Jenkins system logs logrotate configuration
+# Managed by Ansible - DO NOT EDIT MANUALLY
+
+/var/log/jenkins*.log {
+    daily
+    missingok
+    rotate {{ common_log_retention_days }}
+    compress
+    delaycompress
+    notifempty
+    create 0644 {{ common_monitoring_user }} {{ common_monitoring_user }}
+    copytruncate
+    maxage {{ common_log_retention_days }}
+    postrotate
+        /bin/systemctl reload rsyslog > /dev/null 2>&1 || true
+    endscript
+}
+
+# System logs for Jenkins infrastructure
+/var/log/ansible*.log {
+    weekly
+    missingok
+    rotate 4
+    compress
+    delaycompress
+    notifempty
+    create 0644 root root
+}
+
+# Application specific logs
+/var/log/jenkins-ha/*.log {
+    daily
+    missingok
+    rotate {{ common_log_retention_days }}
+    compress
+    delaycompress
+    notifempty
+    create 0644 {{ common_monitoring_user }} {{ common_monitoring_user }}
+    copytruncate
+}

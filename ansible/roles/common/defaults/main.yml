@@ -49,3 +49,23 @@ common_ntp_servers:
   - "1.pool.ntp.org"
   - "2.pool.ntp.org"
   - "3.pool.ntp.org"
+
+# NTP service name mapping by OS
+ntp_service_name: >-
+  {%- if ansible_os_family == 'Debian' -%}
+    {%- if ansible_distribution_major_version|int >= 16 -%}
+      systemd-timesyncd
+    {%- else -%}
+      ntp
+    {%- endif -%}
+  {%- elif ansible_os_family == 'RedHat' -%}
+    {%- if ansible_distribution_major_version|int >= 8 -%}
+      chronyd
+    {%- else -%}
+      ntpd
+    {%- endif -%}
+  {%- elif ansible_os_family == 'Darwin' -%}
+    
+  {%- else -%}
+    ntpd
+  {%- endif -%}

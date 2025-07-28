@@ -5,7 +5,7 @@
 - name: Local DevContainer Jenkins Infrastructure Deployment
   hosts: localhost
   connection: local
-  become: no
+  become: yes
   gather_facts: yes
   vars:
     deployment_environment: "local"
@@ -52,6 +52,7 @@
   roles:
     - role: common
       tags: ['common', 'bootstrap']
+      become: yes
       
     - role: docker
       tags: ['docker', 'containers']
