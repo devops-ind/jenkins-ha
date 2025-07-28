@@ -11,7 +11,7 @@ jenkins_master_port: 8080
 jenkins_agent_port: 50000
 
 # Default paths - should be overridden in environment-specific configs
-jenkins_home_dir: "/opt/jenkins"
+jenkins_home_dir: "/var/jenkins"
 jenkins_user: "jenkins"
 jenkins_group: "jenkins"
 jenkins_uid: 1000

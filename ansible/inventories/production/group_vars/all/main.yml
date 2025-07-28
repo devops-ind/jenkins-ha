@@ -18,7 +18,7 @@ monitoring_network_name: "monitoring-prod-net"
 monitoring_network_subnet: "172.21.0.0/16"
 
 # Production storage configuration
-jenkins_home_dir: "/opt/jenkins"
+jenkins_home_dir: "/var/jenkins"
 jenkins_data_dir: "/var/lib/jenkins"
 backup_location: "/backup/jenkins"
 shared_storage_mount: "/shared"

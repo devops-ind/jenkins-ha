@@ -8,7 +8,7 @@ jenkins_user: "jenkins"
 jenkins_group: "jenkins"
 jenkins_uid: 1000
 jenkins_gid: 1000
-jenkins_home_dir: "/opt/jenkins"
+jenkins_home_dir: "/var/jenkins"
 jenkins_port: 8080
 jenkins_agent_port: 50000
 jenkins_context_path: ""

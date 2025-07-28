@@ -39,7 +39,7 @@
       loop:
         - /var/lib/jenkins
         - /var/log/jenkins
-        - /opt/jenkins
+        - /var/jenkins
         - /etc/jenkins
         
     - name: Configure system limits for jenkins

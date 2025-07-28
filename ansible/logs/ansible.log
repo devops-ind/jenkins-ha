@@ -1,0 +1,491 @@
+2025-07-28 14:06:07,247 p=2472 u=ansible n=ansible | [WARNING]: Found both group and host with same name: localhost
+
+2025-07-28 14:06:07,449 p=2472 u=ansible n=ansible | PLAY [Local DevContainer Jenkins Infrastructure Deployment] ****************************************************************************************************************************************************
+2025-07-28 14:06:07,472 p=2472 u=ansible n=ansible | TASK [Gathering Facts] *****************************************************************************************************************************************************************************************
+2025-07-28 14:06:07,472 p=2472 u=ansible n=ansible | Monday 28 July 2025  14:06:07 +0000 (0:00:00.025)       0:00:00.025 *********** 
+2025-07-28 14:06:08,189 p=2472 u=ansible n=ansible | ok: [localhost]
+2025-07-28 14:06:08,193 p=2472 u=ansible n=ansible | TASK [Display local deployment information] ********************************************************************************************************************************************************************
+2025-07-28 14:06:08,194 p=2472 u=ansible n=ansible | Monday 28 July 2025  14:06:08 +0000 (0:00:00.721)       0:00:00.747 *********** 
+2025-07-28 14:06:08,221 p=2472 u=ansible n=ansible | ok: [localhost] => {
+    "msg": "🚀 Starting Local DevContainer Deployment\n\n📋 Configuration:\nEnvironment: local\nMode: devcontainer\nJenkins URL: http://localhost:8080\nGrafana URL: http://localhost:3000\nPrometheus URL: http://localhost:9090\nHarbor URL: http://localhost:8082\n\n🔧 Services to Deploy:\n• Jenkins Master (2g memory)\n• Jenkins Agents (DIND, Maven, Python, Node.js)\n• Monitoring Stack (Prometheus, Grafana)\n• Harbor Registry (if enabled)\n• Backup System (if enabled)\n"
+}
+2025-07-28 14:06:08,225 p=2472 u=ansible n=ansible | TASK [Check Docker availability] *******************************************************************************************************************************************************************************
+2025-07-28 14:06:08,226 p=2472 u=ansible n=ansible | Monday 28 July 2025  14:06:08 +0000 (0:00:00.031)       0:00:00.779 *********** 
+2025-07-28 14:06:08,732 p=2472 u=ansible n=ansible | ok: [localhost]
+2025-07-28 14:06:08,737 p=2472 u=ansible n=ansible | TASK [Ensure required directories exist] ***********************************************************************************************************************************************************************
+2025-07-28 14:06:08,737 p=2472 u=ansible n=ansible | Monday 28 July 2025  14:06:08 +0000 (0:00:00.511)       0:00:01.291 *********** 
+2025-07-28 14:06:08,998 p=2472 u=ansible n=ansible | ok: [localhost] => (item=/tmp/jenkins-backup)
+2025-07-28 14:06:09,158 p=2472 u=ansible n=ansible | ok: [localhost] => (item=/tmp/jenkins-backup-staging)
+2025-07-28 14:06:09,311 p=2472 u=ansible n=ansible | ok: [localhost] => (item=/tmp/shared)
+2025-07-28 14:06:09,460 p=2472 u=ansible n=ansible | failed: [localhost] (item=/opt/jenkins) => {"ansible_loop_var": "item", "changed": false, "item": "/opt/jenkins", "msg": "There was an issue creating /opt/jenkins as requested: [Errno 13] Permission denied: b'/opt/jenkins'", "path": "/opt/jenkins"}
+2025-07-28 14:06:09,464 p=2472 u=ansible n=ansible | PLAY RECAP *****************************************************************************************************************************************************************************************************
+2025-07-28 14:06:09,464 p=2472 u=ansible n=ansible | localhost                  : ok=3    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+2025-07-28 14:06:09,464 p=2472 u=ansible n=ansible | TASKS RECAP ****************************************************************************************************************************************************************************************************
+2025-07-28 14:06:09,464 p=2472 u=ansible n=ansible | Monday 28 July 2025  14:06:09 +0000 (0:00:00.727)       0:00:02.018 *********** 
+2025-07-28 14:06:09,465 p=2472 u=ansible n=ansible | =============================================================================== 
+2025-07-28 14:06:09,465 p=2472 u=ansible n=ansible | Ensure required directories exist ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- 0.73s
+2025-07-28 14:06:09,465 p=2472 u=ansible n=ansible | Gathering Facts ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- 0.72s
+2025-07-28 14:06:09,465 p=2472 u=ansible n=ansible | Check Docker availability ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- 0.51s
+2025-07-28 14:06:09,466 p=2472 u=ansible n=ansible | Display local deployment information -------------------------------------------------------------------------------------------------------------------------------------------------------------------- 0.03s
+2025-07-28 14:06:09,466 p=2472 u=ansible n=ansible | PLAYBOOK RECAP *************************************************************************************************************************************************************************************************
+2025-07-28 14:06:09,466 p=2472 u=ansible n=ansible | Playbook run took 0 days, 0 hours, 0 minutes, 2 seconds
+
+2025-07-28 14:06:17,640 p=2753 u=ansible n=ansible | ansible-playbook [core 2.16.3]
+  config file = /home/ansible/.ansible.cfg
+  configured module search path = ['/home/ansible/.ansible/plugins/modules', '/usr/share/ansible/plugins/modules']
+  ansible python module location = /usr/lib/python3/dist-packages/ansible
+  ansible collection location = /home/ansible/.ansible/collections:/usr/share/ansible/collections
+  executable location = /usr/bin/ansible-playbook
+  python version = 3.12.3 (main, Jun 18 2025, 17:59:45) [GCC 13.3.0] (/usr/bin/python3)
+  jinja version = 3.1.2
+  libyaml = True
+2025-07-28 14:06:17,640 p=2753 u=ansible n=ansible | Using /home/ansible/.ansible.cfg as config file
+2025-07-28 14:06:17,753 p=2753 u=ansible n=ansible | host_list declined parsing /workspace/ansible/inventories/local/hosts.yml as it did not pass its verify_file() method
+2025-07-28 14:06:17,754 p=2753 u=ansible n=ansible | script declined parsing /workspace/ansible/inventories/local/hosts.yml as it did not pass its verify_file() method
+2025-07-28 14:06:17,760 p=2753 u=ansible n=ansible | Parsed /workspace/ansible/inventories/local/hosts.yml inventory source with yaml plugin
+2025-07-28 14:06:17,761 p=2753 u=ansible n=ansible | [WARNING]: Found both group and host with same name: localhost
+
+2025-07-28 14:06:17,879 p=2753 u=ansible n=ansible | redirecting (type: modules) ansible.builtin.locale_gen to community.general.locale_gen
+2025-07-28 14:06:17,890 p=2753 u=ansible n=ansible | redirecting (type: modules) ansible.builtin.ufw to community.general.ufw
+2025-07-28 14:06:17,892 p=2753 u=ansible n=ansible | redirecting (type: modules) ansible.builtin.ufw to community.general.ufw
+2025-07-28 14:06:17,893 p=2753 u=ansible n=ansible | redirecting (type: modules) ansible.builtin.ufw to community.general.ufw
+2025-07-28 14:06:17,903 p=2753 u=ansible n=ansible | redirecting (type: modules) ansible.builtin.docker_network to community.docker.docker_network
+2025-07-28 14:06:17,905 p=2753 u=ansible n=ansible | redirecting (type: modules) ansible.builtin.docker_volume to community.docker.docker_volume
+2025-07-28 14:06:17,955 p=2753 u=ansible n=ansible | redirecting (type: modules) ansible.builtin.mount to ansible.posix.mount
+2025-07-28 14:06:17,956 p=2753 u=ansible n=ansible | redirecting (type: modules) ansible.builtin.mount to ansible.posix.mount
+2025-07-28 14:06:17,970 p=2753 u=ansible n=ansible | redirecting (type: callback) ansible.builtin.profile_tasks to ansible.posix.profile_tasks
+2025-07-28 14:06:17,971 p=2753 u=ansible n=ansible | redirecting (type: callback) ansible.builtin.timer to ansible.posix.timer
+2025-07-28 14:06:17,971 p=2753 u=ansible n=ansible | Skipping callback 'default', as we already have a stdout callback.
+2025-07-28 14:06:17,972 p=2753 u=ansible n=ansible | Skipping callback 'minimal', as we already have a stdout callback.
+2025-07-28 14:06:17,972 p=2753 u=ansible n=ansible | Skipping callback 'oneline', as we already have a stdout callback.
+2025-07-28 14:06:17,972 p=2753 u=ansible n=ansible | PLAYBOOK: deploy-local.yml *************************************************************************************************************************************************************************************
+2025-07-28 14:06:17,973 p=2753 u=ansible n=ansible | 1 plays in ansible/deploy-local.yml
+2025-07-28 14:06:17,974 p=2753 u=ansible n=ansible | PLAY [Local DevContainer Jenkins Infrastructure Deployment] ****************************************************************************************************************************************************
+2025-07-28 14:06:17,999 p=2753 u=ansible n=ansible | TASK [Gathering Facts] *****************************************************************************************************************************************************************************************
+2025-07-28 14:06:18,000 p=2753 u=ansible n=ansible | Monday 28 July 2025  14:06:17 +0000 (0:00:00.029)       0:00:00.029 *********** 
+2025-07-28 14:06:18,009 p=2753 u=ansible n=ansible | <localhost> ESTABLISH LOCAL CONNECTION FOR USER: ansible
+2025-07-28 14:06:18,010 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'echo ~ansible && sleep 0'
+2025-07-28 14:06:18,013 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c '( umask 77 && mkdir -p "` echo /home/ansible/.ansible/tmp `"&& mkdir "` echo /home/ansible/.ansible/tmp/ansible-tmp-1753711578.0123203-2760-145141465025303 `" && echo ansible-tmp-1753711578.0123203-2760-145141465025303="` echo /home/ansible/.ansible/tmp/ansible-tmp-1753711578.0123203-2760-145141465025303 `" ) && sleep 0'
+2025-07-28 14:06:18,186 p=2753 u=ansible n=ansible | Using module file /usr/lib/python3/dist-packages/ansible/modules/setup.py
+2025-07-28 14:06:18,187 p=2753 u=ansible n=ansible | <localhost> PUT /home/ansible/.ansible/tmp/ansible-local-2753dn7oh116/tmppv6c3tsw TO /home/ansible/.ansible/tmp/ansible-tmp-1753711578.0123203-2760-145141465025303/AnsiballZ_setup.py
+2025-07-28 14:06:18,188 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'chmod u+x /home/ansible/.ansible/tmp/ansible-tmp-1753711578.0123203-2760-145141465025303/ /home/ansible/.ansible/tmp/ansible-tmp-1753711578.0123203-2760-145141465025303/AnsiballZ_setup.py && sleep 0'
+2025-07-28 14:06:18,190 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c '/usr/bin/python3 /home/ansible/.ansible/tmp/ansible-tmp-1753711578.0123203-2760-145141465025303/AnsiballZ_setup.py && sleep 0'
+2025-07-28 14:06:18,726 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'rm -f -r /home/ansible/.ansible/tmp/ansible-tmp-1753711578.0123203-2760-145141465025303/ > /dev/null 2>&1 && sleep 0'
+2025-07-28 14:06:18,734 p=2753 u=ansible n=ansible | ok: [localhost]
+2025-07-28 14:06:18,738 p=2753 u=ansible n=ansible | TASK [Display local deployment information] ********************************************************************************************************************************************************************
+2025-07-28 14:06:18,738 p=2753 u=ansible n=ansible | Monday 28 July 2025  14:06:18 +0000 (0:00:00.738)       0:00:00.768 *********** 
+2025-07-28 14:06:18,765 p=2753 u=ansible n=ansible | ok: [localhost] => {
+    "msg": "🚀 Starting Local DevContainer Deployment\n\n📋 Configuration:\nEnvironment: local\nMode: devcontainer\nJenkins URL: http://localhost:8080\nGrafana URL: http://localhost:3000\nPrometheus URL: http://localhost:9090\nHarbor URL: http://localhost:8082\n\n🔧 Services to Deploy:\n• Jenkins Master (2g memory)\n• Jenkins Agents (DIND, Maven, Python, Node.js)\n• Monitoring Stack (Prometheus, Grafana)\n• Harbor Registry (if enabled)\n• Backup System (if enabled)\n"
+}
+2025-07-28 14:06:18,768 p=2753 u=ansible n=ansible | TASK [Check Docker availability] *******************************************************************************************************************************************************************************
+2025-07-28 14:06:18,769 p=2753 u=ansible n=ansible | Monday 28 July 2025  14:06:18 +0000 (0:00:00.030)       0:00:00.798 *********** 
+2025-07-28 14:06:18,775 p=2753 u=ansible n=ansible | <localhost> ESTABLISH LOCAL CONNECTION FOR USER: ansible
+2025-07-28 14:06:18,776 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'echo ~ansible && sleep 0'
+2025-07-28 14:06:18,777 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c '( umask 77 && mkdir -p "` echo /home/ansible/.ansible/tmp `"&& mkdir "` echo /home/ansible/.ansible/tmp/ansible-tmp-1753711578.7775936-2836-128843303367688 `" && echo ansible-tmp-1753711578.7775936-2836-128843303367688="` echo /home/ansible/.ansible/tmp/ansible-tmp-1753711578.7775936-2836-128843303367688 `" ) && sleep 0'
+2025-07-28 14:06:18,852 p=2753 u=ansible n=ansible | Using module file /usr/lib/python3/dist-packages/ansible/modules/command.py
+2025-07-28 14:06:18,852 p=2753 u=ansible n=ansible | <localhost> PUT /home/ansible/.ansible/tmp/ansible-local-2753dn7oh116/tmpkf_rg6lz TO /home/ansible/.ansible/tmp/ansible-tmp-1753711578.7775936-2836-128843303367688/AnsiballZ_command.py
+2025-07-28 14:06:18,853 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'chmod u+x /home/ansible/.ansible/tmp/ansible-tmp-1753711578.7775936-2836-128843303367688/ /home/ansible/.ansible/tmp/ansible-tmp-1753711578.7775936-2836-128843303367688/AnsiballZ_command.py && sleep 0'
+2025-07-28 14:06:18,855 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c '/usr/bin/python3 /home/ansible/.ansible/tmp/ansible-tmp-1753711578.7775936-2836-128843303367688/AnsiballZ_command.py && sleep 0'
+2025-07-28 14:06:19,236 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'rm -f -r /home/ansible/.ansible/tmp/ansible-tmp-1753711578.7775936-2836-128843303367688/ > /dev/null 2>&1 && sleep 0'
+2025-07-28 14:06:19,242 p=2753 u=ansible n=ansible | ok: [localhost] => {
+    "changed": false,
+    "cmd": [
+        "podman",
+        "info"
+    ],
+    "delta": "0:00:00.245795",
+    "end": "2025-07-28 14:06:19.223356",
+    "failed_when_result": false,
+    "invocation": {
+        "module_args": {
+            "_raw_params": "podman info",
+            "_uses_shell": false,
+            "argv": null,
+            "chdir": null,
+            "creates": null,
+            "executable": null,
+            "expand_argument_vars": true,
+            "removes": null,
+            "stdin": null,
+            "stdin_add_newline": true,
+            "strip_empty_ends": true
+        }
+    },
+    "msg": "",
+    "rc": 0,
+    "start": "2025-07-28 14:06:18.977561",
+    "stderr": "",
+    "stderr_lines": [],
+    "stdout": "host:\n  arch: arm64\n  buildahVersion: 1.33.7\n  cgroupControllers:\n  - cpuset\n  - cpu\n  - io\n  - memory\n  - pids\n  - misc\n  cgroupManager: cgroupfs\n  cgroupVersion: v2\n  conmon:\n    package: conmon_2.1.10+ds1-1build2_arm64\n    path: /usr/bin/conmon\n    version: 'conmon version 2.1.10, commit: unknown'\n  cpuUtilization:\n    idlePercent: 96.2\n    systemPercent: 1.46\n    userPercent: 2.33\n  cpus: 2\n  databaseBackend: sqlite\n  distribution:\n    codename: noble\n    distribution: ubuntu\n    version: \"24.04\"\n  eventLogger: file\n  freeLocks: 2048\n  hostname: 9c2218b0abfb\n  idMappings:\n    gidmap:\n    - container_id: 0\n      host_id: 1001\n      size: 1\n    - container_id: 1\n      host_id: 165536\n      size: 65536\n    uidmap:\n    - container_id: 0\n      host_id: 1001\n      size: 1\n    - container_id: 1\n      host_id: 165536\n      size: 65536\n  kernel: 6.12.13-200.fc41.aarch64\n  linkmode: dynamic\n  logDriver: k8s-file\n  memFree: 791633920\n  memTotal: 1898315776\n  networkBackend: netavark\n  networkBackendInfo:\n    backend: netavark\n    dns:\n      package: aardvark-dns_1.4.0-5_arm64\n      path: /usr/lib/podman/aardvark-dns\n      version: aardvark-dns 1.4.0\n    package: netavark_1.4.0-4_arm64\n    path: /usr/lib/podman/netavark\n    version: netavark 1.4.0\n  ociRuntime:\n    name: crun\n    package: crun_1.14.1-1_arm64\n    path: /usr/bin/crun\n    version: |-\n      crun version 1.14.1\n      commit: de537a7965bfbe9992e2cfae0baeb56a08128171\n      rundir: /tmp/podman-run-1001/crun\n      spec: 1.0.0\n      +SYSTEMD +SELINUX +APPARMOR +CAP +SECCOMP +EBPF +WASM:wasmedge +YAJL\n  os: linux\n  pasta:\n    executable: /usr/bin/pasta\n    package: passt_0.0~git20240220.1e6f92b-1_arm64\n    version: |\n      pasta unknown version\n      Copyright Red Hat\n      GNU General Public License, version 2 or later\n        <https://www.gnu.org/licenses/old-licenses/gpl-2.0.html>\n      This is free software: you are free to change and redistribute it.\n      There is NO WARRANTY, to the extent permitted by law.\n  remoteSocket:\n    exists: false\n    path: /tmp/podman-run-1001/podman/podman.sock\n  security:\n    apparmorEnabled: false\n    capabilities: CAP_CHOWN,CAP_DAC_OVERRIDE,CAP_FOWNER,CAP_FSETID,CAP_KILL,CAP_NET_BIND_SERVICE,CAP_SETFCAP,CAP_SETGID,CAP_SETPCAP,CAP_SETUID,CAP_SYS_CHROOT\n    rootless: true\n    seccompEnabled: true\n    seccompProfilePath: /usr/share/containers/seccomp.json\n    selinuxEnabled: false\n  serviceIsRemote: false\n  slirp4netns:\n    executable: /usr/bin/slirp4netns\n    package: slirp4netns_1.2.1-1build2_arm64\n    version: |-\n      slirp4netns version 1.2.1\n      commit: 09e31e92fa3d2a1d3ca261adaeb012c8d75a8194\n      libslirp: 4.7.0\n      SLIRP_CONFIG_VERSION_MAX: 4\n      libseccomp: 2.5.5\n  swapFree: 0\n  swapTotal: 0\n  uptime: 10h 6m 42.00s (Approximately 0.42 days)\n  variant: v8\nplugins:\n  authorization: null\n  log:\n  - k8s-file\n  - none\n  - passthrough\n  - journald\n  network:\n  - bridge\n  - macvlan\n  - ipvlan\n  volume:\n  - local\nregistries: {}\nstore:\n  configFile: /home/ansible/.config/containers/storage.conf\n  containerStore:\n    number: 0\n    paused: 0\n    running: 0\n    stopped: 0\n  graphDriverName: overlay\n  graphOptions: {}\n  graphRoot: /home/ansible/.local/share/containers/storage\n  graphRootAllocated: 58097610752\n  graphRootUsed: 13117210624\n  graphStatus:\n    Backing Filesystem: overlayfs\n    Native Overlay Diff: \"false\"\n    Supports d_type: \"true\"\n    Supports shifting: \"true\"\n    Supports volatile: \"true\"\n    Using metacopy: \"false\"\n  imageCopyTmpDir: /var/tmp\n  imageStore:\n    number: 0\n  runRoot: /tmp/containers-user-1001/containers\n  transientStore: false\n  volumePath: /home/ansible/.local/share/containers/storage/volumes\nversion:\n  APIVersion: 4.9.3\n  Built: 0\n  BuiltTime: Thu Jan  1 00:00:00 1970\n  GitCommit: \"\"\n  GoVersion: go1.22.2\n  Os: linux\n  OsArch: linux/arm64\n  Version: 4.9.3",
+    "stdout_lines": [
+        "host:",
+        "  arch: arm64",
+        "  buildahVersion: 1.33.7",
+        "  cgroupControllers:",
+        "  - cpuset",
+        "  - cpu",
+        "  - io",
+        "  - memory",
+        "  - pids",
+        "  - misc",
+        "  cgroupManager: cgroupfs",
+        "  cgroupVersion: v2",
+        "  conmon:",
+        "    package: conmon_2.1.10+ds1-1build2_arm64",
+        "    path: /usr/bin/conmon",
+        "    version: 'conmon version 2.1.10, commit: unknown'",
+        "  cpuUtilization:",
+        "    idlePercent: 96.2",
+        "    systemPercent: 1.46",
+        "    userPercent: 2.33",
+        "  cpus: 2",
+        "  databaseBackend: sqlite",
+        "  distribution:",
+        "    codename: noble",
+        "    distribution: ubuntu",
+        "    version: \"24.04\"",
+        "  eventLogger: file",
+        "  freeLocks: 2048",
+        "  hostname: 9c2218b0abfb",
+        "  idMappings:",
+        "    gidmap:",
+        "    - container_id: 0",
+        "      host_id: 1001",
+        "      size: 1",
+        "    - container_id: 1",
+        "      host_id: 165536",
+        "      size: 65536",
+        "    uidmap:",
+        "    - container_id: 0",
+        "      host_id: 1001",
+        "      size: 1",
+        "    - container_id: 1",
+        "      host_id: 165536",
+        "      size: 65536",
+        "  kernel: 6.12.13-200.fc41.aarch64",
+        "  linkmode: dynamic",
+        "  logDriver: k8s-file",
+        "  memFree: 791633920",
+        "  memTotal: 1898315776",
+        "  networkBackend: netavark",
+        "  networkBackendInfo:",
+        "    backend: netavark",
+        "    dns:",
+        "      package: aardvark-dns_1.4.0-5_arm64",
+        "      path: /usr/lib/podman/aardvark-dns",
+        "      version: aardvark-dns 1.4.0",
+        "    package: netavark_1.4.0-4_arm64",
+        "    path: /usr/lib/podman/netavark",
+        "    version: netavark 1.4.0",
+        "  ociRuntime:",
+        "    name: crun",
+        "    package: crun_1.14.1-1_arm64",
+        "    path: /usr/bin/crun",
+        "    version: |-",
+        "      crun version 1.14.1",
+        "      commit: de537a7965bfbe9992e2cfae0baeb56a08128171",
+        "      rundir: /tmp/podman-run-1001/crun",
+        "      spec: 1.0.0",
+        "      +SYSTEMD +SELINUX +APPARMOR +CAP +SECCOMP +EBPF +WASM:wasmedge +YAJL",
+        "  os: linux",
+        "  pasta:",
+        "    executable: /usr/bin/pasta",
+        "    package: passt_0.0~git20240220.1e6f92b-1_arm64",
+        "    version: |",
+        "      pasta unknown version",
+        "      Copyright Red Hat",
+        "      GNU General Public License, version 2 or later",
+        "        <https://www.gnu.org/licenses/old-licenses/gpl-2.0.html>",
+        "      This is free software: you are free to change and redistribute it.",
+        "      There is NO WARRANTY, to the extent permitted by law.",
+        "  remoteSocket:",
+        "    exists: false",
+        "    path: /tmp/podman-run-1001/podman/podman.sock",
+        "  security:",
+        "    apparmorEnabled: false",
+        "    capabilities: CAP_CHOWN,CAP_DAC_OVERRIDE,CAP_FOWNER,CAP_FSETID,CAP_KILL,CAP_NET_BIND_SERVICE,CAP_SETFCAP,CAP_SETGID,CAP_SETPCAP,CAP_SETUID,CAP_SYS_CHROOT",
+        "    rootless: true",
+        "    seccompEnabled: true",
+        "    seccompProfilePath: /usr/share/containers/seccomp.json",
+        "    selinuxEnabled: false",
+        "  serviceIsRemote: false",
+        "  slirp4netns:",
+        "    executable: /usr/bin/slirp4netns",
+        "    package: slirp4netns_1.2.1-1build2_arm64",
+        "    version: |-",
+        "      slirp4netns version 1.2.1",
+        "      commit: 09e31e92fa3d2a1d3ca261adaeb012c8d75a8194",
+        "      libslirp: 4.7.0",
+        "      SLIRP_CONFIG_VERSION_MAX: 4",
+        "      libseccomp: 2.5.5",
+        "  swapFree: 0",
+        "  swapTotal: 0",
+        "  uptime: 10h 6m 42.00s (Approximately 0.42 days)",
+        "  variant: v8",
+        "plugins:",
+        "  authorization: null",
+        "  log:",
+        "  - k8s-file",
+        "  - none",
+        "  - passthrough",
+        "  - journald",
+        "  network:",
+        "  - bridge",
+        "  - macvlan",
+        "  - ipvlan",
+        "  volume:",
+        "  - local",
+        "registries: {}",
+        "store:",
+        "  configFile: /home/ansible/.config/containers/storage.conf",
+        "  containerStore:",
+        "    number: 0",
+        "    paused: 0",
+        "    running: 0",
+        "    stopped: 0",
+        "  graphDriverName: overlay",
+        "  graphOptions: {}",
+        "  graphRoot: /home/ansible/.local/share/containers/storage",
+        "  graphRootAllocated: 58097610752",
+        "  graphRootUsed: 13117210624",
+        "  graphStatus:",
+        "    Backing Filesystem: overlayfs",
+        "    Native Overlay Diff: \"false\"",
+        "    Supports d_type: \"true\"",
+        "    Supports shifting: \"true\"",
+        "    Supports volatile: \"true\"",
+        "    Using metacopy: \"false\"",
+        "  imageCopyTmpDir: /var/tmp",
+        "  imageStore:",
+        "    number: 0",
+        "  runRoot: /tmp/containers-user-1001/containers",
+        "  transientStore: false",
+        "  volumePath: /home/ansible/.local/share/containers/storage/volumes",
+        "version:",
+        "  APIVersion: 4.9.3",
+        "  Built: 0",
+        "  BuiltTime: Thu Jan  1 00:00:00 1970",
+        "  GitCommit: \"\"",
+        "  GoVersion: go1.22.2",
+        "  Os: linux",
+        "  OsArch: linux/arm64",
+        "  Version: 4.9.3"
+    ]
+}
+2025-07-28 14:06:19,246 p=2753 u=ansible n=ansible | TASK [Ensure required directories exist] ***********************************************************************************************************************************************************************
+2025-07-28 14:06:19,246 p=2753 u=ansible n=ansible | Monday 28 July 2025  14:06:19 +0000 (0:00:00.477)       0:00:01.276 *********** 
+2025-07-28 14:06:19,271 p=2753 u=ansible n=ansible | <localhost> ESTABLISH LOCAL CONNECTION FOR USER: ansible
+2025-07-28 14:06:19,272 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'echo ~ansible && sleep 0'
+2025-07-28 14:06:19,273 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c '( umask 77 && mkdir -p "` echo /home/ansible/.ansible/tmp `"&& mkdir "` echo /home/ansible/.ansible/tmp/ansible-tmp-1753711579.273357-2906-97577717807171 `" && echo ansible-tmp-1753711579.273357-2906-97577717807171="` echo /home/ansible/.ansible/tmp/ansible-tmp-1753711579.273357-2906-97577717807171 `" ) && sleep 0'
+2025-07-28 14:06:19,356 p=2753 u=ansible n=ansible | Using module file /usr/lib/python3/dist-packages/ansible/modules/file.py
+2025-07-28 14:06:19,357 p=2753 u=ansible n=ansible | <localhost> PUT /home/ansible/.ansible/tmp/ansible-local-2753dn7oh116/tmpz4byg5o1 TO /home/ansible/.ansible/tmp/ansible-tmp-1753711579.273357-2906-97577717807171/AnsiballZ_file.py
+2025-07-28 14:06:19,358 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'chmod u+x /home/ansible/.ansible/tmp/ansible-tmp-1753711579.273357-2906-97577717807171/ /home/ansible/.ansible/tmp/ansible-tmp-1753711579.273357-2906-97577717807171/AnsiballZ_file.py && sleep 0'
+2025-07-28 14:06:19,360 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c '/usr/bin/python3 /home/ansible/.ansible/tmp/ansible-tmp-1753711579.273357-2906-97577717807171/AnsiballZ_file.py && sleep 0'
+2025-07-28 14:06:19,506 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'rm -f -r /home/ansible/.ansible/tmp/ansible-tmp-1753711579.273357-2906-97577717807171/ > /dev/null 2>&1 && sleep 0'
+2025-07-28 14:06:19,510 p=2753 u=ansible n=ansible | ok: [localhost] => (item=/tmp/jenkins-backup) => {
+    "ansible_loop_var": "item",
+    "changed": false,
+    "diff": {
+        "after": {
+            "path": "/tmp/jenkins-backup"
+        },
+        "before": {
+            "path": "/tmp/jenkins-backup"
+        }
+    },
+    "gid": 1001,
+    "group": "ansible",
+    "invocation": {
+        "module_args": {
+            "_diff_peek": null,
+            "_original_basename": null,
+            "access_time": null,
+            "access_time_format": "%Y%m%d%H%M.%S",
+            "attributes": null,
+            "follow": true,
+            "force": false,
+            "group": null,
+            "mode": "0755",
+            "modification_time": null,
+            "modification_time_format": "%Y%m%d%H%M.%S",
+            "owner": null,
+            "path": "/tmp/jenkins-backup",
+            "recurse": false,
+            "selevel": null,
+            "serole": null,
+            "setype": null,
+            "seuser": null,
+            "src": null,
+            "state": "directory",
+            "unsafe_writes": false
+        }
+    },
+    "item": "/tmp/jenkins-backup",
+    "mode": "0755",
+    "owner": "ansible",
+    "path": "/tmp/jenkins-backup",
+    "size": 40,
+    "state": "directory",
+    "uid": 1001
+}
+2025-07-28 14:06:19,511 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'echo ~ansible && sleep 0'
+2025-07-28 14:06:19,513 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c '( umask 77 && mkdir -p "` echo /home/ansible/.ansible/tmp `"&& mkdir "` echo /home/ansible/.ansible/tmp/ansible-tmp-1753711579.5129633-2906-123476564617673 `" && echo ansible-tmp-1753711579.5129633-2906-123476564617673="` echo /home/ansible/.ansible/tmp/ansible-tmp-1753711579.5129633-2906-123476564617673 `" ) && sleep 0'
+2025-07-28 14:06:19,517 p=2753 u=ansible n=ansible | Using module file /usr/lib/python3/dist-packages/ansible/modules/file.py
+2025-07-28 14:06:19,518 p=2753 u=ansible n=ansible | <localhost> PUT /home/ansible/.ansible/tmp/ansible-local-2753dn7oh116/tmpe02h5ubc TO /home/ansible/.ansible/tmp/ansible-tmp-1753711579.5129633-2906-123476564617673/AnsiballZ_file.py
+2025-07-28 14:06:19,518 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'chmod u+x /home/ansible/.ansible/tmp/ansible-tmp-1753711579.5129633-2906-123476564617673/ /home/ansible/.ansible/tmp/ansible-tmp-1753711579.5129633-2906-123476564617673/AnsiballZ_file.py && sleep 0'
+2025-07-28 14:06:19,520 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c '/usr/bin/python3 /home/ansible/.ansible/tmp/ansible-tmp-1753711579.5129633-2906-123476564617673/AnsiballZ_file.py && sleep 0'
+2025-07-28 14:06:19,660 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'rm -f -r /home/ansible/.ansible/tmp/ansible-tmp-1753711579.5129633-2906-123476564617673/ > /dev/null 2>&1 && sleep 0'
+2025-07-28 14:06:19,663 p=2753 u=ansible n=ansible | ok: [localhost] => (item=/tmp/jenkins-backup-staging) => {
+    "ansible_loop_var": "item",
+    "changed": false,
+    "diff": {
+        "after": {
+            "path": "/tmp/jenkins-backup-staging"
+        },
+        "before": {
+            "path": "/tmp/jenkins-backup-staging"
+        }
+    },
+    "gid": 1001,
+    "group": "ansible",
+    "invocation": {
+        "module_args": {
+            "_diff_peek": null,
+            "_original_basename": null,
+            "access_time": null,
+            "access_time_format": "%Y%m%d%H%M.%S",
+            "attributes": null,
+            "follow": true,
+            "force": false,
+            "group": null,
+            "mode": "0755",
+            "modification_time": null,
+            "modification_time_format": "%Y%m%d%H%M.%S",
+            "owner": null,
+            "path": "/tmp/jenkins-backup-staging",
+            "recurse": false,
+            "selevel": null,
+            "serole": null,
+            "setype": null,
+            "seuser": null,
+            "src": null,
+            "state": "directory",
+            "unsafe_writes": false
+        }
+    },
+    "item": "/tmp/jenkins-backup-staging",
+    "mode": "0755",
+    "owner": "ansible",
+    "path": "/tmp/jenkins-backup-staging",
+    "size": 40,
+    "state": "directory",
+    "uid": 1001
+}
+2025-07-28 14:06:19,665 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'echo ~ansible && sleep 0'
+2025-07-28 14:06:19,666 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c '( umask 77 && mkdir -p "` echo /home/ansible/.ansible/tmp `"&& mkdir "` echo /home/ansible/.ansible/tmp/ansible-tmp-1753711579.6667557-2906-255743261716364 `" && echo ansible-tmp-1753711579.6667557-2906-255743261716364="` echo /home/ansible/.ansible/tmp/ansible-tmp-1753711579.6667557-2906-255743261716364 `" ) && sleep 0'
+2025-07-28 14:06:19,670 p=2753 u=ansible n=ansible | Using module file /usr/lib/python3/dist-packages/ansible/modules/file.py
+2025-07-28 14:06:19,671 p=2753 u=ansible n=ansible | <localhost> PUT /home/ansible/.ansible/tmp/ansible-local-2753dn7oh116/tmpxuxej7hi TO /home/ansible/.ansible/tmp/ansible-tmp-1753711579.6667557-2906-255743261716364/AnsiballZ_file.py
+2025-07-28 14:06:19,671 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'chmod u+x /home/ansible/.ansible/tmp/ansible-tmp-1753711579.6667557-2906-255743261716364/ /home/ansible/.ansible/tmp/ansible-tmp-1753711579.6667557-2906-255743261716364/AnsiballZ_file.py && sleep 0'
+2025-07-28 14:06:19,673 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c '/usr/bin/python3 /home/ansible/.ansible/tmp/ansible-tmp-1753711579.6667557-2906-255743261716364/AnsiballZ_file.py && sleep 0'
+2025-07-28 14:06:19,811 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'rm -f -r /home/ansible/.ansible/tmp/ansible-tmp-1753711579.6667557-2906-255743261716364/ > /dev/null 2>&1 && sleep 0'
+2025-07-28 14:06:19,815 p=2753 u=ansible n=ansible | ok: [localhost] => (item=/tmp/shared) => {
+    "ansible_loop_var": "item",
+    "changed": false,
+    "diff": {
+        "after": {
+            "path": "/tmp/shared"
+        },
+        "before": {
+            "path": "/tmp/shared"
+        }
+    },
+    "gid": 1001,
+    "group": "ansible",
+    "invocation": {
+        "module_args": {
+            "_diff_peek": null,
+            "_original_basename": null,
+            "access_time": null,
+            "access_time_format": "%Y%m%d%H%M.%S",
+            "attributes": null,
+            "follow": true,
+            "force": false,
+            "group": null,
+            "mode": "0755",
+            "modification_time": null,
+            "modification_time_format": "%Y%m%d%H%M.%S",
+            "owner": null,
+            "path": "/tmp/shared",
+            "recurse": false,
+            "selevel": null,
+            "serole": null,
+            "setype": null,
+            "seuser": null,
+            "src": null,
+            "state": "directory",
+            "unsafe_writes": false
+        }
+    },
+    "item": "/tmp/shared",
+    "mode": "0755",
+    "owner": "ansible",
+    "path": "/tmp/shared",
+    "size": 40,
+    "state": "directory",
+    "uid": 1001
+}
+2025-07-28 14:06:19,816 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'echo ~ansible && sleep 0'
+2025-07-28 14:06:19,817 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c '( umask 77 && mkdir -p "` echo /home/ansible/.ansible/tmp `"&& mkdir "` echo /home/ansible/.ansible/tmp/ansible-tmp-1753711579.817822-2906-223179188781667 `" && echo ansible-tmp-1753711579.817822-2906-223179188781667="` echo /home/ansible/.ansible/tmp/ansible-tmp-1753711579.817822-2906-223179188781667 `" ) && sleep 0'
+2025-07-28 14:06:19,822 p=2753 u=ansible n=ansible | Using module file /usr/lib/python3/dist-packages/ansible/modules/file.py
+2025-07-28 14:06:19,822 p=2753 u=ansible n=ansible | <localhost> PUT /home/ansible/.ansible/tmp/ansible-local-2753dn7oh116/tmppwij7ggh TO /home/ansible/.ansible/tmp/ansible-tmp-1753711579.817822-2906-223179188781667/AnsiballZ_file.py
+2025-07-28 14:06:19,823 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'chmod u+x /home/ansible/.ansible/tmp/ansible-tmp-1753711579.817822-2906-223179188781667/ /home/ansible/.ansible/tmp/ansible-tmp-1753711579.817822-2906-223179188781667/AnsiballZ_file.py && sleep 0'
+2025-07-28 14:06:19,824 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c '/usr/bin/python3 /home/ansible/.ansible/tmp/ansible-tmp-1753711579.817822-2906-223179188781667/AnsiballZ_file.py && sleep 0'
+2025-07-28 14:06:19,964 p=2753 u=ansible n=ansible | <localhost> EXEC /bin/sh -c 'rm -f -r /home/ansible/.ansible/tmp/ansible-tmp-1753711579.817822-2906-223179188781667/ > /dev/null 2>&1 && sleep 0'
+2025-07-28 14:06:19,967 p=2753 u=ansible n=ansible | failed: [localhost] (item=/opt/jenkins) => {
+    "ansible_loop_var": "item",
+    "changed": false,
+    "invocation": {
+        "module_args": {
+            "_diff_peek": null,
+            "_original_basename": null,
+            "access_time": null,
+            "access_time_format": "%Y%m%d%H%M.%S",
+            "attributes": null,
+            "follow": true,
+            "force": false,
+            "group": null,
+            "mode": "0755",
+            "modification_time": null,
+            "modification_time_format": "%Y%m%d%H%M.%S",
+            "owner": null,
+            "path": "/opt/jenkins",
+            "recurse": false,
+            "selevel": null,
+            "serole": null,
+            "setype": null,
+            "seuser": null,
+            "src": null,
+            "state": "directory",
+            "unsafe_writes": false
+        }
+    },
+    "item": "/opt/jenkins",
+    "msg": "There was an issue creating /opt/jenkins as requested: [Errno 13] Permission denied: b'/opt/jenkins'",
+    "path": "/opt/jenkins"
+}
+2025-07-28 14:06:19,969 p=2753 u=ansible n=ansible | PLAY RECAP *****************************************************************************************************************************************************************************************************
+2025-07-28 14:06:19,969 p=2753 u=ansible n=ansible | localhost                  : ok=3    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+2025-07-28 14:06:19,970 p=2753 u=ansible n=ansible | TASKS RECAP ****************************************************************************************************************************************************************************************************
+2025-07-28 14:06:19,970 p=2753 u=ansible n=ansible | Monday 28 July 2025  14:06:19 +0000 (0:00:00.723)       0:00:01.999 *********** 
+2025-07-28 14:06:19,970 p=2753 u=ansible n=ansible | =============================================================================== 
+2025-07-28 14:06:19,970 p=2753 u=ansible n=ansible | Gathering Facts ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- 0.74s
+/workspace/ansible/deploy-local.yml:5 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+2025-07-28 14:06:19,971 p=2753 u=ansible n=ansible | Ensure required directories exist ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- 0.72s
+/workspace/ansible/deploy-local.yml:41 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+2025-07-28 14:06:19,971 p=2753 u=ansible n=ansible | Check Docker availability ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- 0.48s
+/workspace/ansible/deploy-local.yml:35 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+2025-07-28 14:06:19,971 p=2753 u=ansible n=ansible | Display local deployment information -------------------------------------------------------------------------------------------------------------------------------------------------------------------- 0.03s
+/workspace/ansible/deploy-local.yml:15 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+2025-07-28 14:06:19,971 p=2753 u=ansible n=ansible | PLAYBOOK RECAP *************************************************************************************************************************************************************************************************
+2025-07-28 14:06:19,972 p=2753 u=ansible n=ansible | Playbook run took 0 days, 0 hours, 0 minutes, 1 seconds
+
