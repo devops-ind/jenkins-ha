@@ -1,8 +1,80 @@
 ---
+# Backup Default Configuration
+# These are default values that can be overridden in environment-specific group_vars
+
+# Default backup system configuration
+backup_enabled: false
+backup_method: "tar"  # Options: tar, borg, rsync
+backup_compression: "gzip"
+
+# Default backup user and paths
+backup_user: "backup"
+backup_group: "backup"
+backup_uid: 2000
+backup_gid: 2000
+backup_home_dir: "/opt/backup"
+backup_local_dir: "/var/backups/jenkins"
+backup_mount_point: "/mnt/backup"
+
+# Default backup scheduling
+backup_full_schedule: "0 2 * * 0"    # Weekly full backup on Sunday
+backup_incremental_schedule: "0 2 * * 1-6"  # Daily incremental Mon-Sat
+backup_verify_schedule: "0 4 * * 0"  # Weekly verification on Sunday
+backup_cleanup_schedule: "0 3 * * 0" # Weekly cleanup on Sunday
+
+# Default retention policy
+backup_daily_retention: 7
+backup_weekly_retention: 4
+backup_monthly_retention: 12
+
+# Default backup components
+backup_jenkins_home: true
+backup_jenkins_jobs: true
+backup_jenkins_plugins: true
+backup_jenkins_secrets: true
+backup_docker_volumes: true
+backup_monitoring_data: false
+backup_system_configs: true
+
+# Default backup scripts and tools
 backup_script_path: "/usr/local/bin/jenkins-backup.sh"
 backup_log_file: "/var/log/jenkins-backup.log"
-backup_compression: "gzip"
+backup_notification_script: "/usr/local/bin/backup-notify.sh"
+
+# Default exclusion patterns
 backup_exclude_patterns:
   - "*.tmp"
-  - "workspace/*"
+  - "*.log"
+  - "workspace/*/target/*"
+  - "workspace/*/.git/*"
   - "caches/*"
+  - "logs/*"
+  - "temp/*"
+
+# Default backup storage settings
+backup_storage_type: "local"  # Options: local, nfs, cifs, s3
+backup_min_free_space_gb: 10
+backup_max_backup_size_gb: 100
+
+# Default backup verification settings
+backup_verify_enabled: true
+backup_integrity_check: true
+backup_test_restore: false
+
+# Default notification settings
+backup_notifications_enabled: false
+backup_notification_email: ""
+backup_slack_webhook: ""
+backup_notification_on_success: false
+backup_notification_on_failure: true
+
+# Default BorgBackup settings (when backup_method: borg)
+borg_passphrase: ""  # Should be overridden in vault
+borg_compression: "lz4"
+borg_encryption: "repokey-blake2"
+borg_checkpoint_interval: 1800
+
+# Default monitoring integration
+backup_monitoring_enabled: false
+backup_prometheus_metrics: false
+backup_grafana_dashboard: false

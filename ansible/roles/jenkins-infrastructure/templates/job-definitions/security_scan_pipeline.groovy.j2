@@ -109,76 +109,237 @@
             }
         }
         
-        stage('System Security Compliance') {
-            when {
-                anyOf {
-                    equals expected: 'full', actual: params.SCAN_TYPE
-                    equals expected: 'compliance-only', actual: params.SCAN_TYPE
-                }
-                expression { params.CHECK_COMPLIANCE }
-            }
+        stage('Execute Security Assessment with Ansible') {
             steps {
                 script {
-                    echo "📋 Checking system security compliance..."
+                    echo "🔒 Executing comprehensive security assessment using Ansible security role..."
                     
+                    // Create security inventory
+                    writeFile file: 'security_inventory', text: """
+[security_targets]
+{% for host in groups['jenkins_masters'] %}
+{{ host }} ansible_host={{ hostvars[host]['ansible_host'] }}
+{% endfor %}
+{% for host in groups['jenkins_agents'] %}
+{{ host }} ansible_host={{ hostvars[host]['ansible_host'] }}
+{% endfor %}
+{% for host in groups['monitoring'] %}
+{{ host }} ansible_host={{ hostvars[host]['ansible_host'] }}
+{% endfor %}
+
+[localhost]
+127.0.0.1 ansible_connection=local ansible_python_interpreter={{ ansible_playbook_python }}
+"""
+                    
+                    // Create comprehensive security playbook
+                    def playbookContent = """
+---
+- name: Execute Security Assessment and Hardening
+  hosts: security_targets,localhost
+  become: yes
+  gather_facts: yes
+  vars:
+    security_scan_type: "${params.SCAN_TYPE}"
+    security_scan_containers: ${params.SCAN_CONTAINERS}
+    security_check_compliance: ${params.CHECK_COMPLIANCE}
+    security_network_scan: ${params.NETWORK_SCAN}
+    security_timestamp: "${TIMESTAMP}"
+    security_scan_dir: "${SCAN_DIR}"
+  pre_tasks:
+    - name: Create security scan directory
+      file:
+        path: "{{ security_scan_dir }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      run_once: true
+      
+    - name: Install security scanning tools
+      package:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - aide
+        - rkhunter
+        - chkrootkit
+        - lynis
+      when: security_check_compliance | bool
+      
+    - name: Download Trivy if not present
+      get_url:
+        url: "https://github.com/aquasecurity/trivy/releases/latest/download/trivy_Linux-64bit.tar.gz"
+        dest: "/tmp/trivy.tar.gz"
+        mode: '0644'
+      when: security_scan_containers | bool
+      
+    - name: Extract and install Trivy
+      unarchive:
+        src: "/tmp/trivy.tar.gz"
+        dest: "/usr/local/bin"
+        remote_src: yes
+        mode: '0755'
+      when: security_scan_containers | bool
+      
+  roles:
+    - role: security
+      vars:
+        security_operation_mode: "audit"
+        security_apply_hardening: false
+        security_generate_report: true
+        security_scan_containers: "{{ security_scan_containers }}"
+        security_compliance_check: "{{ security_check_compliance }}"
+        security_network_assessment: "{{ security_network_scan }}"
+        
+  post_tasks:
+    - name: Run container vulnerability scanning
+      block:
+        - name: Get running Jenkins containers
+          command: docker ps --format "{{.Names}}" --filter "name=jenkins"
+          register: jenkins_containers
+          delegate_to: localhost
+          
+        - name: Scan Jenkins containers with Trivy
+          command: >
+            trivy image --format json --output {{ security_scan_dir }}/{{ item }}-scan.json
+            $(docker inspect {{ item }} --format='{{.Config.Image}}')
+          loop: "{{ jenkins_containers.stdout_lines }}"
+          delegate_to: localhost
+          ignore_errors: yes
+          
+        - name: Scan Harbor registry images
+          block:
+            - name: Login to Harbor registry
+              docker_login:
+                registry_url: "{{ harbor_registry_url }}"
+                username: "{{ harbor_username }}"
+                password: "{{ harbor_password }}"
+              delegate_to: localhost
+              
+            - name: Scan Harbor images
+              command: >
+                trivy image --format json --output {{ security_scan_dir }}/{{ item }}-harbor-scan.json
+                {{ harbor_registry_url }}/{{ harbor_project }}/{{ item }}:latest
+              loop:
+                - jenkins-master
+                - jenkins-agent-dind
+                - jenkins-agent-maven
+                - jenkins-agent-python
+                - jenkins-agent-nodejs
+              delegate_to: localhost
+              ignore_errors: yes
+          when: harbor_integration_enabled | default(true)
+      when: security_scan_containers | bool
+      
+    - name: Run system compliance audit
+      block:
+        - name: Execute Lynis system audit
+          command: lynis audit system --quiet --log-file {{ security_scan_dir }}/lynis-{{ inventory_hostname }}.log
+          ignore_errors: yes
+          
+        - name: Execute AIDE integrity check
+          command: aide --check
+          register: aide_check
+          ignore_errors: yes
+          
+        - name: Execute RKHunter scan
+          command: rkhunter --check --skip-keypress --report-warnings-only --logfile {{ security_scan_dir }}/rkhunter-{{ inventory_hostname }}.log
+          ignore_errors: yes
+          
+        - name: Generate security compliance report
+          template:
+            src: security-compliance-report.j2
+            dest: "{{ security_scan_dir }}/compliance-report-{{ inventory_hostname }}.html"
+            mode: '0644'
+          vars:
+            lynis_results: "{{ lynis_check.stdout if lynis_check is defined else 'N/A' }}"
+            aide_results: "{{ aide_check.stdout if aide_check is defined else 'N/A' }}"
+            rkhunter_results: "{{ rkhunter_check.stdout if rkhunter_check is defined else 'N/A' }}"
+      when: security_check_compliance | bool
+      
+    - name: Perform network security assessment
+      block:
+        - name: Check open ports
+          command: netstat -tlnp
+          register: open_ports
+          
+        - name: Check firewall status
+          command: firewall-cmd --list-all
+          register: firewall_status
+          when: ansible_os_family == "RedHat"
+          ignore_errors: yes
+          
+        - name: Check iptables rules
+          command: iptables -L -n
+          register: iptables_rules
+          when: ansible_os_family == "Debian"
+          ignore_errors: yes
+          
+        - name: Generate network security report
+          copy:
+            content: |
+              Network Security Assessment - {{ inventory_hostname }}
+              Generated: {{ ansible_date_time.iso8601 }}
+              
+              Open Ports:
+              {{ open_ports.stdout }}
+              
+              {% if firewall_status is defined %}
+              Firewall Status:
+              {{ firewall_status.stdout }}
+              {% endif %}
+              
+              {% if iptables_rules is defined %}
+              IPTables Rules:
+              {{ iptables_rules.stdout }}
+              {% endif %}
+            dest: "{{ security_scan_dir }}/network-security-{{ inventory_hostname }}.txt"
+      when: security_network_scan | bool
+      
+    - name: Consolidate security scan results
+      assemble:
+        src: "{{ security_scan_dir }}"
+        dest: "{{ security_scan_dir }}/consolidated-security-report.txt"
+        regexp: ".*\\.(txt|log)$"
+      delegate_to: localhost
+      run_once: true
+      
+    - name: Display security assessment summary
+      debug:
+        msg: |
+          🔒 Security Assessment Completed
+          
+          📊 Scan Details:
+          Type: {{ security_scan_type }}
+          Containers Scanned: {{ security_scan_containers }}
+          Compliance Check: {{ security_check_compliance }}
+          Network Scan: {{ security_network_scan }}
+          
+          📁 Results Location: {{ security_scan_dir }}
+          
+          🎯 Next Steps:
+          • Review scan results in {{ security_scan_dir }}/
+          • Address critical vulnerabilities identified
+          • Apply security hardening if needed
+          • Schedule regular security assessments
+      delegate_to: localhost
+      run_once: true
+"""
+                    
+                    writeFile file: 'execute-security-scan.yml', text: playbookContent
+                    
+                    // Execute ansible playbook
                     sh """
-                        echo "=== System Security Compliance ===" >> ${SCAN_DIR}/security-scan.log
+                        echo "🚀 Executing comprehensive security assessment..."
                         
-                        # Run Lynis system audit
-                        echo "🔍 Running Lynis system audit..." | tee -a ${SCAN_DIR}/security-scan.log
-                        lynis audit system --quiet --log-file ${SCAN_DIR}/lynis.log || true
+                        # Set vault password if exists
+                        export ANSIBLE_VAULT_PASSWORD_FILE=\${PWD}/environments/vault-passwords/production.txt
                         
-                        # Extract key findings
-                        if [ -f "${SCAN_DIR}/lynis.log" ]; then
-                            WARNINGS=\$(grep -c "Warning" ${SCAN_DIR}/lynis.log || echo 0)
-                            SUGGESTIONS=\$(grep -c "Suggestion" ${SCAN_DIR}/lynis.log || echo 0)
-                            
-                            echo "⚠️ Security warnings: \${WARNINGS}" | tee -a ${SCAN_DIR}/security-scan.log
-                            echo "💡 Security suggestions: \${SUGGESTIONS}" | tee -a ${SCAN_DIR}/security-scan.log
-                            
-                            # Extract high-priority issues
-                            echo "🔍 High priority security issues:" | tee -a ${SCAN_DIR}/security-scan.log
-                            grep -E "(Warning|Suggestion)" ${SCAN_DIR}/lynis.log | head -10 | tee -a ${SCAN_DIR}/security-scan.log || true
-                        fi
-                        
-                        # Check specific security configurations
-                        echo "🛡️ Checking security configurations..." | tee -a ${SCAN_DIR}/security-scan.log
-                        
-                        # SELinux status
-                        SELINUX_STATUS=\$(getenforce 2>/dev/null || echo "Unknown")
-                        echo "SELinux status: \${SELINUX_STATUS}" | tee -a ${SCAN_DIR}/security-scan.log
-                        
-                        if [ "\${SELINUX_STATUS}" != "Enforcing" ]; then
-                            echo "⚠️ WARNING: SELinux is not enforcing" | tee -a ${SCAN_DIR}/security-scan.log
-                        fi
-                        
-                        # Firewall status
-                        if systemctl is-active --quiet firewalld; then
-                            echo "✅ Firewall: Active" | tee -a ${SCAN_DIR}/security-scan.log
-                        else
-                            echo "❌ Firewall: Inactive" | tee -a ${SCAN_DIR}/security-scan.log
-                        fi
-                        
-                        # Check for unencrypted sensitive files
-                        echo "🔐 Checking for unencrypted sensitive files..." | tee -a ${SCAN_DIR}/security-scan.log
-                        find {{ jenkins_home_dir }} -name "*.key" -o -name "*password*" -o -name "*secret*" | \
-                        while read file; do
-                            if [ -f "\$file" ] && ! file "\$file" | grep -q "encrypted"; then
-                                echo "⚠️ Potentially unencrypted sensitive file: \$file" | tee -a ${SCAN_DIR}/security-scan.log
-                            fi
-                        done
-                        
-                        # Check file permissions
-                        echo "🔒 Checking critical file permissions..." | tee -a ${SCAN_DIR}/security-scan.log
-                        
-                        # Check Jenkins home permissions
-                        JENKINS_HOME_PERMS=\$(stat -c "%a" {{ jenkins_home_dir }} 2>/dev/null || echo "unknown")
-                        echo "Jenkins home permissions: \${JENKINS_HOME_PERMS}" | tee -a ${SCAN_DIR}/security-scan.log
-                        
-                        # Check SSL certificate permissions
-                        if [ -d "{{ jenkins_home_dir }}/ssl" ]; then
-                            find {{ jenkins_home_dir }}/ssl -name "*.key" -exec stat -c "%n %a" {} \; | tee -a ${SCAN_DIR}/security-scan.log
-                        fi
+                        ansible-playbook -i security_inventory \
+                            execute-security-scan.yml \
+                            --extra-vars "security_scan_operation='${params.SCAN_TYPE}'" \
+                            --extra-vars "security_assessment_timestamp='${TIMESTAMP}'" \
+                            --extra-vars "security_scan_reason='Pipeline execution'" \
+                            -v
                     """
                 }
             }

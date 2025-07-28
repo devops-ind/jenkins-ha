@@ -20,144 +20,149 @@
     - role: security
       tags: ['security', 'bootstrap']
 
-# - name: Setup Harbor Registry Integration
-#   hosts: localhost
-#   become: yes
-#   gather_facts: yes
-#   vars:
-#     harbor_registry_url: "{{ harbor_url }}"
-#     harbor_project: "{{ jenkins_project_name }}"
-#   roles:
-#     - role: harbor
-#       tags: ['harbor', 'registry']
-#   when: harbor_integration_enabled | default(true)
+- name: Setup Harbor Registry Integration
+  hosts: localhost
+  become: yes
+  gather_facts: yes
+  vars:
+    harbor_registry_url: "{{ harbor_registry_url }}"
+    harbor_project: "{{ harbor_project }}"
+  roles:
+    - role: harbor
+      tags: ['harbor', 'registry']
+      when: harbor_integration_enabled | default(true)
 
-# - name: Build and Manage Jenkins Images
-#   hosts: localhost  # Build on primary master only
-#   become: yes
-#   gather_facts: yes
-#   vars:
-#     jenkins_images_build: true
-#     jenkins_images_push: true
-#   roles:
-#     - role: jenkins-images
-#       tags: ['images', 'build']
-#   when: build_jenkins_images | default(false)
+- name: Build and Manage Jenkins Images
+  hosts: localhost  # Build on primary master only
+  become: yes
+  gather_facts: yes
+  vars:
+    jenkins_images_build: true
+    jenkins_images_push: true
+  roles:
+    - role: jenkins-images
+      tags: ['images', 'build']
+      when: build_jenkins_images | default(false)
 
-# - name: Deploy Jenkins Infrastructure
-#   hosts: localhost
-#   become: yes
-#   gather_facts: yes
-#   serial: 1  # Deploy masters one by one for HA
-#   vars:
-#     jenkins_ha_enabled: "{{ groups['jenkins_masters'] | length > 1 }}"
-#     jenkins_master_priority: "{{ play_hosts.index(inventory_hostname) + 1 }}"
-#   roles:
-#     - role: jenkins-infrastructure
-#       tags: ['jenkins', 'deploy']
-#   post_tasks:
-#     - name: Wait for Jenkins to be ready
-#       uri:
-#         url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/login"
-#         method: GET
-#         status_code: [200, 403]
-#       register: jenkins_ready
-#       until: jenkins_ready is succeeded
-#       retries: 60
-#       delay: 10
-#       tags: ['jenkins', 'verify']
+- name: Deploy Jenkins Infrastructure
+  hosts: localhost
+  become: yes
+  gather_facts: yes
+  serial: 1  # Deploy masters one by one for HA
+  vars:
+    jenkins_ha_enabled: "{{ groups['jenkins_masters'] | default([]) | length > 1 }}"
+    jenkins_master_priority: "{{ play_hosts.index(inventory_hostname) + 1 }}"
+  roles:
+    - role: jenkins-infrastructure
+      tags: ['jenkins', 'deploy']
+  post_tasks:
+    - name: Wait for Jenkins to be ready
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/login"
+        method: GET
+        status_code: [200, 403]
+      register: jenkins_ready
+      until: jenkins_ready is succeeded
+      retries: 60
+      delay: 10
+      tags: ['jenkins', 'verify']
 
-# - name: Configure High Availability
-#   hosts: localhost
-#   become: yes
-#   gather_facts: yes
-#   roles:
-#     - role: high-availability
-#       tags: ['ha', 'cluster']
-#   when: 
-#     - jenkins_ha_enabled | default(false)
-#     - groups['jenkins_masters'] | length > 1
+- name: Configure High Availability
+  hosts: localhost
+  become: yes
+  gather_facts: yes
+  roles:
+    - role: high-availability
+      tags: ['ha', 'cluster']
+      when: 
+        - jenkins_ha_enabled | default(false)
+        - groups['jenkins_masters'] | default([]) | length > 1
 
-# - name: Deploy Jenkins Agents
-#   hosts: localhost
-#   become: yes
-#   gather_facts: yes
-#   serial: "{{ agent_serial_execution | default('50%') }}"
-#   roles:
-#     - role: jenkins-infrastructure
-#       vars:
-#         jenkins_role: agent
-#       tags: ['agents', 'deploy']
+- name: Deploy Jenkins Agents
+  hosts: localhost
+  become: yes
+  gather_facts: yes
+  serial: "{{ agent_serial_execution | default('50%') }}"
+  roles:
+    - role: jenkins-infrastructure
+      vars:
+        jenkins_role: agent
+      tags: ['agents', 'deploy']
 
-# - name: Setup Monitoring Stack
-#   hosts: localhost
-#   become: yes
-#   gather_facts: yes
-#   roles:
-#     - role: monitoring
-#       tags: ['monitoring', 'prometheus', 'grafana']
-#   when: monitoring_enabled | default(true)
+- name: Setup Monitoring Stack
+  hosts: localhost
+  become: yes
+  gather_facts: yes
+  roles:
+    - role: monitoring
+      tags: ['monitoring', 'prometheus', 'grafana']
+      when: monitoring_enabled | default(true)
 
-# - name: Configure Backup System
-#   hosts: localhost
-#   become: yes
-#   gather_facts: yes
-#   roles:
-#     - role: backup
-#       tags: ['backup', 'storage']
-#   when: backup_enabled | default(true)
+- name: Configure Backup System
+  hosts: localhost
+  become: yes
+  gather_facts: yes
+  roles:
+    - role: backup
+      tags: ['backup', 'storage']
+      when: backup_enabled | default(true)
 
-# - name: Post-Deployment Verification
-#   hosts: localhost
-#   become: no
-#   gather_facts: yes
-#   tasks:
-#     - name: Verify Jenkins master accessibility
-#       uri:
-#         url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/api/json"
-#         method: GET
-#         user: "{{ jenkins_admin_user }}"
-#         password: "{{ jenkins_admin_password }}"
-#         force_basic_auth: yes
-#       register: jenkins_api_check
-#       tags: ['verify', 'api']
+- name: Post-Deployment Verification
+  hosts: localhost
+  become: no
+  gather_facts: yes
+  tasks:
+    - name: Verify Jenkins master accessibility
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/api/json"
+        method: GET
+        user: "{{ jenkins_admin_user }}"
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: yes
+      register: jenkins_api_check
+      ignore_errors: yes
+      tags: ['verify', 'api']
 
-#     - name: Verify monitoring endpoints
-#       uri:
-#         url: "http://{{ hostvars[groups['monitoring'][0]]['ansible_default_ipv4']['address'] }}:9090/api/v1/query?query=up"
-#         method: GET
-#       register: prometheus_check
-#       when: monitoring_enabled | default(true)
-#       tags: ['verify', 'monitoring']
+    - name: Verify monitoring endpoints
+      uri:
+        url: "http://{{ hostvars[groups['monitoring'][0]]['ansible_default_ipv4']['address'] }}:9090/api/v1/query?query=up"
+        method: GET
+      register: prometheus_check
+      when: 
+        - monitoring_enabled | default(true)
+        - groups['monitoring'] is defined
+        - groups['monitoring'] | length > 0
+      ignore_errors: yes
+      tags: ['verify', 'monitoring']
 
-#     - name: Display deployment summary
-#       debug:
-#         msg: |
-#           🎉 Jenkins Infrastructure Deployment Completed!
+    - name: Display deployment summary
+      debug:
+        msg: |
+          🎉 Jenkins Infrastructure Deployment Completed!
           
-#           📋 Access Information:
-#           {% for host in groups['jenkins_masters'] %}
-#           Jenkins Master {{ loop.index }}: http://{{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ jenkins_master_port }}
-#           {% endfor %}
-#           {% if jenkins_ha_enabled %}
-#           Load Balancer VIP: http://{{ jenkins_vip }}:{{ jenkins_master_port }}
-#           {% endif %}
-#           {% if monitoring_enabled %}
-#           Prometheus: http://{{ hostvars[groups['monitoring'][0]]['ansible_default_ipv4']['address'] }}:9090
-#           Grafana: http://{{ hostvars[groups['monitoring'][0]]['ansible_default_ipv4']['address'] }}:3000
-#           {% endif %}
+          📋 Access Information:
+          {% for host in groups['jenkins_masters'] | default([]) %}
+          Jenkins Master {{ loop.index }}: http://{{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ jenkins_master_port }}
+          {% endfor %}
+          {% if jenkins_ha_enabled | default(false) %}
+          Load Balancer VIP: http://{{ jenkins_vip }}:{{ jenkins_master_port }}
+          {% endif %}
+          {% if monitoring_enabled | default(true) and groups['monitoring'] is defined and groups['monitoring'] | length > 0 %}
+          Prometheus: http://{{ hostvars[groups['monitoring'][0]]['ansible_default_ipv4']['address'] }}:9090
+          Grafana: http://{{ hostvars[groups['monitoring'][0]]['ansible_default_ipv4']['address'] }}:3000
+          {% endif %}
           
-#           🔧 Default Credentials:
-#           Username: {{ jenkins_admin_user }}
-#           Password: [ENCRYPTED - Check vault]
+          🔧 Default Credentials:
+          Username: {{ jenkins_admin_user }}
+          Password: [ENCRYPTED - Check vault]
           
-#           🏷️ Available Agent Labels:
-#           • dind docker-manager static privileged
-#           • maven java dynamic
-#           • python py dynamic
-#           • nodejs javascript dynamic
+          🏷️ Available Agent Labels:
+          • dind docker-manager static privileged
+          • maven java dynamic
+          • python py dynamic
+          • nodejs javascript dynamic
           
-#           📊 Monitoring Status: {{ monitoring_enabled | default(true) and 'Enabled' or 'Disabled' }}
-#           💾 Backup Status: {{ backup_enabled | default(true) and 'Enabled' or 'Disabled' }}
-#           🏔️ HA Status: {{ jenkins_ha_enabled and 'Active' or 'Single Node' }}
-#       tags: ['verify', 'summary']
+          📊 Monitoring Status: {{ monitoring_enabled | default(true) and 'Enabled' or 'Disabled' }}
+          💾 Backup Status: {{ backup_enabled | default(true) and 'Enabled' or 'Disabled' }}
+          🏔️ HA Status: {{ jenkins_ha_enabled | default(false) and 'Active' or 'Single Node' }}
+      tags: ['verify', 'summary']

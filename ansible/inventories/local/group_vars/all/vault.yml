@@ -1,0 +1,46 @@
+---
+# Local Development Vault (Unencrypted for convenience)
+# In production, this should be encrypted with ansible-vault
+
+# Jenkins credentials for local development
+vault_jenkins_admin_password: "admin123"
+vault_jenkins_api_token: "local-dev-token-123"
+
+# Harbor registry credentials
+vault_harbor_admin_password: "Harbor12345"
+vault_harbor_db_password: "root123"
+vault_harbor_secret_key: "local-harbor-secret"
+
+# Database passwords for local services
+vault_grafana_admin_password: "admin"
+vault_prometheus_web_config_password: "prometheus123"
+
+# Backup encryption keys (if needed)
+vault_backup_encryption_key: "local-dev-backup-key-123"
+vault_borg_passphrase: "local-dev-borg-pass-123"
+
+# SSH keys (not needed for local but kept for consistency)
+vault_ssh_private_key: ""
+vault_ssh_public_key: ""
+
+# LDAP/AD integration (not used in local)
+vault_ldap_bind_password: ""
+vault_ad_service_password: ""
+
+# Notification secrets (optional for local)
+vault_slack_webhook_url: ""
+vault_email_smtp_password: ""
+
+# Certificate information (not used in local HTTP setup)
+vault_ssl_private_key: ""
+vault_ssl_certificate: ""
+
+# Docker registry tokens
+vault_docker_hub_token: ""
+vault_github_registry_token: ""
+
+# Cloud provider credentials (not used locally)
+vault_aws_access_key: ""
+vault_aws_secret_key: ""
+vault_azure_client_secret: ""
+vault_gcp_service_account_key: ""

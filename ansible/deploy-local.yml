@@ -1,0 +1,144 @@
+---
+# Local DevContainer Deployment Playbook
+# This playbook deploys Jenkins HA infrastructure locally in devcontainers
+
+- name: Local DevContainer Jenkins Infrastructure Deployment
+  hosts: localhost
+  connection: local
+  become: no
+  gather_facts: yes
+  vars:
+    deployment_environment: "local"
+    local_deployment: true
+    
+  pre_tasks:
+    - name: Display local deployment information
+      debug:
+        msg: |
+          🚀 Starting Local DevContainer Deployment
+          
+          📋 Configuration:
+          Environment: {{ deployment_environment }}
+          Mode: {{ deployment_mode | default('devcontainer') }}
+          Jenkins URL: {{ jenkins_local_url | default('http://localhost:8080') }}
+          Grafana URL: {{ grafana_local_url | default('http://localhost:3000') }}
+          Prometheus URL: {{ prometheus_local_url | default('http://localhost:9090') }}
+          Harbor URL: {{ harbor_local_url | default('http://localhost:8082') }}
+          
+          🔧 Services to Deploy:
+          • Jenkins Master ({{ jenkins_master_memory | default('2g') }} memory)
+          • Jenkins Agents (DIND, Maven, Python, Node.js)
+          • Monitoring Stack (Prometheus, Grafana)
+          • Harbor Registry (if enabled)
+          • Backup System (if enabled)
+
+    - name: Check Docker availability
+      command: podman info
+      register: docker_check
+      failed_when: docker_check.rc != 0
+      changed_when: false
+      
+    - name: Ensure required directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "/tmp/jenkins-backup"
+        - "/tmp/jenkins-backup-staging"
+        - "/tmp/shared"
+        - "{{ jenkins_home_dir | default('/var/jenkins') }}"
+
+  roles:
+    - role: common
+      tags: ['common', 'bootstrap']
+      
+    - role: docker
+      tags: ['docker', 'containers']
+      
+    - role: harbor
+      tags: ['harbor', 'registry']
+      when: harbor_integration_enabled | default(true)
+      
+    - role: jenkins-images
+      tags: ['images', 'build']
+      when: build_jenkins_images | default(false)
+      
+    - role: jenkins-infrastructure
+      tags: ['jenkins', 'infrastructure']
+      
+    - role: monitoring
+      tags: ['monitoring', 'prometheus', 'grafana']
+      when: monitoring_enabled | default(true)
+      
+    - role: backup
+      tags: ['backup', 'storage']
+      when: backup_enabled | default(false)
+
+  post_tasks:
+    - name: Wait for Jenkins to be ready
+      uri:
+        url: "{{ jenkins_local_url | default('http://localhost:8080') }}/login"
+        method: GET
+        status_code: [200, 403]
+        timeout: 10
+      register: jenkins_ready
+      until: jenkins_ready is succeeded
+      retries: 30
+      delay: 10
+      ignore_errors: yes
+      
+    - name: Wait for Grafana to be ready
+      uri:
+        url: "{{ grafana_local_url | default('http://localhost:3000') }}/api/health"
+        method: GET
+        timeout: 10
+      register: grafana_ready
+      until: grafana_ready is succeeded
+      retries: 20
+      delay: 10
+      ignore_errors: yes
+      when: monitoring_enabled | default(true)
+      
+    - name: Display local deployment summary
+      debug:
+        msg: |
+          🎉 Local DevContainer Deployment Completed!
+          
+          📋 Access URLs:
+          Jenkins: {{ jenkins_local_url | default('http://localhost:8080') }}
+          {% if monitoring_enabled | default(true) %}
+          Grafana: {{ grafana_local_url | default('http://localhost:3000') }}
+          Prometheus: {{ prometheus_local_url | default('http://localhost:9090') }}
+          {% endif %}
+          {% if harbor_integration_enabled | default(true) %}
+          Harbor: {{ harbor_local_url | default('http://localhost:8082') }}
+          {% endif %}
+          
+          🔐 Default Credentials:
+          Jenkins: admin / {{ vault_jenkins_admin_password | default('admin123') }}
+          {% if monitoring_enabled | default(true) %}
+          Grafana: admin / {{ vault_grafana_admin_password | default('admin') }}
+          {% endif %}
+          {% if harbor_integration_enabled | default(true) %}
+          Harbor: admin / {{ vault_harbor_admin_password | default('Harbor12345') }}
+          {% endif %}
+          
+          🐳 Running Containers:
+          Jenkins Master: jenkins-master-dev
+          Jenkins Agents: jenkins-agent-*-dev
+          {% if monitoring_enabled | default(true) %}
+          Prometheus: prometheus-dev
+          Grafana: grafana-dev
+          {% endif %}
+          {% if harbor_integration_enabled | default(true) %}
+          Harbor: harbor-dev  
+          {% endif %}
+          
+          🛠️ Development Commands:
+          • Check containers: docker ps
+          • View logs: docker logs <container-name>
+          • Access Jenkins CLI: docker exec -it jenkins-master-dev jenkins-cli
+          • Stop all: docker stop $(docker ps -q)
+          
+          ✨ Happy Coding in your DevContainer! ✨

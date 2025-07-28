@@ -1,0 +1,117 @@
+---
+# Local DevContainer Environment Configuration
+# This file overrides defaults from group_vars/all/ for local development
+
+# Environment identification
+deployment_environment: "local"
+environment_tier: "dev"
+deployment_mode: "devcontainer"
+
+# Local development versions
+jenkins_version: "2.426.1"
+docker_version: "24.0.7"
+timezone: "UTC"
+
+# Local networking configuration (using localhost with different ports)
+jenkins_network_name: "jenkins-dev-net"
+jenkins_network_subnet: "172.25.0.0/16"
+monitoring_network_name: "monitoring-dev-net"
+monitoring_network_subnet: "172.26.0.0/16"
+
+# Local storage configuration
+jenkins_home_dir: "/var/jenkins"
+jenkins_data_dir: "/var/lib/jenkins"
+backup_location: "/tmp/jenkins-backup"
+shared_storage_mount: "/tmp/shared"
+shared_storage_enabled: false  # Disabled for local dev
+
+# Local security settings (relaxed for development)
+jenkins_enable_security: true
+jenkins_security_realm: "local"  # Keep default local auth
+jenkins_authorization_strategy: "logged_in_users_can_do_anything"
+enable_ssl: false  # Disabled for local development
+jenkins_enable_csrf: false  # Disabled for easier local development
+jenkins_admin_password: "admin123"  # Simple password for local dev
+
+# Local backup configuration (minimal for development)
+jenkins_backup_enabled: false  # Disabled for local dev
+backup_enabled: false
+backup_schedule: "0 4 * * 0"  # Weekly if enabled
+backup_retention_days: 7
+backup_method: "tar"  # Simple tar for local dev
+backup_storage_type: "local"
+
+# Local monitoring settings
+jenkins_monitoring_enabled: true
+monitoring_enabled: true
+prometheus_enabled: true
+grafana_enabled: true
+alertmanager_enabled: false  # Disabled for local dev
+
+# Local resource limits (lighter for development)
+jenkins_master_memory: "2g"  # Less memory for local dev
+jenkins_master_cpu_limit: "1"
+jenkins_agents_max: 4
+
+# Local HA settings (disabled for single-node development)
+jenkins_ha_enabled: false
+jenkins_cluster_size: 1
+jenkins_load_balancer_enabled: false
+
+# Local image settings
+jenkins_master_image_tag: "latest"
+jenkins_agent_image_tag: "latest"
+jenkins_images_force_rebuild: false
+jenkins_images_push: false  # Don't push to registry in local dev
+
+# Harbor registry configuration for local development
+harbor_integration_enabled: true
+harbor_registry_url: "localhost:8082"
+harbor_project: "jenkins-dev"
+harbor_ssl_verify: false
+harbor_admin_user: "admin"
+harbor_admin_password: "Harbor12345"
+
+# Local development-specific plugins (extends defaults)
+jenkins_additional_plugins:
+  - build-timeout
+  - workflow-basic-steps
+  - pipeline-stage-view
+  - pipeline-graph-analysis
+  - ssh-slaves
+
+# Docker configuration for local development
+docker_daemon_options:
+  log-driver: "json-file"
+  log-opts:
+    max-size: "10m"
+    max-file: "3"
+  storage-driver: "overlay2"
+  
+# DevContainer specific paths
+devcontainer_workspace: "/workspaces/jenkins-ha"
+devcontainer_user: "vscode"
+devcontainer_uid: 1000
+devcontainer_gid: 1000
+
+# Local development feature flags
+build_jenkins_images: false  # Use pre-built images for faster dev
+skip_firewall_config: true
+skip_selinux_config: true
+skip_system_hardening: true
+
+# Debugging and development settings
+ansible_verbosity: 2
+debug_mode: true
+development_mode: true
+
+# Local service URLs for easy access
+jenkins_local_url: "http://localhost:8080"
+grafana_local_url: "http://localhost:3000"
+prometheus_local_url: "http://localhost:9090"
+harbor_local_url: "http://localhost:8082"
+
+# Quick start settings
+quick_start_mode: true
+skip_bootstrap: false
+skip_verification: false

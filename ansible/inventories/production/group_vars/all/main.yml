@@ -1,24 +1,80 @@
 ---
-# Global configuration for production environment
+# Production Environment Configuration
+# This file overrides defaults from group_vars/all/ for production deployment
+
+# Environment identification
+deployment_environment: "production"
+environment_tier: "prod"
+
+# Production-specific versions (overrides defaults)
 jenkins_version: "2.426.1"
 docker_version: "24.0.7"
 timezone: "UTC"
 
-# Network configuration
-jenkins_network: "jenkins-net"
-monitoring_network: "monitoring-net"
+# Production network configuration
+jenkins_network_name: "jenkins-prod-net"
+jenkins_network_subnet: "172.20.0.0/16"
+monitoring_network_name: "monitoring-prod-net"
+monitoring_network_subnet: "172.21.0.0/16"
 
-# Storage configuration
-jenkins_home: "/opt/jenkins"
+# Production storage configuration
+jenkins_home_dir: "/opt/jenkins"
+jenkins_data_dir: "/var/lib/jenkins"
 backup_location: "/backup/jenkins"
 shared_storage_mount: "/shared"
+shared_storage_enabled: true
 
-# Security settings
+# Production security settings (overrides defaults)
+jenkins_enable_security: true
+jenkins_security_realm: "ldap"  # Override default "local"
+jenkins_authorization_strategy: "matrix"  # Override default
 enable_ssl: true
 ssl_cert_path: "/etc/ssl/certs/jenkins.crt"
 ssl_key_path: "/etc/ssl/private/jenkins.key"
 
-# Backup configuration
+# Production backup configuration (overrides defaults)
+jenkins_backup_enabled: true
 backup_enabled: true
-backup_schedule: "0 2 * * *"
+backup_schedule: "0 2 * * *"  # Daily at 2 AM
 backup_retention_days: 30
+backup_method: "borg"
+backup_compression: "lz4"
+
+# Production monitoring settings
+jenkins_monitoring_enabled: true
+monitoring_enabled: true
+prometheus_enabled: true
+grafana_enabled: true
+alertmanager_enabled: true
+
+# Production resource limits
+jenkins_master_memory: "4g"  # Override default 2g for production
+jenkins_master_cpu_limit: "2"
+jenkins_agents_max: 10
+
+# Production HA settings
+jenkins_ha_enabled: true
+jenkins_cluster_size: 2
+jenkins_vip: "10.0.1.100"
+jenkins_load_balancer_enabled: true
+
+# Production image settings
+jenkins_master_image_tag: "latest"
+jenkins_agent_image_tag: "latest"
+jenkins_images_force_rebuild: false
+jenkins_images_push: true
+
+# Harbor registry configuration for production
+harbor_integration_enabled: true
+harbor_registry_url: "harbor.company.com"
+harbor_project: "jenkins-prod"
+harbor_ssl_verify: true
+
+# Production-specific plugins (extends defaults)
+jenkins_additional_plugins:
+  - ldap
+  - matrix-auth
+  - backup
+  - monitoring
+  - artifactory
+  - sonarqube

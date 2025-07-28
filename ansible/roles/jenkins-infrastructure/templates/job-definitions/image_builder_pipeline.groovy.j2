@@ -140,198 +140,73 @@ pipeline {
             }
         }
         
-        stage('Build Jenkins Master Image') {
-            when {
-                anyOf {
-                    equals expected: 'all', actual: params.IMAGES_TO_BUILD
-                    equals expected: 'master', actual: params.IMAGES_TO_BUILD
-                }
-            }
+        stage('Build Images with Ansible') {
             steps {
                 script {
-                    echo "🏗️ Building Jenkins Master Image..."
+                    echo "🏗️ Building Jenkins Images using Ansible jenkins-images role..."
                     
-                    def buildArgs = [
-                        "JENKINS_VERSION=${JENKINS_VERSION}",
-                        "BUILD_DATE=${BUILD_DATE}",
-                        "VCS_REF=${GIT_COMMIT}"
-                    ].join(' --build-arg ')
+                    // Prepare ansible variables for image building
+                    def extraVars = [
+                        "jenkins_master_image_tag=${IMAGE_TAG}",
+                        "jenkins_agent_image_tag=${IMAGE_TAG}",
+                        "jenkins_images_force_rebuild=${params.FORCE_REBUILD}",
+                        "jenkins_images_push=${params.PUSH_TO_HARBOR}",
+                        "harbor_registry_url=${HARBOR_REGISTRY}",
+                        "harbor_project=${HARBOR_PROJECT}"
+                    ]
                     
-                    def nocacheFlag = params.FORCE_REBUILD ? '--no-cache' : ''
+                    // Set GIT_COMMIT environment variable for Ansible
+                    env.GIT_COMMIT = GIT_COMMIT
                     
+                    // Create inventory for localhost execution
+                    writeFile file: 'localhost_inventory', text: """
+[localhost]
+127.0.0.1 ansible_connection=local ansible_python_interpreter={{ ansible_playbook_python }}
+
+[jenkins_masters]
+127.0.0.1
+
+[jenkins_agents]
+127.0.0.1
+"""
+                    
+                    // Create playbook to execute jenkins-images role
+                    def playbookContent = """
+---
+- name: Build Jenkins Images
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: yes
+  vars:
+    jenkins_master_image_tag: "${IMAGE_TAG}"
+    jenkins_agent_image_tag: "${IMAGE_TAG}"
+    jenkins_images_force_rebuild: ${params.FORCE_REBUILD}
+    jenkins_images_push: ${params.PUSH_TO_HARBOR}
+    harbor_registry_url: "${HARBOR_REGISTRY}"
+    harbor_project: "${HARBOR_PROJECT}"
+  roles:
+    - role: jenkins-images
+      when: >
+        params.IMAGES_TO_BUILD == 'all' or
+        params.IMAGES_TO_BUILD == 'master' or
+        params.IMAGES_TO_BUILD == 'dind-agent' or
+        params.IMAGES_TO_BUILD == 'maven-agent' or
+        params.IMAGES_TO_BUILD == 'python-agent' or
+        params.IMAGES_TO_BUILD == 'nodejs-agent'
+"""
+                    
+                    writeFile file: 'build-images.yml', text: playbookContent
+                    
+                    // Execute ansible playbook
                     sh """
-                        cd ansible/roles/jenkins-images/templates
-                        docker build ${nocacheFlag} \
-                            --build-arg ${buildArgs} \
-                            -f Dockerfile.master.j2 \
-                            -t ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-master:${IMAGE_TAG} \
-                            -t ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-master:latest \
-                            .
+                        echo "🚀 Executing Ansible playbook to build images..."
+                        ansible-playbook -i localhost_inventory \
+                            build-images.yml \
+                            --extra-vars '${extraVars.join(' ')}' \
+                            --extra-vars "images_to_build=${params.IMAGES_TO_BUILD}" \
+                            -v
                     """
-                    
-                    if (params.PUSH_TO_HARBOR) {
-                        sh """
-                            docker push ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-master:${IMAGE_TAG}
-                            docker push ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-master:latest
-                        """
-                    }
-                }
-            }
-        }
-        
-        stage('Build DIND Agent Image') {
-            when {
-                anyOf {
-                    equals expected: 'all', actual: params.IMAGES_TO_BUILD
-                    equals expected: 'dind-agent', actual: params.IMAGES_TO_BUILD
-                }
-            }
-            steps {
-                script {
-                    echo "🐳 Building DIND Agent Image..."
-                    
-                    def buildArgs = [
-                        "AGENT_VERSION=${AGENT_VERSION}",
-                        "BUILD_DATE=${BUILD_DATE}",
-                        "VCS_REF=${GIT_COMMIT}"
-                    ].join(' --build-arg ')
-                    
-                    def nocacheFlag = params.FORCE_REBUILD ? '--no-cache' : ''
-                    
-                    sh """
-                        cd ansible/roles/jenkins-images/templates
-                        docker build ${nocacheFlag} \
-                            --build-arg ${buildArgs} \
-                            -f Dockerfile.dind-agent.j2 \
-                            -t ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-agent-dind:${IMAGE_TAG} \
-                            -t ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-agent-dind:latest \
-                            .
-                    """
-                    
-                    if (params.PUSH_TO_HARBOR) {
-                        sh """
-                            docker push ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-agent-dind:${IMAGE_TAG}
-                            docker push ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-agent-dind:latest
-                        """
-                    }
-                }
-            }
-        }
-        
-        stage('Build Maven Agent Image') {
-            when {
-                anyOf {
-                    equals expected: 'all', actual: params.IMAGES_TO_BUILD
-                    equals expected: 'maven-agent', actual: params.IMAGES_TO_BUILD
-                }
-            }
-            steps {
-                script {
-                    echo "☕ Building Maven Agent Image..."
-                    
-                    def buildArgs = [
-                        "MAVEN_VERSION={{ maven_version }}",
-                        "JDK_VERSION={{ default_jdk_version }}",
-                        "BUILD_DATE=${BUILD_DATE}",
-                        "VCS_REF=${GIT_COMMIT}"
-                    ].join(' --build-arg ')
-                    
-                    def nocacheFlag = params.FORCE_REBUILD ? '--no-cache' : ''
-                    
-                    sh """
-                        cd ansible/roles/jenkins-images/templates
-                        docker build ${nocacheFlag} \
-                            --build-arg ${buildArgs} \
-                            -f Dockerfile.maven-agent.j2 \
-                            -t ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-agent-maven:${IMAGE_TAG} \
-                            -t ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-agent-maven:latest \
-                            .
-                    """
-                    
-                    if (params.PUSH_TO_HARBOR) {
-                        sh """
-                            docker push ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-agent-maven:${IMAGE_TAG}
-                            docker push ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-agent-maven:latest
-                        """
-                    }
-                }
-            }
-        }
-        
-        stage('Build Python Agent Image') {
-            when {
-                anyOf {
-                    equals expected: 'all', actual: params.IMAGES_TO_BUILD
-                    equals expected: 'python-agent', actual: params.IMAGES_TO_BUILD
-                }
-            }
-            steps {
-                script {
-                    echo "🐍 Building Python Agent Image..."
-                    
-                    def buildArgs = [
-                        "PYTHON_VERSION={{ python_version }}",
-                        "BUILD_DATE=${BUILD_DATE}",
-                        "VCS_REF=${GIT_COMMIT}"
-                    ].join(' --build-arg ')
-                    
-                    def nocacheFlag = params.FORCE_REBUILD ? '--no-cache' : ''
-                    
-                    sh """
-                        cd ansible/roles/jenkins-images/templates
-                        docker build ${nocacheFlag} \
-                            --build-arg ${buildArgs} \
-                            -f Dockerfile.python-agent.j2 \
-                            -t ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-agent-python:${IMAGE_TAG} \
-                            -t ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-agent-python:latest \
-                            .
-                    """
-                    
-                    if (params.PUSH_TO_HARBOR) {
-                        sh """
-                            docker push ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-agent-python:${IMAGE_TAG}
-                            docker push ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-agent-python:latest
-                        """
-                    }
-                }
-            }
-        }
-        
-        stage('Build Node.js Agent Image') {
-            when {
-                anyOf {
-                    equals expected: 'all', actual: params.IMAGES_TO_BUILD
-                    equals expected: 'nodejs-agent', actual: params.IMAGES_TO_BUILD
-                }
-            }
-            steps {
-                script {
-                    echo "🟢 Building Node.js Agent Image..."
-                    
-                    def buildArgs = [
-                        "NODE_VERSION={{ nodejs_version }}",
-                        "BUILD_DATE=${BUILD_DATE}",
-                        "VCS_REF=${GIT_COMMIT}"
-                    ].join(' --build-arg ')
-                    
-                    def nocacheFlag = params.FORCE_REBUILD ? '--no-cache' : ''
-                    
-                    sh """
-                        cd ansible/roles/jenkins-images/templates
-                        docker build ${nocacheFlag} \
-                            --build-arg ${buildArgs} \
-                            -f Dockerfile.nodejs-agent.j2 \
-                            -t ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-agent-nodejs:${IMAGE_TAG} \
-                            -t ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-agent-nodejs:latest \
-                            .
-                    """
-                    
-                    if (params.PUSH_TO_HARBOR) {
-                        sh """
-                            docker push ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-agent-nodejs:${IMAGE_TAG}
-                            docker push ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-agent-nodejs:latest
-                        """
-                    }
                 }
             }
         }
@@ -340,38 +215,12 @@ pipeline {
             when {
                 expression { params.PUSH_TO_HARBOR }
             }
-            parallel {
-                stage('Scan Master Image') {
-                    when {
-                        anyOf {
-                            equals expected: 'all', actual: params.IMAGES_TO_BUILD
-                            equals expected: 'master', actual: params.IMAGES_TO_BUILD
-                        }
-                    }
-                    steps {
-                        script {
-                            echo "🔍 Scanning Jenkins Master image for vulnerabilities..."
-                            sh """
-                                # Harbor will automatically scan pushed images
-                                echo "Image pushed to Harbor for automatic security scanning"
-                                echo "Check Harbor UI for vulnerability reports"
-                            """
-                        }
-                    }
-                }
-                
-                stage('Scan Agent Images') {
-                    when {
-                        anyOf {
-                            equals expected: 'all', actual: params.IMAGES_TO_BUILD
-                            not { equals expected: 'master', actual: params.IMAGES_TO_BUILD }
-                        }
-                    }
-                    steps {
-                        script {
-                            echo "🔍 Agent images will be scanned by Harbor automatically"
-                        }
-                    }
+            steps {
+                script {
+                    echo "🔍 Images will be automatically scanned by Harbor registry..."
+                    echo "📊 Built images for: ${params.IMAGES_TO_BUILD}"
+                    echo "🏷️ Image tag: ${IMAGE_TAG}"
+                    echo "📤 Check Harbor UI at ${HARBOR_REGISTRY} for vulnerability reports"
                 }
             }
         }
@@ -395,25 +244,6 @@ pipeline {
                             git add ansible/group_vars/all/jenkins.yml
                             git commit -m "Update Jenkins image tags to ${IMAGE_TAG}" || echo "No changes to commit"
                         fi
-                    """
-                }
-            }
-        }
-        
-                        stage('Cleanup') {
-            steps {
-                script {
-                    echo "🧹 Cleaning up old images..."
-                    sh """
-                        # Remove dangling images
-                        docker image prune -f
-                        
-                        # Keep only last 3 versions of each image locally
-                        for image in jenkins-master jenkins-agent-dind jenkins-agent-maven jenkins-agent-python jenkins-agent-nodejs; do
-                            docker images ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/\$image --format "table {{.Repository}}:{{.Tag}}\t{{.CreatedAt}}" | \
-                            tail -n +2 | sort -k2 -r | tail -n +4 | awk '{print \$1}' | \
-                            xargs -r docker rmi || true
-                        done
                     """
                 }
             }

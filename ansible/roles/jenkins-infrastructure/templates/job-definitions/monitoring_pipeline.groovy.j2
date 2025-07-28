@@ -189,209 +189,141 @@ pipeline {
             }
         }
         
-        stage('Deploy Monitoring Stack') {
-            when {
-                equals expected: 'deploy', actual: params.ACTION
-            }
+        stage('Execute Monitoring Operations with Ansible') {
             steps {
                 script {
-                    echo "🚀 Deploying monitoring stack..."
+                    echo "📊 Executing monitoring operations using Ansible monitoring role..."
                     
-                    sh """
-                        cd ansible
-                        
-                        # Deploy monitoring stack
-                        ANSIBLE_VAULT_PASSWORD_FILE=../environments/vault-passwords/production.txt \
-                        ansible-playbook -i inventories/production deploy-monitoring.yml \
-                            -e deployment_environment=production \
-                            -e monitoring_enabled=true \
-                            -e prometheus_update=${params.UPDATE_PROMETHEUS} \
-                            -e grafana_update=${params.UPDATE_GRAFANA} \
-                            -e alertmanager_update=${params.UPDATE_ALERTMANAGER}
-                        
-                        echo "✅ Monitoring stack deployment completed"
-                    """
-                }
-            }
-        }
+                    // Create monitoring inventory
+                    writeFile file: 'monitoring_inventory', text: """
+[monitoring]
+{% for host in groups['monitoring'] %}
+{{ host }} ansible_host={{ hostvars[host]['ansible_host'] }}
+{% endfor %}
+
+[jenkins_masters]
+{% for host in groups['jenkins_masters'] %}
+{{ host }} ansible_host={{ hostvars[host]['ansible_host'] }}
+{% endfor %}
+
+[jenkins_agents]
+{% for host in groups['jenkins_agents'] %}
+{{ host }} ansible_host={{ hostvars[host]['ansible_host'] }}
+{% endfor %}
+"""
+                    
+                    // Create comprehensive monitoring playbook
+                    def playbookContent = """
+---
+- name: Execute Monitoring Stack Operations
+  hosts: monitoring
+  become: yes
+  gather_facts: yes
+  vars:
+    monitoring_action: "${params.ACTION}"
+    prometheus_update: ${params.UPDATE_PROMETHEUS}
+    grafana_update: ${params.UPDATE_GRAFANA}
+    alertmanager_update: ${params.UPDATE_ALERTMANAGER}
+    restart_services: ${params.RESTART_SERVICES}
+    custom_dashboard: "${params.CUSTOM_DASHBOARD}"
+    monitoring_timestamp: "${TIMESTAMP}"
+  pre_tasks:
+    - name: Validate monitoring action
+      assert:
+        that:
+          - monitoring_action in ['deploy', 'update-config', 'update-dashboards', 'update-alerts', 'health-check', 'restart-services']
+        fail_msg: "Invalid monitoring action: {{ monitoring_action }}"
         
-        stage('Update Prometheus Configuration') {
-            when {
-                anyOf {
-                    equals expected: 'update-config', actual: params.ACTION
-                    allOf {
-                        not { equals expected: 'health-check', actual: params.ACTION }
-                        expression { params.UPDATE_PROMETHEUS }
-                    }
-                }
-            }
-            steps {
-                script {
-                    echo "📈 Updating Prometheus configuration..."
-                    
-                    sh """
-                        cd ansible
-                        
-                        # Update Prometheus configuration
-                        ANSIBLE_VAULT_PASSWORD_FILE=../environments/vault-passwords/production.txt \
-                        ansible-playbook -i inventories/production deploy-monitoring.yml \
-                            -e deployment_environment=production \
-                            -e monitoring_enabled=true \
-                            --tags prometheus,prometheus-config
-                        
-                        # Reload Prometheus configuration
-                        if [ "${params.RESTART_SERVICES}" = "true" ]; then
-                            echo "🔄 Reloading Prometheus configuration..."
-                            curl -X POST ${PROMETHEUS_URL}/-/reload || echo "Reload failed, may need service restart"
-                        fi
-                        
-                        echo "✅ Prometheus configuration updated"
-                    """
-                }
-            }
-        }
+  roles:
+    - role: monitoring
+      when: monitoring_action in ['deploy', 'update-config', 'update-dashboards', 'update-alerts', 'restart-services']
+      vars:
+        monitoring_operation_mode: "{{ monitoring_action }}"
+        monitoring_force_restart: "{{ restart_services }}"
+        monitoring_update_prometheus: "{{ prometheus_update }}"
+        monitoring_update_grafana: "{{ grafana_update }}"
+        monitoring_update_alertmanager: "{{ alertmanager_update }}"
         
-        stage('Update Grafana Dashboards') {
-            when {
-                anyOf {
-                    equals expected: 'update-dashboards', actual: params.ACTION
-                    allOf {
-                        not { equals expected: 'health-check', actual: params.ACTION }
-                        expression { params.UPDATE_GRAFANA }
-                    }
-                }
-            }
-            steps {
-                script {
-                    echo "📊 Updating Grafana dashboards..."
-                    
-                    sh """
-                        cd ansible
-                        
-                        # Update Grafana dashboards
-                        ANSIBLE_VAULT_PASSWORD_FILE=../environments/vault-passwords/production.txt \
-                        ansible-playbook -i inventories/production deploy-monitoring.yml \
-                            -e deployment_environment=production \
-                            -e monitoring_enabled=true \
-                            --tags grafana,grafana-dashboards
-                        
-                        echo "✅ Grafana dashboards updated"
-                    """
-                    
-                    // Import dashboards via API
-                    if (params.CUSTOM_DASHBOARD) {
-                        echo "📋 Importing custom dashboard: ${params.CUSTOM_DASHBOARD}"
-                        
-                        sh """
-                            # Import specific dashboard
-                            if [ -f "monitoring/grafana/dashboards/${params.CUSTOM_DASHBOARD}" ]; then
-                                echo "📤 Importing ${params.CUSTOM_DASHBOARD}..."
-                                
-                                curl -X POST \
-                                     -H "Content-Type: application/json" \
-                                     -u \${GRAFANA_CREDENTIALS_USR}:\${GRAFANA_CREDENTIALS_PSW} \
-                                     -d @monitoring/grafana/dashboards/${params.CUSTOM_DASHBOARD} \
-                                     ${GRAFANA_URL}/api/dashboards/db
-                                
-                                echo "✅ Custom dashboard imported"
-                            else
-                                echo "❌ Custom dashboard file not found: ${params.CUSTOM_DASHBOARD}"
-                            fi
-                        """
-                    } else {
-                        echo "📋 Importing all standard dashboards..."
-                        
-                        sh """
-                            # Import all standard dashboards
-                            for dashboard in monitoring/grafana/dashboards/*.json; do
-                                if [ -f "\$dashboard" ]; then
-                                    echo "📤 Importing \$(basename \$dashboard)..."
-                                    
-                                    curl -X POST \
-                                         -H "Content-Type: application/json" \
-                                         -u \${GRAFANA_CREDENTIALS_USR}:\${GRAFANA_CREDENTIALS_PSW} \
-                                         -d @\$dashboard \
-                                         ${GRAFANA_URL}/api/dashboards/db || echo "Import failed for \$dashboard"
-                                fi
-                            done
-                            
-                            echo "✅ All dashboards imported"
-                        """
-                    }
-                }
-            }
-        }
+  post_tasks:
+    - name: Wait for Prometheus to be ready
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ prometheus_port }}/api/v1/status/config"
+        method: GET
+        timeout: 10
+      register: prometheus_ready
+      until: prometheus_ready is succeeded
+      retries: 30
+      delay: 10
+      when: prometheus_update | bool or monitoring_action == 'deploy'
+      
+    - name: Wait for Grafana to be ready
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}/api/health"
+        method: GET
+        timeout: 10
+      register: grafana_ready
+      until: grafana_ready is succeeded
+      retries: 30
+      delay: 10
+      when: grafana_update | bool or monitoring_action == 'deploy'
+      
+    - name: Import custom dashboard if specified
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}/api/dashboards/db"
+        method: POST
+        user: "{{ grafana_admin_user }}"
+        password: "{{ grafana_admin_password }}"
+        force_basic_auth: yes
+        body_format: json
+        body: "{{ lookup('file', monitoring_home_dir + '/grafana/dashboards/' + custom_dashboard) | from_json }}"
+        status_code: [200, 412]
+      when: 
+        - custom_dashboard | length > 0
+        - grafana_update | bool or monitoring_action in ['deploy', 'update-dashboards']
         
-        stage('Update Alert Rules') {
-            when {
-                anyOf {
-                    equals expected: 'update-alerts', actual: params.ACTION
-                    allOf {
-                        not { equals expected: 'health-check', actual: params.ACTION }
-                        expression { params.UPDATE_ALERTMANAGER }
-                    }
-                }
-            }
-            steps {
-                script {
-                    echo "🚨 Updating alert rules..."
+    - name: Reload Prometheus configuration
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ prometheus_port }}/-/reload"
+        method: POST
+        timeout: 30
+      when: 
+        - prometheus_update | bool or monitoring_action in ['update-config', 'update-alerts']
+        - restart_services | bool
+      ignore_errors: yes
+      
+    - name: Display monitoring access information
+      debug:
+        msg: |
+          📊 Monitoring Operation Completed: {{ monitoring_action }}
+          
+          🔗 Access URLs:
+          Prometheus: http://{{ ansible_default_ipv4.address }}:{{ prometheus_port }}
+          Grafana: http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}
+          AlertManager: http://{{ ansible_default_ipv4.address }}:{{ alertmanager_port }}
+          
+          ⚙️ Operation Details:
+          Prometheus Updated: {{ prometheus_update }}
+          Grafana Updated: {{ grafana_update }}
+          AlertManager Updated: {{ alertmanager_update }}
+          Services Restarted: {{ restart_services }}
+          Custom Dashboard: {{ custom_dashboard if custom_dashboard else 'None' }}
+"""
                     
-                    sh """
-                        cd ansible
-                        
-                        # Update Alertmanager and alert rules
-                        ANSIBLE_VAULT_PASSWORD_FILE=../environments/vault-passwords/production.txt \
-                        ansible-playbook -i inventories/production deploy-monitoring.yml \
-                            -e deployment_environment=production \
-                            -e monitoring_enabled=true \
-                            -e alertmanager_enabled=true \
-                            --tags alertmanager,alert-rules
-                        
-                        # Reload Prometheus rules
-                        if [ "${params.RESTART_SERVICES}" = "true" ]; then
-                            echo "🔄 Reloading Prometheus rules..."
-                            curl -X POST ${PROMETHEUS_URL}/-/reload || echo "Reload failed, may need service restart"
-                        fi
-                        
-                        echo "✅ Alert rules updated"
-                    """
-                }
-            }
-        }
-        
-        stage('Restart Services') {
-            when {
-                anyOf {
-                    equals expected: 'restart-services', actual: params.ACTION
-                    expression { params.RESTART_SERVICES }
-                }
-            }
-            steps {
-                script {
-                    echo "🔄 Restarting monitoring services..."
+                    writeFile file: 'execute-monitoring.yml', text: playbookContent
                     
+                    // Execute ansible playbook
                     sh """
-                        cd ansible
+                        echo "🚀 Executing Ansible monitoring operations..."
                         
-                        # Restart monitoring services
-                        ANSIBLE_VAULT_PASSWORD_FILE=../environments/vault-passwords/production.txt \
-                        ansible monitoring -i inventories/production -m systemd \
-                            -a "name={{ item }} state=restarted" -b \
-                            --extra-vars "item=prometheus" || true
+                        # Set vault password if exists
+                        export ANSIBLE_VAULT_PASSWORD_FILE=\${PWD}/environments/vault-passwords/production.txt
                         
-                        ANSIBLE_VAULT_PASSWORD_FILE=../environments/vault-passwords/production.txt \
-                        ansible monitoring -i inventories/production -m systemd \
-                            -a "name={{ item }} state=restarted" -b \
-                            --extra-vars "item=grafana" || true
-                        
-                        if [ "${params.UPDATE_ALERTMANAGER}" = "true" ]; then
-                            ANSIBLE_VAULT_PASSWORD_FILE=../environments/vault-passwords/production.txt \
-                            ansible monitoring -i inventories/production -m systemd \
-                                -a "name={{ item }} state=restarted" -b \
-                                --extra-vars "item=alertmanager" || true
-                        fi
-                        
-                        echo "✅ Services restarted"
+                        ansible-playbook -i monitoring_inventory \
+                            execute-monitoring.yml \
+                            --extra-vars "monitoring_operation='${params.ACTION}'" \
+                            --extra-vars "monitoring_timestamp='${TIMESTAMP}'" \
+                            --extra-vars "monitoring_update_reason='Pipeline execution'" \
+                            -v
                     """
                 }
             }

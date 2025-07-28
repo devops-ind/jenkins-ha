@@ -102,7 +102,7 @@ export JENKINS_ADMIN_PASSWORD=admin123
 export JENKINS_DOMAIN=jenkins.dev.local
 
 cd /workspace/ansible
-if ansible-playbook site.yml -e deployment_mode=local; then
+if ansible-playbook deploy-local.yml -e deployment_mode=devcontainer; then
     echo ""
     echo "🎉 Jenkins deployment completed successfully!"
     echo ""

@@ -177,207 +177,87 @@ EOF
             }
         }
         
-        stage('Backup Jenkins Configuration') {
-            when {
-                anyOf {
-                    equals expected: 'full', actual: params.BACKUP_TYPE
-                    equals expected: 'incremental', actual: params.BACKUP_TYPE
-                    equals expected: 'configuration-only', actual: params.BACKUP_TYPE
-                }
-            }
+        stage('Execute Backup with Ansible') {
             steps {
                 script {
-                    echo "📋 Backing up Jenkins configuration..."
+                    echo "💾 Executing backup using Ansible backup role..."
                     
-                    sh """
-                        # Execute configuration backup script
-                        sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/backup-configuration.sh \
-                            --type ${params.BACKUP_TYPE} \
-                            --tag ${BACKUP_TAG} \
-                            --timestamp ${TIMESTAMP}
-                    """
-                }
-            }
-        }
-        
-        stage('Backup Jenkins Volumes') {
-            when {
-                anyOf {
-                    equals expected: 'full', actual: params.BACKUP_TYPE
-                    equals expected: 'incremental', actual: params.BACKUP_TYPE
-                    equals expected: 'volumes-only', actual: params.BACKUP_TYPE
-                }
-            }
-            parallel {
-                stage('Backup Jenkins Home') {
-                    steps {
-                        script {
-                            echo "🏠 Backing up Jenkins home directory..."
-                            
-                            sh """
-                                sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/backup-jenkins-volumes.sh \
-                                    --volume jenkins_data \
-                                    --type ${params.BACKUP_TYPE} \
-                                    --tag ${BACKUP_TAG} \
-                                    --timestamp ${TIMESTAMP}
-                            """
-                        }
-                    }
-                }
-                
-                stage('Backup Shared Workspace') {
-                    steps {
-                        script {
-                            echo "📁 Backing up shared workspace..."
-                            
-                            sh """
-                                sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/backup-jenkins-volumes.sh \
-                                    --volume shared_workspace \
-                                    --type ${params.BACKUP_TYPE} \
-                                    --tag ${BACKUP_TAG} \
-                                    --timestamp ${TIMESTAMP}
-                            """
-                        }
-                    }
-                }
-                
-                stage('Backup Build Caches') {
-                    steps {
-                        script {
-                            echo "🗃️ Backing up build caches..."
-                            
-                            sh """
-                                # Backup Maven cache
-                                sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/backup-jenkins-volumes.sh \
-                                    --volume maven-cache \
-                                    --type ${params.BACKUP_TYPE} \
-                                    --tag ${BACKUP_TAG} \
-                                    --timestamp ${TIMESTAMP}
-                                
-                                # Backup pip cache
-                                sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/backup-jenkins-volumes.sh \
-                                    --volume pip-cache \
-                                    --type ${params.BACKUP_TYPE} \
-                                    --tag ${BACKUP_TAG} \
-                                    --timestamp ${TIMESTAMP}
-                            """
-                        }
-                    }
-                }
-            }
-        }
-        
-        stage('Backup Monitoring Data') {
-            when {
-                anyOf {
-                    equals expected: 'full', actual: params.BACKUP_TYPE
-                    equals expected: 'incremental', actual: params.BACKUP_TYPE
-                }
-            }
-            steps {
-                script {
-                    echo "📊 Backing up monitoring data..."
+                    // Create inventory for localhost execution
+                    writeFile file: 'backup_inventory', text: """
+[localhost]
+127.0.0.1 ansible_connection=local ansible_python_interpreter={{ ansible_playbook_python }}
+
+[jenkins_masters]
+127.0.0.1
+
+[backup]
+127.0.0.1
+"""
                     
-                    sh """
-                        sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/backup-monitoring.sh \
-                            --type ${params.BACKUP_TYPE} \
-                            --tag ${BACKUP_TAG} \
-                            --timestamp ${TIMESTAMP}
-                    """
-                }
-            }
-        }
+                    // Create playbook to execute backup role
+                    def playbookContent = """
+---
+- name: Execute Jenkins Backup
+  hosts: localhost
+  connection: local
+  become: yes
+  gather_facts: yes
+  vars:
+    backup_type: "${params.BACKUP_TYPE}"
+    backup_tag: "${BACKUP_TAG}"
+    backup_timestamp: "${TIMESTAMP}"
+    backup_verify: ${params.VERIFY_BACKUP}
+    backup_cleanup: ${params.CLEANUP_OLD_BACKUPS}
+    backup_custom_tag: "${params.CUSTOM_TAG}"
+    backup_send_notifications: ${params.SEND_NOTIFICATIONS}
+  tasks:
+    - name: Execute backup based on type
+      include_role:
+        name: backup
+      vars:
+        backup_operation: "{{ backup_type }}"
+        backup_verify_integrity: "{{ backup_verify }}"
+        backup_cleanup_old: "{{ backup_cleanup }}"
         
-        stage('Create Backup Archive') {
-            steps {
-                script {
-                    echo "📦 Creating backup archive..."
+    - name: Run backup verification
+      command: >
+        {{ backup_home_dir }}/scripts/verify-backup.sh
+        --timestamp {{ backup_timestamp }}
+        --type {{ backup_type }}
+        --tag {{ backup_tag }}
+      when: backup_verify | bool
+      become_user: "{{ backup_user }}"
+      
+    - name: Cleanup old backups
+      command: >
+        {{ backup_home_dir }}/scripts/cleanup-old-backups.sh
+        --daily-retention {{ backup_daily_retention | default(30) }}
+        --weekly-retention {{ backup_weekly_retention | default(12) }}
+        --monthly-retention {{ backup_monthly_retention | default(12) }}
+      when: backup_cleanup | bool
+      become_user: "{{ backup_user }}"
+      
+    - name: Send backup notifications
+      command: >
+        {{ backup_home_dir }}/scripts/backup-notification.sh
+        --status success
+        --type {{ backup_type }}
+        --timestamp {{ backup_timestamp }}
+        --send-notification {{ backup_send_notifications }}
+      become_user: "{{ backup_user }}"
+"""
                     
-                    {% if backup_method == 'borg' %}
-                    // Using BorgBackup
-                    sh """
-                        echo "🏛️ Creating Borg backup archive..."
-                        
-                        ARCHIVE_NAME="${HOSTNAME}-${params.BACKUP_TYPE}-${TIMESTAMP}"
-                        
-                        sudo -u ${BACKUP_USER} borg create \
-                            --verbose \
-                            --stats \
-                            --show-rc \
-                            --compression {{ borg_compression | default('lz4') }} \
-                            --exclude-caches \
-                            "\${BORG_REPO}::\${ARCHIVE_NAME}" \
-                            ${BACKUP_HOME}/temp/${TIMESTAMP} \
-                            {% if params.BACKUP_TYPE != 'configuration-only' %}
-                            /var/lib/docker/volumes/jenkins_data \
-                            /var/lib/docker/volumes/shared_workspace \
-                            /var/lib/docker/volumes/maven-cache \
-                            /var/lib/docker/volumes/pip-cache \
-                            {% endif %}
-                            {{ jenkins_home_dir }}/jcasc \
-                            {{ jenkins_home_dir }}/ssl \
-                            /etc/systemd/system/jenkins-*.service
-                        
-                        echo "✅ Borg backup archive created: \${ARCHIVE_NAME}"
-                    """
-                    {% else %}
-                    // Using traditional tar backup
-                    sh """
-                        echo "📦 Creating tar backup archive..."
-                        
-                        BACKUP_NAME="${HOSTNAME}-jenkins-${params.BACKUP_TYPE}-${TIMESTAMP}-${BACKUP_TAG}.tar.gz"
-                        
-                        sudo -u ${BACKUP_USER} tar -czf \
-                            ${BACKUP_MOUNT}/\${BACKUP_NAME} \
-                            -C ${BACKUP_HOME}/temp/${TIMESTAMP} . \
-                            {% if params.BACKUP_TYPE != 'configuration-only' %}
-                            -C /var/lib/docker/volumes jenkins_data shared_workspace maven-cache pip-cache \
-                            {% endif %}
-                            -C {{ jenkins_home_dir }} jcasc ssl \
-                            -C /etc/systemd/system jenkins-*.service
-                        
-                        # Create checksum
-                        sudo -u ${BACKUP_USER} sha256sum ${BACKUP_MOUNT}/\${BACKUP_NAME} > ${BACKUP_MOUNT}/\${BACKUP_NAME}.sha256
-                        
-                        echo "✅ Backup archive created: \${BACKUP_NAME}"
-                        echo "📏 Archive size: \$(du -h ${BACKUP_MOUNT}/\${BACKUP_NAME} | cut -f1)"
-                    """
-                    {% endif %}
-                }
-            }
-        }
-        
-        stage('Verify Backup Integrity') {
-            when {
-                expression { params.VERIFY_BACKUP }
-            }
-            steps {
-                script {
-                    echo "🔍 Verifying backup integrity..."
+                    writeFile file: 'execute-backup.yml', text: playbookContent
                     
+                    // Execute ansible playbook
                     sh """
-                        sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/verify-backup.sh \
-                            --timestamp ${TIMESTAMP} \
-                            --type ${params.BACKUP_TYPE} \
-                            --tag ${BACKUP_TAG}
-                    """
-                }
-            }
-        }
-        
-        stage('Cleanup Old Backups') {
-            when {
-                expression { params.CLEANUP_OLD_BACKUPS }
-            }
-            steps {
-                script {
-                    echo "🧹 Cleaning up old backups..."
-                    
-                    sh """
-                        sudo -u ${BACKUP_USER} ${BACKUP_HOME}/scripts/cleanup-old-backups.sh \
-                            --daily-retention {{ backup_daily_retention | default(30) }} \
-                            --weekly-retention {{ backup_weekly_retention | default(12) }} \
-                            --monthly-retention {{ backup_monthly_retention | default(12) }}
+                        echo "🚀 Executing Ansible playbook for backup operations..."
+                        ansible-playbook -i backup_inventory \
+                            execute-backup.yml \
+                            --extra-vars "backup_operation_mode=${params.BACKUP_TYPE}" \
+                            --extra-vars "backup_verification_enabled=${params.VERIFY_BACKUP}" \
+                            --extra-vars "backup_cleanup_enabled=${params.CLEANUP_OLD_BACKUPS}" \
+                            -v
                     """
                 }
             }

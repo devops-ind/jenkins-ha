@@ -1,10 +1,59 @@
 ---
+# Jenkins Default Configuration
+# These are default values that can be overridden in environment-specific group_vars
+
+# Default Jenkins version (can be overridden per environment)
 jenkins_version: "2.426.1"
-jenkins_port: 8080
-jenkins_home: "/opt/jenkins"
+jenkins_agent_version: "{{ jenkins_version }}"
+
+# Default ports
+jenkins_master_port: 8080
+jenkins_agent_port: 50000
+
+# Default paths - should be overridden in environment-specific configs
+jenkins_home_dir: "/opt/jenkins"
+jenkins_user: "jenkins"
+jenkins_group: "jenkins"
+jenkins_uid: 1000
+jenkins_gid: 1000
+
+# Default Jenkins configuration
+jenkins_admin_user: "admin"
+jenkins_enable_security: true
+jenkins_enable_csrf: true
+jenkins_enable_agent_protocols: "JNLP4-connect"
+
+# Default plugins - can be extended in environment configs
 jenkins_plugins:
   - workflow-aggregator
   - docker-workflow
   - kubernetes
   - prometheus
   - configuration-as-code
+  - build-timeout
+  - credentials-binding
+  - timestamper
+  - ws-cleanup
+  - ant
+  - gradle
+
+# Default container configuration
+jenkins_master_memory: "2g"
+jenkins_master_java_opts: "-Djenkins.install.runSetupWizard=false"
+
+# Default network settings
+jenkins_network_name: "jenkins-net"
+jenkins_network_subnet: "172.18.0.0/16"
+
+# Default backup settings
+jenkins_backup_enabled: false
+jenkins_backup_schedule: "0 2 * * 0"
+jenkins_backup_retention_days: 30
+
+# Default monitoring settings
+jenkins_monitoring_enabled: true
+jenkins_metrics_enabled: true
+
+# Default security settings
+jenkins_security_realm: "local"
+jenkins_authorization_strategy: "logged_in_users_can_do_anything"
