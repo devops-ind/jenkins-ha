@@ -2,7 +2,7 @@
 
 pipeline {
     agent {
-        label 'dind docker-manager static privileged'
+        label 'python'
     }
     
     options {

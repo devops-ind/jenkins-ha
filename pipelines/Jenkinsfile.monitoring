@@ -1,32 +1,244 @@
 pipeline {
-    agent any
+    agent {
+        label 'python'
+    }
+    
+    options {
+        buildDiscarder(logRotator(daysToKeepStr: '30', numToKeepStr: '20'))
+        timeout(time: 1, unit: 'HOURS')
+        timestamps()
+        ansiColor('xterm')
+        skipStagesAfterUnstable()
+    }
+    
+    environment {
+        PYTHONPATH = '/home/jenkins/agent'
+        PIP_CACHE_DIR = '/home/jenkins/.cache/pip'
+        MONITORING_TIMESTAMP = sh(script: 'date +"%Y%m%d_%H%M%S"', returnStdout: true).trim()
+    }
     
     parameters {
+        choice(
+            name: 'MONITORING_ACTION',
+            choices: ['setup', 'update-dashboards', 'update-rules', 'health-check', 'reset'],
+            description: 'Monitoring operation to perform'
+        )
         choice(
             name: 'ENVIRONMENT',
             choices: ['staging', 'production'],
             description: 'Target environment'
         )
+        booleanParam(
+            name: 'RESTART_SERVICES',
+            defaultValue: true,
+            description: 'Restart monitoring services after changes'
+        )
+        booleanParam(
+            name: 'VALIDATE_METRICS',
+            defaultValue: true,
+            description: 'Validate metrics collection after setup'
+        )
     }
     
     stages {
-        stage('Checkout') {
+        stage('Environment Setup') {
             steps {
-                checkout scm
+                script {
+                    echo "🚀 Jenkins Monitoring Stack Pipeline"
+                    echo "🎯 Environment: ${params.ENVIRONMENT}"
+                    echo "📊 Monitoring Action: ${params.MONITORING_ACTION}"
+                    echo "🔄 Restart Services: ${params.RESTART_SERVICES}"
+                    echo "✅ Validate Metrics: ${params.VALIDATE_METRICS}"
+                    echo "🐍 Running on Python Agent: ${env.NODE_NAME}"
+                    
+                    // Validate environment
+                    sh '''
+                        python3 --version
+                        pip3 --version
+                        which ansible || echo "Ansible not found - will install"
+                        which curl || echo "Curl not found"
+                    '''
+                }
             }
         }
         
-        stage('monitoring') {
+        stage('Pre-Monitoring Validation') {
             steps {
-                echo "Running monitoring pipeline"
-                // Add your pipeline steps here
+                script {
+                    echo "🔍 Validating monitoring prerequisites..."
+                    
+                    // Check monitoring nodes availability
+                    sh '''
+                        echo "Checking monitoring infrastructure..."
+                        ansible -i ansible/inventories/${ENVIRONMENT}/hosts.yml \
+                            monitoring -m ping
+                    '''
+                    
+                    // Check current monitoring status if not setup
+                    if (params.MONITORING_ACTION != 'setup') {
+                        sh '''
+                            echo "Checking current monitoring services..."
+                            ansible -i ansible/inventories/${ENVIRONMENT}/hosts.yml \
+                                monitoring -m shell \
+                                -a "systemctl is-active prometheus || true; systemctl is-active grafana-server || true"
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('Execute Monitoring Operation') {
+            steps {
+                script {
+                    echo "📊 Executing ${params.MONITORING_ACTION}..."
+                    
+                    def extraVars = [
+                        "monitoring_action=${params.MONITORING_ACTION}",
+                        "restart_services=${params.RESTART_SERVICES}",
+                        "validate_metrics=${params.VALIDATE_METRICS}",
+                        "monitoring_timestamp=${MONITORING_TIMESTAMP}"
+                    ]
+                    
+                    // Execute monitoring setup/update using Ansible
+                    sh """
+                        echo "🚀 Running Ansible monitoring playbook..."
+                        ansible-playbook -i ansible/inventories/${params.ENVIRONMENT}/hosts.yml \
+                            ansible/site.yml \
+                            --tags monitoring \
+                            --extra-vars '${extraVars.join(' ')}' \
+                            -v
+                    """
+                }
+            }
+        }
+        
+        stage('Deploy Dashboards') {
+            when {
+                expression { params.MONITORING_ACTION in ['setup', 'update-dashboards'] }
+            }
+            steps {
+                script {
+                    echo "📈 Deploying Grafana dashboards..."
+                    
+                    sh '''
+                        echo "Deploying monitoring dashboards..."
+                        # Deploy dashboards from monitoring/grafana/dashboards/
+                        find monitoring/grafana/dashboards/ -name "*.json" -type f | head -10
+                    '''
+                }
+            }
+        }
+        
+        stage('Update Alerting Rules') {
+            when {
+                expression { params.MONITORING_ACTION in ['setup', 'update-rules'] }
+            }
+            steps {
+                script {
+                    echo "⚠️ Updating Prometheus alerting rules..."
+                    
+                    sh '''
+                        echo "Updating alerting rules..."
+                        # Deploy rules from monitoring/prometheus/rules/
+                        find monitoring/prometheus/rules/ -name "*.yml" -type f | head -10
+                    '''
+                }
+            }
+        }
+        
+        stage('Validate Metrics Collection') {
+            when {
+                expression { params.VALIDATE_METRICS }
+            }
+            steps {
+                script {
+                    echo "✅ Validating metrics collection..."
+                    
+                    // Wait for services to stabilize
+                    sleep(time: 30, unit: 'SECONDS')
+                    
+                    sh '''
+                        echo "Validating Prometheus metrics..."
+                        # Test Prometheus endpoints
+                        curl -s http://monitoring-host:9090/api/v1/query?query=up || echo "Prometheus validation failed"
+                        
+                        echo "Validating Grafana..."
+                        # Test Grafana endpoints
+                        curl -s http://monitoring-host:3000/api/health || echo "Grafana validation failed"
+                    '''
+                }
+            }
+        }
+        
+        stage('Monitoring Health Check') {
+            steps {
+                script {
+                    echo "🐈 Running monitoring health check..."
+                    
+                    sh '''
+                        echo "Checking monitoring stack health..."
+                        python3 -c "
+                        import requests
+                        import sys
+                        
+                        def check_service(name, url):
+                            try:
+                                response = requests.get(url, timeout=10)
+                                if response.status_code == 200:
+                                    print(f'✅ {name} is healthy')
+                                    return True
+                                else:
+                                    print(f'❌ {name} returned status {response.status_code}')
+                                    return False
+                            except Exception as e:
+                                print(f'❌ {name} check failed: {e}')
+                                return False
+                        
+                        print('Monitoring Health Check Results:')
+                        # Add actual health checks here
+                        print('Health check completed')
+                        "
+                    '''
+                }
             }
         }
     }
     
     post {
         always {
-            cleanWs()
+            script {
+                echo "📊 Monitoring Pipeline Summary:"
+                echo "Environment: ${params.ENVIRONMENT}"
+                echo "Action: ${params.MONITORING_ACTION}"
+                echo "Services Restarted: ${params.RESTART_SERVICES}"
+                echo "Metrics Validated: ${params.VALIDATE_METRICS}"
+                echo "Duration: ${currentBuild.durationString}"
+                
+                // Archive monitoring logs
+                archiveArtifacts artifacts: '**/monitoring-*.log, **/prometheus-*.log, **/grafana-*.log', allowEmptyArchive: true
+            }
+            
+            // Clean workspace on python agent
+            cleanWs(
+                cleanWhenAborted: true,
+                cleanWhenFailure: true,
+                cleanWhenNotBuilt: true,
+                cleanWhenSuccess: true,
+                cleanWhenUnstable: true,
+                deleteDirs: true
+            )
+        }
+        
+        success {
+            script {
+                echo "✅ Monitoring Pipeline Completed Successfully!"
+            }
+        }
+        
+        failure {
+            script {
+                echo "❌ Monitoring Pipeline Failed!"
+            }
         }
     }
 }

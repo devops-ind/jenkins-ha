@@ -1,32 +1,207 @@
 pipeline {
-    agent any
+    agent {
+        label 'python'
+    }
+    
+    options {
+        buildDiscarder(logRotator(daysToKeepStr: '60', numToKeepStr: '30'))
+        timeout(time: 2, unit: 'HOURS')
+        timestamps()
+        ansiColor('xterm')
+        skipStagesAfterUnstable()
+        disableConcurrentBuilds()
+    }
+    
+    environment {
+        PYTHONPATH = '/home/jenkins/agent'
+        PIP_CACHE_DIR = '/home/jenkins/.cache/pip'
+        UPDATE_TIMESTAMP = sh(script: 'date +"%Y%m%d_%H%M%S"', returnStdout: true).trim()
+    }
     
     parameters {
+        string(
+            name: 'IMAGE_TAG',
+            defaultValue: 'latest',
+            description: 'Image tag to deploy'
+        )
         choice(
             name: 'ENVIRONMENT',
             choices: ['staging', 'production'],
             description: 'Target environment'
         )
+        choice(
+            name: 'UPDATE_SCOPE',
+            choices: ['all', 'masters-only', 'agents-only', 'configuration-only'],
+            description: 'Scope of the update'
+        )
+        booleanParam(
+            name: 'RESTART_SERVICES',
+            defaultValue: false,
+            description: 'Restart Jenkins services after update'
+        )
+        booleanParam(
+            name: 'SKIP_HEALTH_CHECKS',
+            defaultValue: false,
+            description: 'Skip post-update health checks'
+        )
+        string(
+            name: 'UPDATE_REASON',
+            defaultValue: 'Manual update',
+            description: 'Reason for the update'
+        )
     }
     
     stages {
-        stage('Checkout') {
+        stage('Environment Setup') {
             steps {
-                checkout scm
+                script {
+                    echo "🚀 Jenkins Infrastructure Update Pipeline"
+                    echo "🎯 Environment: ${params.ENVIRONMENT}"
+                    echo "🏷️ Image Tag: ${params.IMAGE_TAG}"
+                    echo "🎯 Update Scope: ${params.UPDATE_SCOPE}"
+                    echo "🔄 Restart Services: ${params.RESTART_SERVICES}"
+                    echo "ℹ️ Update Reason: ${params.UPDATE_REASON}"
+                    echo "🐍 Running on Python Agent: ${env.NODE_NAME}"
+                    
+                    // Validate environment
+                    sh '''
+                        python3 --version
+                        pip3 --version
+                        which ansible || echo "Ansible not found - will install"
+                        which docker || echo "Docker not found"
+                    '''
+                }
             }
         }
         
-        stage('infrastructure-update') {
+        stage('Pre-Update Validation') {
             steps {
-                echo "Running infrastructure-update pipeline"
-                // Add your pipeline steps here
+                script {
+                    echo "🔍 Pre-update validation..."
+                    
+                    // Check current system status
+                    sh '''
+                        echo "Checking current infrastructure status..."
+                        ansible -i ansible/inventories/${ENVIRONMENT}/hosts.yml \
+                            all -m ping
+                    '''
+                    
+                    // Validate image availability if not configuration-only
+                    if (params.UPDATE_SCOPE != 'configuration-only') {
+                        sh '''
+                            echo "Validating image availability: ${IMAGE_TAG}"
+                            # Add image validation logic
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('Create Update Backup') {
+            steps {
+                script {
+                    echo "📦 Creating pre-update backup..."
+                    
+                    // Trigger backup before update
+                    build job: 'Infrastructure/Backup-Pipeline',
+                          parameters: [
+                              choice(name: 'BACKUP_TYPE', value: 'configuration-only'),
+                              choice(name: 'ENVIRONMENT', value: params.ENVIRONMENT),
+                              string(name: 'CUSTOM_TAG', value: "pre-update-${UPDATE_TIMESTAMP}")
+                          ],
+                          wait: true
+                }
+            }
+        }
+        
+        stage('Execute Infrastructure Update') {
+            steps {
+                script {
+                    echo "🚀 Executing infrastructure update..."
+                    
+                    def extraVars = [
+                        "jenkins_master_image_tag=${params.IMAGE_TAG}",
+                        "jenkins_agent_image_tag=${params.IMAGE_TAG}",
+                        "update_scope=${params.UPDATE_SCOPE}",
+                        "restart_services=${params.RESTART_SERVICES}",
+                        "update_reason=${params.UPDATE_REASON}"
+                    ]
+                    
+                    // Execute update using Ansible
+                    sh """
+                        echo "🚀 Running Ansible infrastructure update..."
+                        ansible-playbook -i ansible/inventories/${params.ENVIRONMENT}/hosts.yml \
+                            ansible/site.yml \
+                            --tags jenkins,deploy \
+                            --extra-vars '${extraVars.join(' ')}' \
+                            --limit ${params.UPDATE_SCOPE == 'masters-only' ? 'jenkins_masters' : params.UPDATE_SCOPE == 'agents-only' ? 'jenkins_agents' : 'all'} \
+                            -v
+                    """
+                }
+            }
+        }
+        
+        stage('Post-Update Health Checks') {
+            when {
+                not { params.SKIP_HEALTH_CHECKS }
+            }
+            steps {
+                script {
+                    echo "🐈 Running post-update health checks..."
+                    
+                    // Wait for services to stabilize
+                    sleep(time: 30, unit: 'SECONDS')
+                    
+                    // Trigger health check pipeline
+                    build job: 'Infrastructure/Health-Check',
+                          parameters: [
+                              choice(name: 'CHECK_SCOPE', value: params.UPDATE_SCOPE == 'all' ? 'all' : params.UPDATE_SCOPE),
+                              booleanParam(name: 'DETAILED_REPORTING', value: true),
+                              booleanParam(name: 'SEND_ALERTS', value: true)
+                          ],
+                          wait: true
+                }
             }
         }
     }
     
     post {
         always {
-            cleanWs()
+            script {
+                echo "📊 Infrastructure Update Summary:"
+                echo "Environment: ${params.ENVIRONMENT}"
+                echo "Image Tag: ${params.IMAGE_TAG}"
+                echo "Update Scope: ${params.UPDATE_SCOPE}"
+                echo "Services Restarted: ${params.RESTART_SERVICES}"
+                echo "Update Reason: ${params.UPDATE_REASON}"
+                echo "Duration: ${currentBuild.durationString}"
+                
+                // Archive update logs
+                archiveArtifacts artifacts: '**/update-*.log', allowEmptyArchive: true
+            }
+            
+            // Clean workspace on python agent
+            cleanWs(
+                cleanWhenAborted: true,
+                cleanWhenFailure: true,
+                cleanWhenNotBuilt: true,
+                cleanWhenSuccess: true,
+                cleanWhenUnstable: true,
+                deleteDirs: true
+            )
+        }
+        
+        success {
+            script {
+                echo "✅ Infrastructure Update Completed Successfully!"
+            }
+        }
+        
+        failure {
+            script {
+                echo "❌ Infrastructure Update Failed!"
+                echo "📦 Consider restoring from pre-update backup if needed"
+            }
         }
     }
 }

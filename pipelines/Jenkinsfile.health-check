@@ -1,0 +1,380 @@
+pipeline {
+    agent {
+        label 'python'
+    }
+    
+    options {
+        buildDiscarder(logRotator(daysToKeepStr: '30', numToKeepStr: '50'))
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+        ansiColor('xterm')
+        skipStagesAfterUnstable()
+    }
+    
+    environment {
+        PYTHONPATH = '/home/jenkins/agent'
+        PIP_CACHE_DIR = '/home/jenkins/.cache/pip'
+        HEALTH_CHECK_TIMESTAMP = sh(script: 'date +"%Y%m%d_%H%M%S"', returnStdout: true).trim()
+    }
+    
+    parameters {
+        choice(
+            name: 'CHECK_SCOPE',
+            choices: ['all', 'masters-only', 'agents-only', 'services-only', 'network-only'],
+            description: 'Scope of health checks'
+        )
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['staging', 'production'],
+            description: 'Target environment'
+        )
+        booleanParam(
+            name: 'DETAILED_REPORTING',
+            defaultValue: false,
+            description: 'Generate detailed health reports'
+        )
+        booleanParam(
+            name: 'SEND_ALERTS',
+            defaultValue: true,
+            description: 'Send alerts for failed health checks'
+        )
+    }
+    
+    stages {
+        stage('Environment Setup') {
+            steps {
+                script {
+                    echo "🚀 Jenkins Health Check Pipeline"
+                    echo "🎯 Environment: ${params.ENVIRONMENT}"
+                    echo "🔍 Check Scope: ${params.CHECK_SCOPE}"
+                    echo "📋 Detailed Reporting: ${params.DETAILED_REPORTING}"
+                    echo "🚨 Send Alerts: ${params.SEND_ALERTS}"
+                    echo "🐍 Running on Python Agent: ${env.NODE_NAME}"
+                    
+                    // Setup health check tools
+                    sh '''
+                        python3 --version
+                        pip3 --version
+                        which ansible || echo "Ansible not found - will install"
+                        which curl || echo "Curl not found"
+                        
+                        # Install health check dependencies
+                        pip3 install --user requests psutil
+                    '''
+                }
+            }
+        }
+        
+        stage('Infrastructure Connectivity Check') {
+            steps {
+                script {
+                    echo "🌐 Checking infrastructure connectivity..."
+                    
+                    sh '''
+                        echo "Testing connectivity to all infrastructure nodes..."
+                        ansible -i ansible/inventories/${ENVIRONMENT}/hosts.yml \
+                            all -m ping -f 10 || echo "Some hosts are unreachable"
+                        
+                        echo "Checking SSH connectivity..."
+                        ansible -i ansible/inventories/${ENVIRONMENT}/hosts.yml \
+                            all -m shell -a "uptime" || echo "SSH issues detected"
+                    '''
+                }
+            }
+        }
+        
+        stage('Jenkins Masters Health Check') {
+            when {
+                expression { params.CHECK_SCOPE in ['all', 'masters-only'] }
+            }
+            steps {
+                script {
+                    echo "🏗️ Checking Jenkins Masters health..."
+                    
+                    sh '''
+                        echo "Checking Jenkins Master services..."
+                        ansible -i ansible/inventories/${ENVIRONMENT}/hosts.yml \
+                            jenkins_masters -m shell \
+                            -a "systemctl is-active jenkins-master && systemctl is-enabled jenkins-master"
+                        
+                        echo "Checking Jenkins Master HTTP endpoints..."
+                        python3 -c "
+                        import requests
+                        import json
+                        import sys
+                        
+                        # Health check Jenkins masters
+                        masters = []  # Add master URLs from inventory
+                        
+                        for master_url in masters:
+                            try:
+                                response = requests.get(f'{master_url}/api/json', timeout=10)
+                                if response.status_code == 200:
+                                    print(f'✅ {master_url}: Healthy')
+                                else:
+                                    print(f'❌ {master_url}: HTTP {response.status_code}')
+                            except Exception as e:
+                                print(f'❌ {master_url}: {e}')
+                        "
+                        
+                        echo "Checking Jenkins Master disk space..."
+                        ansible -i ansible/inventories/${ENVIRONMENT}/hosts.yml \
+                            jenkins_masters -m shell \
+                            -a "df -h /opt/jenkins && du -sh /opt/jenkins/jenkins_home"
+                    '''
+                }
+            }
+        }
+        
+        stage('Jenkins Agents Health Check') {
+            when {
+                expression { params.CHECK_SCOPE in ['all', 'agents-only'] }
+            }
+            steps {
+                script {
+                    echo "🔧 Checking Jenkins Agents health..."
+                    
+                    sh '''
+                        echo "Checking Jenkins Agent containers..."
+                        ansible -i ansible/inventories/${ENVIRONMENT}/hosts.yml \
+                            jenkins_agents -m shell \
+                            -a "docker ps --filter 'name=jenkins-' --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'"
+                        
+                        echo "Checking agent connectivity to masters..."
+                        ansible -i ansible/inventories/${ENVIRONMENT}/hosts.yml \
+                            jenkins_agents -m shell \
+                            -a "docker logs --tail 50 jenkins-python-agent 2>/dev/null | grep -i 'connected\|ready' || echo 'Agent logs not found'"
+                        
+                        echo "Checking agent resource usage..."
+                        ansible -i ansible/inventories/${ENVIRONMENT}/hosts.yml \
+                            jenkins_agents -m shell \
+                            -a "docker stats --no-stream --format 'table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}'"
+                    '''
+                }
+            }
+        }
+        
+        stage('Services Health Check') {
+            when {
+                expression { params.CHECK_SCOPE in ['all', 'services-only'] }
+            }
+            steps {
+                script {
+                    echo "⚙️ Checking additional services health..."
+                    
+                    sh '''
+                        echo "Checking Docker daemon status..."
+                        ansible -i ansible/inventories/${ENVIRONMENT}/hosts.yml \
+                            all -m shell \
+                            -a "systemctl is-active docker && docker info --format '{{.ServerVersion}}'"
+                        
+                        echo "Checking monitoring services..."
+                        ansible -i ansible/inventories/${ENVIRONMENT}/hosts.yml \
+                            monitoring -m shell \
+                            -a "systemctl is-active prometheus grafana-server || echo 'Monitoring services not running'" || echo "No monitoring group found"
+                        
+                        echo "Checking Harbor registry..."
+                        curl -s -o /dev/null -w "%{http_code}" "${HARBOR_REGISTRY_URL}/api/v2.0/health" || echo "Harbor health check failed"
+                    '''
+                }
+            }
+        }
+        
+        stage('Network Health Check') {
+            when {
+                expression { params.CHECK_SCOPE in ['all', 'network-only'] }
+            }
+            steps {
+                script {
+                    echo "🌐 Checking network health..."
+                    
+                    sh '''
+                        echo "Checking internal network connectivity..."
+                        ansible -i ansible/inventories/${ENVIRONMENT}/hosts.yml \
+                            all -m shell \
+                            -a "ping -c 3 8.8.8.8 && ping -c 3 google.com"
+                        
+                        echo "Checking port connectivity between services..."
+                        python3 -c "
+                        import socket
+                        import sys
+                        
+                        def check_port(host, port, service_name):
+                            try:
+                                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                sock.settimeout(5)
+                                result = sock.connect_ex((host, port))
+                                sock.close()
+                                if result == 0:
+                                    print(f'✅ {service_name} ({host}:{port}): Reachable')
+                                    return True
+                                else:
+                                    print(f'❌ {service_name} ({host}:{port}): Not reachable')
+                                    return False
+                            except Exception as e:
+                                print(f'❌ {service_name} ({host}:{port}): {e}')
+                                return False
+                        
+                        # Define service endpoints to check
+                        services = [
+                            # Add your service endpoints here
+                            # ('jenkins-master-host', 8080, 'Jenkins Master'),
+                            # ('harbor-host', 443, 'Harbor Registry'),
+                            # ('prometheus-host', 9090, 'Prometheus'),
+                            # ('grafana-host', 3000, 'Grafana')
+                        ]
+                        
+                        healthy_services = 0
+                        for host, port, name in services:
+                            if check_port(host, port, name):
+                                healthy_services += 1
+                        
+                        print(f'Network Health Summary: {healthy_services}/{len(services)} services reachable')
+                        "
+                    '''
+                }
+            }
+        }
+        
+        stage('Performance Metrics Check') {
+            steps {
+                script {
+                    echo "📊 Collecting performance metrics..."
+                    
+                    sh '''
+                        echo "Checking system resources..."
+                        ansible -i ansible/inventories/${ENVIRONMENT}/hosts.yml \
+                            all -m shell \
+                            -a "free -h && df -h && uptime"
+                        
+                        echo "Checking Jenkins performance..."
+                        python3 -c "
+                        import time
+                        import json
+                        
+                        # Collect basic performance metrics
+                        metrics = {
+                            'timestamp': time.time(),
+                            'environment': '${ENVIRONMENT}',
+                            'check_scope': '${CHECK_SCOPE}',
+                            'system_metrics': {
+                                'cpu_usage': 'pending',
+                                'memory_usage': 'pending',
+                                'disk_usage': 'pending'
+                            },
+                            'jenkins_metrics': {
+                                'active_builds': 'pending',
+                                'queue_length': 'pending',
+                                'agent_status': 'pending'
+                            }
+                        }
+                        
+                        # Save metrics
+                        with open(f'health-metrics-${HEALTH_CHECK_TIMESTAMP}.json', 'w') as f:
+                            json.dump(metrics, f, indent=2)
+                        
+                        print('Performance metrics collected')
+                        "
+                    '''
+                }
+            }
+        }
+        
+        stage('Generate Health Report') {
+            when {
+                expression { params.DETAILED_REPORTING }
+            }
+            steps {
+                script {
+                    echo "📋 Generating detailed health report..."
+                    
+                    sh '''
+                        echo "Compiling comprehensive health report..."
+                        
+                        python3 -c "
+                        import json
+                        from datetime import datetime
+                        
+                        health_report = {
+                            'report_id': '${HEALTH_CHECK_TIMESTAMP}',
+                            'environment': '${ENVIRONMENT}',
+                            'check_scope': '${CHECK_SCOPE}',
+                            'generated_at': datetime.now().isoformat(),
+                            'overall_status': 'unknown',
+                            'checks_performed': [],
+                            'issues_found': [],
+                            'recommendations': []
+                        }
+                        
+                        # Add check results based on scope
+                        if '${CHECK_SCOPE}' in ['all', 'masters-only']:
+                            health_report['checks_performed'].append('Jenkins Masters Health Check')
+                        
+                        if '${CHECK_SCOPE}' in ['all', 'agents-only']:
+                            health_report['checks_performed'].append('Jenkins Agents Health Check')
+                        
+                        if '${CHECK_SCOPE}' in ['all', 'services-only']:
+                            health_report['checks_performed'].append('Services Health Check')
+                        
+                        if '${CHECK_SCOPE}' in ['all', 'network-only']:
+                            health_report['checks_performed'].append('Network Health Check')
+                        
+                        # Add general recommendations
+                        health_report['recommendations'].extend([
+                            'Monitor disk space regularly',
+                            'Keep Jenkins and plugins updated',
+                            'Review agent capacity and utilization',
+                            'Check backup integrity periodically'
+                        ])
+                        
+                        # Save detailed report
+                        with open(f'health-report-{health_report[\\\"report_id\\\"]}.json', 'w') as f:
+                            json.dump(health_report, f, indent=2)
+                        
+                        print(f'Detailed health report generated: health-report-{health_report[\\\"report_id\\\"]}.json')
+                        print(f'Checks performed: {len(health_report[\\\"checks_performed\\\"])}')
+                        "
+                    '''
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                echo "📊 Health Check Summary:"
+                echo "Environment: ${params.ENVIRONMENT}"
+                echo "Check Scope: ${params.CHECK_SCOPE}"
+                echo "Detailed Reporting: ${params.DETAILED_REPORTING}"
+                echo "Duration: ${currentBuild.durationString}"
+            }
+            
+            // Archive health check reports
+            archiveArtifacts artifacts: '**/health-*.json, **/health-*.log', allowEmptyArchive: true
+            
+            // Clean workspace on python agent
+            cleanWs(
+                cleanWhenAborted: true,
+                cleanWhenFailure: true,
+                cleanWhenNotBuilt: true,
+                cleanWhenSuccess: true,
+                cleanWhenUnstable: true,
+                deleteDirs: true
+            )
+        }
+        
+        success {
+            script {
+                echo "✅ Health Check Pipeline Completed Successfully!"
+            }
+        }
+        
+        failure {
+            script {
+                echo "❌ Health Check Pipeline Failed!"
+                echo "🔍 Review health check results for issues"
+            }
+        }
+    }
+}

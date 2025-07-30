@@ -1,32 +1,348 @@
 pipeline {
-    agent any
+    agent {
+        label 'python'
+    }
+    
+    options {
+        buildDiscarder(logRotator(daysToKeepStr: '90', numToKeepStr: '40', artifactDaysToKeepStr: '30', artifactNumToKeepStr: '10'))
+        timeout(time: 2, unit: 'HOURS')
+        timestamps()
+        ansiColor('xterm')
+        skipStagesAfterUnstable()
+    }
+    
+    environment {
+        PYTHONPATH = '/home/jenkins/agent'
+        PIP_CACHE_DIR = '/home/jenkins/.cache/pip'
+        SCAN_TIMESTAMP = sh(script: 'date +"%Y%m%d_%H%M%S"', returnStdout: true).trim()
+        TRIVY_CACHE_DIR = '/tmp/trivy-cache'
+    }
     
     parameters {
+        choice(
+            name: 'SCAN_TYPE',
+            choices: ['full', 'images-only', 'configs-only', 'compliance-only'],
+            description: 'Type of security scan to perform'
+        )
         choice(
             name: 'ENVIRONMENT',
             choices: ['staging', 'production'],
             description: 'Target environment'
         )
+        booleanParam(
+            name: 'FAIL_ON_HIGH_SEVERITY',
+            defaultValue: true,
+            description: 'Fail pipeline on high severity vulnerabilities'
+        )
+        booleanParam(
+            name: 'GENERATE_REPORTS',
+            defaultValue: true,
+            description: 'Generate detailed security reports'
+        )
+        booleanParam(
+            name: 'SEND_NOTIFICATIONS',
+            defaultValue: true,
+            description: 'Send security scan notifications'
+        )
     }
     
     stages {
-        stage('Checkout') {
+        stage('Environment Setup') {
             steps {
-                checkout scm
+                script {
+                    echo "🚀 Jenkins Security Scan Pipeline"
+                    echo "🎯 Environment: ${params.ENVIRONMENT}"
+                    echo "🔍 Scan Type: ${params.SCAN_TYPE}"
+                    echo "⚠️ Fail on High Severity: ${params.FAIL_ON_HIGH_SEVERITY}"
+                    echo "📄 Generate Reports: ${params.GENERATE_REPORTS}"
+                    echo "🐍 Running on Python Agent: ${env.NODE_NAME}"
+                    
+                    // Setup security scanning tools
+                    sh '''
+                        python3 --version
+                        pip3 --version
+                        
+                        # Install/update security scanning tools
+                        echo "Setting up security scanning tools..."
+                        
+                        # Install Trivy for container scanning
+                        if ! command -v trivy &> /dev/null; then
+                            echo "Installing Trivy..."
+                            curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+                        fi
+                        
+                        # Install Ansible security modules if needed
+                        pip3 install --user ansible-security || true
+                        
+                        # Create cache directories
+                        mkdir -p ${TRIVY_CACHE_DIR}
+                        
+                        trivy --version || echo "Trivy not available"
+                    '''
+                }
             }
         }
         
-        stage('security-scan') {
+        stage('Container Image Scanning') {
+            when {
+                expression { params.SCAN_TYPE in ['full', 'images-only'] }
+            }
             steps {
-                echo "Running security-scan pipeline"
-                // Add your pipeline steps here
+                script {
+                    echo "📷 Scanning container images for vulnerabilities..."
+                    
+                    sh '''
+                        echo "Scanning Jenkins infrastructure images..."
+                        
+                        # List of images to scan
+                        IMAGES=(
+                            "${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-master:latest"
+                            "${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-python-agent:latest"
+                            "${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-maven-agent:latest"
+                            "${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-nodejs-agent:latest"
+                        )
+                        
+                        for image in "${IMAGES[@]}"; do
+                            echo "Scanning image: $image"
+                            trivy image \
+                                --cache-dir ${TRIVY_CACHE_DIR} \
+                                --format json \
+                                --output "trivy-report-$(basename $image)-${SCAN_TIMESTAMP}.json" \
+                                "$image" || echo "Failed to scan $image"
+                        done
+                        
+                        # Generate summary report
+                        python3 -c "
+                        import json
+                        import glob
+                        
+                        print('Security Scan Summary:')
+                        for report_file in glob.glob('trivy-report-*.json'):
+                            try:
+                                with open(report_file, 'r') as f:
+                                    data = json.load(f)
+                                    print(f'  - {report_file}: {len(data.get(\"Results\", []))} vulnerability groups found')
+                            except Exception as e:
+                                print(f'  - {report_file}: Error reading - {e}')
+                        "
+                    '''
+                }
+            }
+        }
+        
+        stage('Configuration Security Scan') {
+            when {
+                expression { params.SCAN_TYPE in ['full', 'configs-only'] }
+            }
+            steps {
+                script {
+                    echo "⚙️ Scanning configuration files for security issues..."
+                    
+                    sh '''
+                        echo "Scanning Ansible configurations..."
+                        
+                        # Scan Ansible playbooks and roles
+                        find ansible/ -name "*.yml" -o -name "*.yaml" | head -20
+                        
+                        # Check for hardcoded secrets (basic check)
+                        echo "Checking for potential secrets in configs..."
+                        grep -r -i "password\|secret\|key\|token" ansible/ --include="*.yml" --include="*.yaml" | grep -v vault || echo "No hardcoded secrets found"
+                        
+                        # Validate SSL/TLS configurations
+                        echo "Validating SSL/TLS configurations..."
+                        find environments/ -name "*.pem" -o -name "*.crt" -o -name "*.key" | head -10
+                    '''
+                }
+            }
+        }
+        
+        stage('Compliance Checks') {
+            when {
+                expression { params.SCAN_TYPE in ['full', 'compliance-only'] }
+            }
+            steps {
+                script {
+                    echo "📋 Running compliance checks..."
+                    
+                    sh '''
+                        echo "Running security compliance checks..."
+                        
+                        # Check Jenkins security best practices
+                        python3 -c "
+                        import os
+                        import yaml
+                        
+                        print('Compliance Check Results:')
+                        
+                        # Check for security-related configurations
+                        jcasc_files = []
+                        for root, dirs, files in os.walk('ansible/roles/jenkins-infrastructure/templates/jcasc/'):
+                            for file in files:
+                                if file.endswith('.yml') or file.endswith('.yaml'):
+                                    jcasc_files.append(os.path.join(root, file))
+                        
+                        print(f'Found {len(jcasc_files)} JCasC configuration files')
+                        
+                        # Basic compliance checks
+                        checks = {
+                            'CSRF Protection': False,
+                            'Security Realm': False,
+                            'Authorization Strategy': False,
+                            'Agent Protocols': False
+                        }
+                        
+                        for file_path in jcasc_files:
+                            try:
+                                with open(file_path, 'r') as f:
+                                    content = f.read().lower()
+                                    if 'csrf' in content:
+                                        checks['CSRF Protection'] = True
+                                    if 'securityrealm' in content or 'security realm' in content:
+                                        checks['Security Realm'] = True
+                                    if 'authorizationstrategy' in content or 'authorization' in content:
+                                        checks['Authorization Strategy'] = True
+                                    if 'agentprotocols' in content or 'agent protocols' in content:
+                                        checks['Agent Protocols'] = True
+                            except Exception as e:
+                                print(f'Error reading {file_path}: {e}')
+                        
+                        for check, passed in checks.items():
+                            status = '✅' if passed else '❌'
+                            print(f'  {status} {check}: {\\'CONFIGURED\\' if passed else \\'NOT FOUND\\'}')
+                        "
+                    '''
+                }
+            }
+        }
+        
+        stage('Generate Security Reports') {
+            when {
+                expression { params.GENERATE_REPORTS }
+            }
+            steps {
+                script {
+                    echo "📄 Generating security reports..."
+                    
+                    sh '''
+                        echo "Consolidating security scan results..."
+                        
+                        # Create comprehensive security report
+                        python3 -c "
+                        import json
+                        import glob
+                        from datetime import datetime
+                        
+                        report = {
+                            'scan_timestamp': '${SCAN_TIMESTAMP}',
+                            'environment': '${ENVIRONMENT}',
+                            'scan_type': '${SCAN_TYPE}',
+                            'trivy_reports': [],
+                            'compliance_status': 'pending'
+                        }
+                        
+                        # Process Trivy reports
+                        for report_file in glob.glob('trivy-report-*.json'):
+                            try:
+                                with open(report_file, 'r') as f:
+                                    trivy_data = json.load(f)
+                                    report['trivy_reports'].append({
+                                        'file': report_file,
+                                        'results_count': len(trivy_data.get('Results', []))
+                                    })
+                            except Exception as e:
+                                print(f'Error processing {report_file}: {e}')
+                        
+                        # Save consolidated report
+                        with open(f'security-report-{report[\"scan_timestamp\"]}.json', 'w') as f:
+                            json.dump(report, f, indent=2)
+                        
+                        print(f'Security report generated: security-report-{report[\"scan_timestamp\"]}.json')
+                        "
+                    '''
+                }
+            }
+        }
+        
+        stage('Evaluate Security Findings') {
+            steps {
+                script {
+                    echo "⚖️ Evaluating security findings..."
+                    
+                    def highSeverityFound = false
+                    
+                    // Check for high severity vulnerabilities
+                    sh '''
+                        echo "Analyzing security scan results..."
+                        
+                        # Check Trivy reports for high severity issues
+                        python3 -c "
+                        import json
+                        import glob
+                        import sys
+                        
+                        high_severity_count = 0
+                        
+                        for report_file in glob.glob('trivy-report-*.json'):
+                            try:
+                                with open(report_file, 'r') as f:
+                                    data = json.load(f)
+                                    for result in data.get('Results', []):
+                                        for vuln in result.get('Vulnerabilities', []):
+                                            if vuln.get('Severity', '').upper() in ['HIGH', 'CRITICAL']:
+                                                high_severity_count += 1
+                            except Exception as e:
+                                print(f'Error processing {report_file}: {e}')
+                        
+                        print(f'High/Critical severity vulnerabilities found: {high_severity_count}')
+                        
+                        if high_severity_count > 0 and '${params.FAIL_ON_HIGH_SEVERITY}' == 'true':
+                            print('SECURITY_SCAN_FAILED: High severity vulnerabilities found')
+                            sys.exit(1)
+                        else:
+                            print('SECURITY_SCAN_PASSED: No blocking security issues found')
+                        "
+                    '''
+                }
             }
         }
     }
     
     post {
         always {
-            cleanWs()
+            script {
+                echo "📊 Security Scan Summary:"
+                echo "Environment: ${params.ENVIRONMENT}"
+                echo "Scan Type: ${params.SCAN_TYPE}"
+                echo "Fail on High Severity: ${params.FAIL_ON_HIGH_SEVERITY}"
+                echo "Reports Generated: ${params.GENERATE_REPORTS}"
+                echo "Duration: ${currentBuild.durationString}"
+            }
+            
+            // Archive security reports
+            archiveArtifacts artifacts: '**/trivy-report-*.json, **/security-report-*.json, **/security-*.log', allowEmptyArchive: true
+            
+            // Clean workspace on python agent
+            cleanWs(
+                cleanWhenAborted: true,
+                cleanWhenFailure: true,
+                cleanWhenNotBuilt: true,
+                cleanWhenSuccess: true,
+                cleanWhenUnstable: true,
+                deleteDirs: true
+            )
+        }
+        
+        success {
+            script {
+                echo "✅ Security Scan Pipeline Completed Successfully!"
+            }
+        }
+        
+        failure {
+            script {
+                echo "❌ Security Scan Pipeline Failed!"
+                echo "⚠️ Review security findings and remediate issues"
+            }
         }
     }
 }

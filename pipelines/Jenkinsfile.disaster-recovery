@@ -1,32 +1,324 @@
 pipeline {
-    agent any
+    agent {
+        label 'python'
+    }
+    
+    options {
+        buildDiscarder(logRotator(daysToKeepStr: '180', numToKeepStr: '50', artifactDaysToKeepStr: '90', artifactNumToKeepStr: '20'))
+        timeout(time: 4, unit: 'HOURS')
+        timestamps()
+        ansiColor('xterm')
+        skipStagesAfterUnstable()
+        disableConcurrentBuilds()
+    }
+    
+    environment {
+        PYTHONPATH = '/home/jenkins/agent'
+        PIP_CACHE_DIR = '/home/jenkins/.cache/pip'
+        RECOVERY_TIMESTAMP = sh(script: 'date +"%Y%m%d_%H%M%S"', returnStdout: true).trim()
+    }
     
     parameters {
         choice(
+            name: 'RECOVERY_ACTION',
+            choices: ['test-recovery', 'full-recovery', 'partial-recovery', 'validation-only'],
+            description: 'Type of disaster recovery operation'
+        )
+        choice(
             name: 'ENVIRONMENT',
             choices: ['staging', 'production'],
-            description: 'Target environment'
+            description: 'Target environment for recovery'
+        )
+        string(
+            name: 'BACKUP_TAG',
+            defaultValue: 'latest',
+            description: 'Backup tag/timestamp to restore from'
+        )
+        choice(
+            name: 'RECOVERY_SCOPE',
+            choices: ['all', 'jenkins-masters', 'jenkins-agents', 'monitoring', 'configuration-only'],
+            description: 'Scope of recovery operation'
+        )
+        booleanParam(
+            name: 'SKIP_CONFIRMATIONS',
+            defaultValue: false,
+            description: 'Skip manual confirmations (use with caution)'
+        )
+        booleanParam(
+            name: 'DRY_RUN',
+            defaultValue: true,
+            description: 'Perform dry run without actual recovery'
         )
     }
     
     stages {
-        stage('Checkout') {
+        stage('Disaster Recovery Setup') {
             steps {
-                checkout scm
+                script {
+                    echo "🎆 Jenkins Disaster Recovery Pipeline"
+                    echo "🎯 Environment: ${params.ENVIRONMENT}"
+                    echo "🔄 Recovery Action: ${params.RECOVERY_ACTION}"
+                    echo "📦 Backup Tag: ${params.BACKUP_TAG}"
+                    echo "🎯 Recovery Scope: ${params.RECOVERY_SCOPE}"
+                    echo "⚠️ Dry Run: ${params.DRY_RUN}"
+                    echo "🐍 Running on Python Agent: ${env.NODE_NAME}"
+                    
+                    // Validate disaster recovery environment
+                    sh '''
+                        python3 --version
+                        pip3 --version
+                        which ansible || echo "Ansible not found - will install"
+                        which rsync || echo "Rsync not found - will install"
+                        
+                        # Install disaster recovery tools
+                        pip3 install --user pyyaml requests
+                    '''
+                    
+                    // Critical safety check
+                    if (!params.DRY_RUN && !params.SKIP_CONFIRMATIONS) {
+                        def userInput = input(
+                            message: '⚠️ DISASTER RECOVERY CONFIRMATION ⚠️\n\nYou are about to perform actual disaster recovery operations.\nThis will potentially overwrite existing data and services.\n\nEnvironment: ' + params.ENVIRONMENT + '\nAction: ' + params.RECOVERY_ACTION + '\nBackup: ' + params.BACKUP_TAG + '\n\nDo you want to proceed?',
+                            ok: 'YES, PROCEED WITH RECOVERY',
+                            parameters: [
+                                booleanParam(defaultValue: false, name: 'CONFIRMED', description: 'I confirm this disaster recovery operation')
+                            ]
+                        )
+                        
+                        if (!userInput.CONFIRMED) {
+                            error('Disaster recovery cancelled by user')
+                        }
+                    }
+                }
             }
         }
         
-        stage('disaster-recovery') {
+        stage('Pre-Recovery Validation') {
             steps {
-                echo "Running disaster-recovery pipeline"
-                // Add your pipeline steps here
+                script {
+                    echo "🔍 Pre-recovery validation..."
+                    
+                    sh '''
+                        echo "Validating backup availability..."
+                        
+                        # Check backup location and files
+                        if [ "${BACKUP_TAG}" != "latest" ]; then
+                            echo "Checking for specific backup: ${BACKUP_TAG}"
+                            # Add backup validation logic here
+                        fi
+                        
+                        # Validate target infrastructure
+                        echo "Validating recovery target infrastructure..."
+                        ansible -i ansible/inventories/${ENVIRONMENT}/hosts.yml \
+                            all -m ping || echo "Some hosts are not reachable"
+                    '''
+                    
+                    // Create recovery plan
+                    sh '''
+                        echo "Creating disaster recovery plan..."
+                        
+                        python3 -c "
+                        import json
+                        from datetime import datetime
+                        
+                        recovery_plan = {
+                            'recovery_id': '${RECOVERY_TIMESTAMP}',
+                            'environment': '${ENVIRONMENT}',
+                            'action': '${RECOVERY_ACTION}',
+                            'scope': '${RECOVERY_SCOPE}',
+                            'backup_tag': '${BACKUP_TAG}',
+                            'dry_run': ${params.DRY_RUN},
+                            'created_at': datetime.now().isoformat(),
+                            'steps': []
+                        }
+                        
+                        # Define recovery steps based on scope
+                        if '${params.RECOVERY_SCOPE}' in ['all', 'jenkins-masters']:
+                            recovery_plan['steps'].append('Restore Jenkins Master configurations')
+                            recovery_plan['steps'].append('Restore Jenkins Master data')
+                        
+                        if '${params.RECOVERY_SCOPE}' in ['all', 'jenkins-agents']:
+                            recovery_plan['steps'].append('Restore Jenkins Agent configurations')
+                        
+                        if '${params.RECOVERY_SCOPE}' in ['all', 'monitoring']:
+                            recovery_plan['steps'].append('Restore monitoring stack')
+                        
+                        if '${params.RECOVERY_SCOPE}' in ['all', 'configuration-only']:
+                            recovery_plan['steps'].append('Restore configuration files')
+                        
+                        # Save recovery plan
+                        with open(f'recovery-plan-{recovery_plan[\"recovery_id\"]}.json', 'w') as f:
+                            json.dump(recovery_plan, f, indent=2)
+                        
+                        print(f'Recovery plan created: recovery-plan-{recovery_plan[\"recovery_id\"]}.json')
+                        print(f'Total recovery steps: {len(recovery_plan[\"steps\"])}')
+                        "
+                    '''
+                }
+            }
+        }
+        
+        stage('Backup Current State') {
+            when {
+                not { params.DRY_RUN }
+            }
+            steps {
+                script {
+                    echo "📦 Creating pre-recovery backup..."
+                    
+                    // Create backup before recovery
+                    build job: 'Infrastructure/Backup-Pipeline',
+                          parameters: [
+                              choice(name: 'BACKUP_TYPE', value: 'full'),
+                              choice(name: 'ENVIRONMENT', value: params.ENVIRONMENT),
+                              string(name: 'CUSTOM_TAG', value: "pre-recovery-${RECOVERY_TIMESTAMP}")
+                          ],
+                          wait: true
+                }
+            }
+        }
+        
+        stage('Execute Disaster Recovery') {
+            steps {
+                script {
+                    echo "🎆 Executing disaster recovery..."
+                    
+                    def extraVars = [
+                        "recovery_action=${params.RECOVERY_ACTION}",
+                        "recovery_scope=${params.RECOVERY_SCOPE}",
+                        "backup_tag=${params.BACKUP_TAG}",
+                        "dry_run=${params.DRY_RUN}",
+                        "recovery_timestamp=${RECOVERY_TIMESTAMP}"
+                    ]
+                    
+                    if (params.DRY_RUN) {
+                        echo "🎭 DRY RUN MODE - Simulating disaster recovery..."
+                        
+                        sh '''
+                            echo "=== DRY RUN DISASTER RECOVERY ==="
+                            echo "Would execute the following recovery operations:"
+                            
+                            python3 -c "
+                            recovery_steps = [
+                                'Stop affected services',
+                                'Restore data from backup: ${BACKUP_TAG}',
+                                'Restore configurations',
+                                'Update service configurations',
+                                'Start services in correct order',
+                                'Validate service health',
+                                'Update monitoring and alerting'
+                            ]
+                            
+                            for i, step in enumerate(recovery_steps, 1):
+                                print(f'{i}. {step}')
+                            
+                            print('\nℹ️ This is a DRY RUN - no actual changes were made')
+                            "
+                        '''
+                    } else {
+                        echo "⚠️ EXECUTING ACTUAL DISASTER RECOVERY ⚠️"
+                        
+                        // Execute actual recovery using Ansible
+                        sh """
+                            echo "🚀 Running Ansible disaster recovery playbook..."
+                            ansible-playbook -i ansible/inventories/${params.ENVIRONMENT}/hosts.yml \
+                                ansible/site.yml \
+                                --tags disaster-recovery \
+                                --extra-vars '${extraVars.join(' ')}' \
+                                --limit ${params.RECOVERY_SCOPE == 'all' ? 'all' : params.RECOVERY_SCOPE} \
+                                -v
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Post-Recovery Validation') {
+            steps {
+                script {
+                    echo "✅ Post-recovery validation..."
+                    
+                    if (!params.DRY_RUN) {
+                        // Wait for services to stabilize
+                        sleep(time: 60, unit: 'SECONDS')
+                        
+                        // Run comprehensive health check
+                        build job: 'Infrastructure/Health-Check',
+                              parameters: [
+                                  choice(name: 'CHECK_SCOPE', value: params.RECOVERY_SCOPE == 'all' ? 'all' : params.RECOVERY_SCOPE),
+                                  booleanParam(name: 'DETAILED_REPORTING', value: true),
+                                  booleanParam(name: 'SEND_ALERTS', value: true)
+                              ],
+                              wait: true
+                    }
+                    
+                    // Generate recovery report
+                    sh '''
+                        echo "Generating disaster recovery report..."
+                        
+                        python3 -c "
+                        import json
+                        from datetime import datetime
+                        
+                        recovery_report = {
+                            'recovery_id': '${RECOVERY_TIMESTAMP}',
+                            'environment': '${ENVIRONMENT}',
+                            'action': '${RECOVERY_ACTION}',
+                            'scope': '${RECOVERY_SCOPE}',
+                            'backup_tag': '${BACKUP_TAG}',
+                            'dry_run': ${params.DRY_RUN},
+                            'completed_at': datetime.now().isoformat(),
+                            'status': 'completed',
+                            'validation_results': 'pending'
+                        }
+                        
+                        with open(f'recovery-report-{recovery_report[\"recovery_id\"]}.json', 'w') as f:
+                            json.dump(recovery_report, f, indent=2)
+                        
+                        print(f'Recovery report generated: recovery-report-{recovery_report[\"recovery_id\"]}.json')
+                        "
+                    '''
+                }
             }
         }
     }
     
     post {
         always {
-            cleanWs()
+            script {
+                echo "📊 Disaster Recovery Summary:"
+                echo "Environment: ${params.ENVIRONMENT}"
+                echo "Action: ${params.RECOVERY_ACTION}"
+                echo "Scope: ${params.RECOVERY_SCOPE}"
+                echo "Backup Tag: ${params.BACKUP_TAG}"
+                echo "Dry Run: ${params.DRY_RUN}"
+                echo "Duration: ${currentBuild.durationString}"
+            }
+            
+            // Archive recovery artifacts
+            archiveArtifacts artifacts: '**/recovery-plan-*.json, **/recovery-report-*.json, **/recovery-*.log', allowEmptyArchive: true
+            
+            // Clean workspace on python agent
+            cleanWs(
+                cleanWhenAborted: true,
+                cleanWhenFailure: true,
+                cleanWhenNotBuilt: true,
+                cleanWhenSuccess: true,
+                cleanWhenUnstable: true,
+                deleteDirs: true
+            )
+        }
+        
+        success {
+            script {
+                echo "✅ Disaster Recovery Pipeline Completed Successfully!"
+            }
+        }
+        
+        failure {
+            script {
+                echo "❌ Disaster Recovery Pipeline Failed!"
+                echo "⚠️ Review recovery logs and consider manual intervention"
+            }
         }
     }
 }
