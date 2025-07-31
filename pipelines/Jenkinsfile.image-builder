@@ -20,7 +20,7 @@ pipeline {
         AGENT_VERSION = "${JENKINS_AGENT_VERSION}"
         BUILD_DATE = sh(script: 'date -u +"%Y-%m-%dT%H:%M:%SZ"', returnStdout: true).trim()
         GIT_COMMIT = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
-        IMAGE_TAG = "${params.IMAGE_TAG ?: env.BUILD_NUMBER}"
+        IMAGE_TAG = "${(params.IMAGE_TAG != 'latest') ? params.IMAGE_TAG : env.BUILD_NUMBER}"
         DOCKER_BUILDKIT = '1'
         COMPOSE_DOCKER_CLI_BUILD = '1'
     }
