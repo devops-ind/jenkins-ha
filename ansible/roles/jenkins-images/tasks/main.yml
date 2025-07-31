@@ -2,6 +2,22 @@
 # Jenkins Images Building and Management Role
 # Builds images and pushes to Harbor registry
 
+- name: Set default images_to_build if not provided
+  set_fact:
+    images_to_build: "{{ images_to_build | default('all') }}"
+
+- name: Display images build configuration
+  debug:
+    msg: |
+      🚀 Jenkins Images Build Configuration:
+      
+      🎯 Images to Build: {{ images_to_build }}
+      🏷️ Master Image Tag: {{ jenkins_master_image_tag | default('latest') }}
+      🏷️ Agent Image Tag: {{ jenkins_agent_image_tag | default('latest') }}
+      🔨 Force Rebuild: {{ jenkins_images_force_rebuild | default(false) }}
+      📤 Push to Registry: {{ jenkins_images_push | default(true) }}
+      🏪 Harbor Registry: {{ harbor_registry_url }}/{{ harbor_project }}
+
 - name: Create image build directories
   file:
     path: "{{ item }}"
@@ -26,7 +42,7 @@
     owner: "{{ jenkins_user }}"
     group: "{{ jenkins_group }}"
     mode: '0644'
-  notify: build jenkins master image
+  when: images_to_build == 'all' or images_to_build == 'master'
 
 - name: Generate plugins list for master
   template:
@@ -35,7 +51,7 @@
     owner: "{{ jenkins_user }}"
     group: "{{ jenkins_group }}"
     mode: '0644'
-  notify: build jenkins master image
+  when: images_to_build == 'all' or images_to_build == 'master'
 
 - name: Generate DIND agent Dockerfile
   template:
@@ -44,7 +60,7 @@
     owner: "{{ jenkins_user }}"
     group: "{{ jenkins_group }}"
     mode: '0644'
-  notify: build dind agent image
+  when: images_to_build == 'all' or images_to_build == 'dind-agent'
 
 - name: Generate Maven agent Dockerfile
   template:
@@ -53,7 +69,7 @@
     owner: "{{ jenkins_user }}"
     group: "{{ jenkins_group }}"
     mode: '0644'
-  notify: build maven agent image
+  when: images_to_build == 'all' or images_to_build == 'maven-agent'
 
 - name: Generate Python agent Dockerfile
   template:
@@ -62,7 +78,7 @@
     owner: "{{ jenkins_user }}"
     group: "{{ jenkins_group }}"
     mode: '0644'
-  notify: build python agent image
+  when: images_to_build == 'all' or images_to_build == 'python-agent'
 
 - name: Generate Node.js agent Dockerfile
   template:
@@ -71,7 +87,7 @@
     owner: "{{ jenkins_user }}"
     group: "{{ jenkins_group }}"
     mode: '0644'
-  notify: build nodejs agent image
+  when: images_to_build == 'all' or images_to_build == 'nodejs-agent'
 
 - name: Copy common scripts and files
   copy:
@@ -109,6 +125,7 @@
     state: present
     push: "{{ jenkins_images_push | default(false) }}"
   register: master_image_build
+  when: images_to_build == 'all' or images_to_build == 'master'
 
 - name: Build DIND agent image
   community.docker.docker_image:
@@ -127,6 +144,7 @@
     state: present
     push: "{{ jenkins_images_push | default(false) }}"
   register: dind_image_build
+  when: images_to_build == 'all' or images_to_build == 'dind-agent'
 
 - name: Build Maven agent image
   community.docker.docker_image:
@@ -146,6 +164,7 @@
     state: present
     push: "{{ jenkins_images_push | default(false) }}"
   register: maven_image_build
+  when: images_to_build == 'all' or images_to_build == 'maven-agent'
 
 - name: Build Python agent image
   community.docker.docker_image:
@@ -164,6 +183,7 @@
     state: present
     push: "{{ jenkins_images_push | default(false) }}"
   register: python_image_build
+  when: images_to_build == 'all' or images_to_build == 'python-agent'
 
 - name: Build Node.js agent image
   community.docker.docker_image:
@@ -182,6 +202,7 @@
     state: present
     push: "{{ jenkins_images_push | default(false) }}"
   register: nodejs_image_build
+  when: images_to_build == 'all' or images_to_build == 'nodejs-agent'
 
 - name: Clean up old images (keep last 3 versions)
   community.docker.docker_prune:
@@ -191,6 +212,32 @@
       until: "72h"
   when: jenkins_images_cleanup | default(true)
 
+- name: Create dynamic images built list
+  set_fact:
+    images_built_list: "{{ images_built_list | default([]) + [item] }}"
+  loop:
+    - name: jenkins-master
+      tag: "{{ jenkins_master_image_tag }}"
+      digest: "{{ master_image_build.image.Id | default('not-built') }}"
+      condition: "{{ (images_to_build == 'all' or images_to_build == 'master') and master_image_build is defined and master_image_build.image is defined }}"
+    - name: jenkins-agent-dind
+      tag: "{{ jenkins_agent_image_tag }}"
+      digest: "{{ dind_image_build.image.Id | default('not-built') }}"
+      condition: "{{ (images_to_build == 'all' or images_to_build == 'dind-agent') and dind_image_build is defined and dind_image_build.image is defined }}"
+    - name: jenkins-agent-maven
+      tag: "{{ jenkins_agent_image_tag }}"
+      digest: "{{ maven_image_build.image.Id | default('not-built') }}"
+      condition: "{{ (images_to_build == 'all' or images_to_build == 'maven-agent') and maven_image_build is defined and maven_image_build.image is defined }}"
+    - name: jenkins-agent-python
+      tag: "{{ jenkins_agent_image_tag }}"
+      digest: "{{ python_image_build.image.Id | default('not-built') }}"
+      condition: "{{ (images_to_build == 'all' or images_to_build == 'python-agent') and python_image_build is defined and python_image_build.image is defined }}"
+    - name: jenkins-agent-nodejs
+      tag: "{{ jenkins_agent_image_tag }}"
+      digest: "{{ nodejs_image_build.image.Id | default('not-built') }}"
+      condition: "{{ (images_to_build == 'all' or images_to_build == 'nodejs-agent') and nodejs_image_build is defined and nodejs_image_build.image is defined }}"
+  when: item.condition | bool
+
 - name: Generate image manifest
   template:
     src: image-manifest.yml.j2
@@ -199,36 +246,45 @@
     group: "{{ jenkins_group }}"
     mode: '0644'
   vars:
-    images_built:
-      - name: jenkins-master
-        tag: "{{ jenkins_master_image_tag }}"
-        digest: "{{ master_image_build.image.Id | default('') }}"
-      - name: jenkins-agent-dind
-        tag: "{{ jenkins_agent_image_tag }}"
-        digest: "{{ dind_image_build.image.Id | default('') }}"
-      - name: jenkins-agent-maven
-        tag: "{{ jenkins_agent_image_tag }}"
-        digest: "{{ maven_image_build.image.Id | default('') }}"
-      - name: jenkins-agent-python
-        tag: "{{ jenkins_agent_image_tag }}"
-        digest: "{{ python_image_build.image.Id | default('') }}"
-      - name: jenkins-agent-nodejs
-        tag: "{{ jenkins_agent_image_tag }}"
-        digest: "{{ nodejs_image_build.image.Id | default('') }}"
+    images_built: "{{ images_built_list | default([]) }}"
+  when: images_built_list is defined and images_built_list | length > 0
 
 - name: Display image build summary
   debug:
     msg: |
       🎉 Jenkins Images Build Completed!
       
-      📦 Built Images:
-      • Master: {{ harbor_registry_url }}/{{ harbor_project }}/jenkins-master:{{ jenkins_master_image_tag }}
-      • DIND Agent: {{ harbor_registry_url }}/{{ harbor_project }}/jenkins-agent-dind:{{ jenkins_agent_image_tag }}
-      • Maven Agent: {{ harbor_registry_url }}/{{ harbor_project }}/jenkins-agent-maven:{{ jenkins_agent_image_tag }}
-      • Python Agent: {{ harbor_registry_url }}/{{ harbor_project }}/jenkins-agent-python:{{ jenkins_agent_image_tag }}
-      • Node.js Agent: {{ harbor_registry_url }}/{{ harbor_project }}/jenkins-agent-nodejs:{{ jenkins_agent_image_tag }}
+      🎯 Images to Build: {{ images_to_build }}
+      📦 Successfully Built Images ({{ images_built_list | default([]) | length }}):
+      {% for image in images_built_list | default([]) %}
+      • {{ image.name }}: {{ harbor_registry_url }}/{{ harbor_project }}/{{ image.name }}:{{ image.tag }}
+      {% endfor %}
       
       🏷️ Registry: {{ harbor_registry_url }}/{{ harbor_project }}
       📅 Build Date: {{ ansible_date_time.iso8601 }}
       🔨 Force Rebuild: {{ jenkins_images_force_rebuild | default(false) }}
       📤 Push to Registry: {{ jenkins_images_push | default(true) }}
+
+- name: Display individual image build status
+  debug:
+    msg: |
+      📊 Image Build Status Details:
+      
+      • Jenkins Master: {{ 'BUILT' if (images_to_build == 'all' or images_to_build == 'master') and master_image_build is defined else 'SKIPPED' }}
+      • DIND Agent: {{ 'BUILT' if (images_to_build == 'all' or images_to_build == 'dind-agent') and dind_image_build is defined else 'SKIPPED' }}
+      • Maven Agent: {{ 'BUILT' if (images_to_build == 'all' or images_to_build == 'maven-agent') and maven_image_build is defined else 'SKIPPED' }}
+      • Python Agent: {{ 'BUILT' if (images_to_build == 'all' or images_to_build == 'python-agent') and python_image_build is defined else 'SKIPPED' }}
+      • Node.js Agent: {{ 'BUILT' if (images_to_build == 'all' or images_to_build == 'nodejs-agent') and nodejs_image_build is defined else 'SKIPPED' }}
+
+- name: Fail if no images were built
+  fail:
+    msg: |
+      ❌ No images were built! 
+      
+      Selected: {{ images_to_build }}
+      Possible values: all, master, dind-agent, maven-agent, python-agent, nodejs-agent
+      
+      Please check your images_to_build parameter.
+  when: 
+    - images_built_list is not defined or images_built_list | length == 0
+    - images_to_build != ''
