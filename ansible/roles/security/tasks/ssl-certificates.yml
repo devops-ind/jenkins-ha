@@ -1,0 +1,204 @@
+---
+# SSL/TLS Certificate Management Tasks
+# Handles creation, distribution, and renewal of SSL certificates for Jenkins HA infrastructure
+
+- name: Create SSL certificate directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  loop:
+    - "{{ ssl_certificate_dir }}"
+    - "{{ ssl_private_key_dir }}"
+    - "{{ ssl_ca_dir }}"
+    - "{{ ssl_csr_dir }}"
+    - "{{ ssl_backup_dir }}"
+  become: yes
+  tags: ['ssl', 'directories']
+
+- name: Set secure permissions on private key directory
+  file:
+    path: "{{ ssl_private_key_dir }}"
+    mode: '0700'
+    owner: root
+    group: root
+  become: yes
+  tags: ['ssl', 'permissions']
+
+# Certificate Authority Management
+- name: Check if CA private key exists
+  stat:
+    path: "{{ ssl_ca_private_key_path }}"
+  register: ca_private_key_stat
+  tags: ['ssl', 'ca']
+
+- name: Generate CA private key
+  openssl_privatekey:
+    path: "{{ ssl_ca_private_key_path }}"
+    size: 4096
+    type: RSA
+    cipher: aes256
+    passphrase: "{{ vault_ca_key_password }}"
+    mode: '0600'
+    owner: root
+    group: root
+  become: yes
+  when: not ca_private_key_stat.stat.exists or ssl_force_regenerate | default(false)
+  tags: ['ssl', 'ca', 'private-key']
+
+- name: Generate CA certificate signing request
+  openssl_csr:
+    path: "{{ ssl_ca_csr_path }}"
+    privatekey_path: "{{ ssl_ca_private_key_path }}"
+    privatekey_passphrase: "{{ vault_ca_key_password }}"
+    common_name: "{{ ssl_ca_common_name }}"
+    country_name: "{{ vault_ssl_country }}"
+    state_or_province_name: "{{ vault_ssl_state }}"
+    locality_name: "{{ vault_ssl_city }}"
+    organization_name: "{{ vault_ssl_organization }}"
+    organizational_unit_name: "{{ vault_ssl_organizational_unit }}"
+    email_address: "{{ vault_ssl_email }}"
+    basic_constraints:
+      - "CA:TRUE"
+      - "pathlen:0"
+    basic_constraints_critical: yes
+    key_usage:
+      - keyCertSign
+      - cRLSign
+      - digitalSignature
+    key_usage_critical: yes
+    extended_key_usage:
+      - serverAuth
+      - clientAuth
+  become: yes
+  when: not ca_private_key_stat.stat.exists or ssl_force_regenerate | default(false)
+  tags: ['ssl', 'ca', 'csr']
+
+- name: Generate CA certificate
+  openssl_certificate:
+    path: "{{ ssl_ca_certificate_path }}"
+    privatekey_path: "{{ ssl_ca_private_key_path }}"
+    privatekey_passphrase: "{{ vault_ca_key_password }}"
+    csr_path: "{{ ssl_ca_csr_path }}"
+    provider: selfsigned
+    selfsigned_not_after: "+{{ ssl_ca_validity_days }}d"
+    selfsigned_digest: sha256
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  when: not ca_private_key_stat.stat.exists or ssl_force_regenerate | default(false)
+  tags: ['ssl', 'ca', 'certificate']
+
+# Service-specific SSL certificates
+- name: Generate SSL certificates for services
+  include_tasks: generate-service-certificate.yml
+  loop: "{{ ssl_services }}"
+  loop_control:
+    loop_var: service
+  tags: ['ssl', 'service-certificates']
+
+# Certificate distribution and trust
+- name: Copy CA certificate to system trust store
+  copy:
+    src: "{{ ssl_ca_certificate_path }}"
+    dest: "/usr/local/share/ca-certificates/jenkins-ca.crt"
+    mode: '0644'
+    owner: root
+    group: root
+    remote_src: yes
+  become: yes
+  notify: update ca certificates
+  tags: ['ssl', 'trust']
+
+- name: Install CA certificate in Java keystore for Jenkins
+  java_cert:
+    cert_path: "{{ ssl_ca_certificate_path }}"
+    keystore_path: "{{ java_keystore_path }}"
+    keystore_pass: "{{ java_keystore_password }}"
+    alias: "jenkins-ca"
+    state: present
+  become: yes
+  when: java_keystore_path is defined
+  tags: ['ssl', 'java-trust']
+
+# Certificate validation and monitoring
+- name: Validate SSL certificates
+  openssl_certificate:
+    path: "{{ ssl_certificate_dir }}/{{ item.name }}.crt"
+    provider: assertonly
+    has_expired: false
+    valid_in: "{{ ssl_renewal_threshold_days * 24 * 3600 }}"  # Convert days to seconds
+  loop: "{{ ssl_services }}"
+  register: ssl_validation_results
+  failed_when: false
+  tags: ['ssl', 'validation']
+
+- name: Create SSL certificate monitoring script
+  template:
+    src: ssl-monitor.sh.j2
+    dest: /usr/local/bin/ssl-monitor.sh
+    mode: '0755'
+    owner: root
+    group: root
+  become: yes
+  tags: ['ssl', 'monitoring']
+
+- name: Setup SSL certificate renewal cron job
+  cron:
+    name: "SSL certificate renewal check"
+    job: "/usr/local/bin/ssl-monitor.sh --check-renewal"
+    minute: "0"
+    hour: "3"
+    day: "1"  # Monthly check
+    user: root
+  become: yes
+  when: ssl_auto_renewal_enabled | default(true)
+  tags: ['ssl', 'renewal']
+
+# Let's Encrypt integration (optional)
+- name: Include Let's Encrypt tasks
+  include_tasks: lets-encrypt.yml
+  when: ssl_use_letsencrypt | default(false)
+  tags: ['ssl', 'letsencrypt']
+
+# Certificate backup
+- name: Create SSL certificate backup
+  archive:
+    path:
+      - "{{ ssl_certificate_dir }}"
+      - "{{ ssl_private_key_dir }}"
+      - "{{ ssl_ca_dir }}"
+    dest: "{{ ssl_backup_dir }}/ssl-certificates-{{ ansible_date_time.date }}.tar.gz"
+    mode: '0600'
+    owner: root
+    group: root
+  become: yes
+  when: ssl_backup_enabled | default(true)
+  tags: ['ssl', 'backup']
+
+# Security hardening for SSL
+- name: Configure SSL security hardening
+  include_tasks: ssl-hardening.yml
+  tags: ['ssl', 'hardening']
+
+- name: Display SSL certificate information
+  debug:
+    msg: |
+      SSL Certificate Configuration:
+      
+      CA Certificate: {{ ssl_ca_certificate_path }}
+      Certificate Directory: {{ ssl_certificate_dir }}
+      Private Key Directory: {{ ssl_private_key_dir }}
+      
+      Services with SSL:
+      {% for service in ssl_services %}
+      - {{ service.name }}: {{ service.common_name }}
+      {% endfor %}
+      
+      Auto-renewal: {{ 'Enabled' if ssl_auto_renewal_enabled | default(true) else 'Disabled' }}
+      Let's Encrypt: {{ 'Enabled' if ssl_use_letsencrypt | default(false) else 'Disabled' }}
+      Certificate Backup: {{ 'Enabled' if ssl_backup_enabled | default(true) else 'Disabled' }}
+  tags: ['ssl', 'info']

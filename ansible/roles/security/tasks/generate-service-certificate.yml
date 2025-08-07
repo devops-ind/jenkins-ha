@@ -1,0 +1,111 @@
+---
+# Generate SSL certificate for a specific service
+# This task file is called in a loop for each service defined in ssl_services
+
+- name: "Generate private key for {{ service.name }}"
+  openssl_privatekey:
+    path: "{{ ssl_private_key_dir }}/{{ service.name }}.key"
+    size: 2048
+    type: RSA
+    mode: '0600'
+    owner: "{{ service.owner | default('root') }}"
+    group: "{{ service.group | default('root') }}"
+  become: yes
+  tags: ['ssl', 'private-key']
+
+- name: "Generate certificate signing request for {{ service.name }}"
+  openssl_csr:
+    path: "{{ ssl_csr_dir }}/{{ service.name }}.csr"
+    privatekey_path: "{{ ssl_private_key_dir }}/{{ service.name }}.key"
+    common_name: "{{ service.common_name }}"
+    country_name: "{{ vault_ssl_country }}"
+    state_or_province_name: "{{ vault_ssl_state }}"
+    locality_name: "{{ vault_ssl_city }}"
+    organization_name: "{{ vault_ssl_organization }}"
+    organizational_unit_name: "{{ vault_ssl_organizational_unit }}"
+    email_address: "{{ vault_ssl_email }}"
+    subject_alt_name: "{{ service.san | default([]) }}"
+    key_usage:
+      - digitalSignature
+      - keyEncipherment
+      - nonRepudiation
+    extended_key_usage:
+      - serverAuth
+      - clientAuth
+  become: yes
+  tags: ['ssl', 'csr']
+
+- name: "Generate certificate for {{ service.name }}"
+  openssl_certificate:
+    path: "{{ ssl_certificate_dir }}/{{ service.name }}.crt"
+    csr_path: "{{ ssl_csr_dir }}/{{ service.name }}.csr"
+    ownca_path: "{{ ssl_ca_certificate_path }}"
+    ownca_privatekey_path: "{{ ssl_ca_private_key_path }}"
+    ownca_privatekey_passphrase: "{{ vault_ca_key_password }}"
+    ownca_digest: sha256
+    ownca_not_after: "+{{ service.validity_days | default(ssl_default_validity_days) }}d"
+    provider: ownca
+    mode: '0644'
+    owner: "{{ service.owner | default('root') }}"
+    group: "{{ service.group | default('root') }}"
+  become: yes
+  tags: ['ssl', 'certificate']
+
+- name: "Create certificate bundle for {{ service.name }}"
+  shell: |
+    cat {{ ssl_certificate_dir }}/{{ service.name }}.crt {{ ssl_ca_certificate_path }} > {{ ssl_certificate_dir }}/{{ service.name }}-bundle.crt
+  become: yes
+  when: service.create_bundle | default(true)
+  tags: ['ssl', 'bundle']
+
+- name: "Set permissions on certificate bundle for {{ service.name }}"
+  file:
+    path: "{{ ssl_certificate_dir }}/{{ service.name }}-bundle.crt"
+    mode: '0644'
+    owner: "{{ service.owner | default('root') }}"
+    group: "{{ service.group | default('root') }}"
+  become: yes
+  when: service.create_bundle | default(true)
+  tags: ['ssl', 'permissions']
+
+# Service-specific certificate installation
+- name: "Install certificate for {{ service.name }} in service directory"
+  copy:
+    src: "{{ ssl_certificate_dir }}/{{ service.name }}.crt"
+    dest: "{{ service.cert_dest_path }}"
+    mode: '0644'
+    owner: "{{ service.owner | default('root') }}"
+    group: "{{ service.group | default('root') }}"
+    remote_src: yes
+  become: yes
+  when: service.cert_dest_path is defined
+  notify: "restart {{ service.name }}"
+  tags: ['ssl', 'install']
+
+- name: "Install private key for {{ service.name }} in service directory"
+  copy:
+    src: "{{ ssl_private_key_dir }}/{{ service.name }}.key"
+    dest: "{{ service.key_dest_path }}"
+    mode: '0600'
+    owner: "{{ service.owner | default('root') }}"
+    group: "{{ service.group | default('root') }}"
+    remote_src: yes
+  become: yes
+  when: service.key_dest_path is defined
+  notify: "restart {{ service.name }}"
+  tags: ['ssl', 'install']
+
+- name: "Install certificate bundle for {{ service.name }} in service directory"
+  copy:
+    src: "{{ ssl_certificate_dir }}/{{ service.name }}-bundle.crt"
+    dest: "{{ service.bundle_dest_path }}"
+    mode: '0644'
+    owner: "{{ service.owner | default('root') }}"
+    group: "{{ service.group | default('root') }}"
+    remote_src: yes
+  become: yes
+  when: 
+    - service.bundle_dest_path is defined
+    - service.create_bundle | default(true)
+  notify: "restart {{ service.name }}"
+  tags: ['ssl', 'install']

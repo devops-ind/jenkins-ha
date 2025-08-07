@@ -20,11 +20,11 @@ jenkins_master_cpu_limit: "1.0"
 jenkins_master_image_tag: "latest"
 jenkins_master_java_opts: "-Djenkins.install.runSetupWizard=false -Dhudson.DNSMultiCast.disabled=true"
 
-# Jenkins Agent Configuration
-jenkins_agent_memory: "1g"
-jenkins_agent_cpu_limit: "0.5"
-jenkins_agent_image_tag: "latest"
-jenkins_agent_version: "latest"
+# Jenkins Dynamic Agent Configuration
+jenkins_dynamic_agent_memory: "2g"
+jenkins_dynamic_agent_cpu_limit: "1.0"
+jenkins_dynamic_agent_image_tag: "latest"
+jenkins_dynamic_agent_max_instances: 10
 
 # High Availability Configuration
 jenkins_ha_enabled: true
@@ -62,7 +62,17 @@ jenkins_systemd_enabled: true
 jenkins_systemd_restart: "always"
 jenkins_systemd_restart_sec: 30
 
-# Build Tools Versions
+# Dynamic Agent Memory and Resource Configuration
+jenkins_dind_agent_memory: 2048
+jenkins_maven_agent_memory: 4096
+jenkins_maven_agent_heap: "3g"
+jenkins_python_agent_memory: 2048
+jenkins_nodejs_agent_memory: 3072
+
+# Shared workspace for dynamic agents
+jenkins_shared_workspace: "{{ shared_storage_path | default('/shared/jenkins') }}/workspace"
+
+# Build Tools Versions for Dynamic Agents
 maven_version: "3.9.6"
 python_version: "3.11"
 nodejs_version: "18"
@@ -84,9 +94,10 @@ jenkins_master_resources:
   memory: "{{ jenkins_master_memory }}"
   cpu: "{{ jenkins_master_cpu_limit }}"
   
-jenkins_agent_resources:
-  memory: "{{ jenkins_agent_memory }}"
-  cpu: "{{ jenkins_agent_cpu_limit }}"
+jenkins_dynamic_agent_resources:
+  memory: "{{ jenkins_dynamic_agent_memory }}"
+  cpu: "{{ jenkins_dynamic_agent_cpu_limit }}"
+  max_instances: "{{ jenkins_dynamic_agent_max_instances }}"
 
 # Environment Variables
 jenkins_env_vars:

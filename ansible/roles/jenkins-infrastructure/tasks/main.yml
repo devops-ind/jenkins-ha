@@ -30,13 +30,13 @@
 
 - name: Include master container tasks
   include_tasks: master-containers.yml
-  when: jenkins_role == 'master' or jenkins_role is not defined
+  when: jenkins_role is not defined or jenkins_role == 'master'
   tags: ['master', 'containers']
 
-- name: Include agent container tasks
+- name: Include dynamic agent setup tasks
   include_tasks: agent-containers.yml
-  when: jenkins_role == 'agent'
-  tags: ['agents', 'containers']
+  when: jenkins_role == 'master' or jenkins_role is not defined
+  tags: ['agents', 'dynamic-setup']
 
 - name: Include systemd service configuration
   include_tasks: systemd-services.yml

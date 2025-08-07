@@ -1,0 +1,252 @@
+---
+# Harbor Security Hardening Tasks
+
+- name: Create Harbor security configuration directory
+  file:
+    path: "{{ harbor_security_dir }}"
+    state: directory
+    mode: '0700'
+    owner: root
+    group: root
+  become: yes
+  tags: ['harbor', 'security', 'directories']
+
+- name: Configure Harbor firewall rules
+  ansible.posix.firewalld:
+    port: "{{ item }}"
+    permanent: yes
+    state: enabled
+    immediate: yes
+    zone: "{{ harbor_firewall_zone | default('public') }}"
+  loop:
+    - "{{ harbor_port }}/tcp"
+    - "{{ harbor_https_port }}/tcp"
+    - "4443/tcp"  # Notary
+  when: ansible_os_family == "RedHat"
+  become: yes
+  tags: ['harbor', 'security', 'firewall']
+
+- name: Configure Harbor UFW rules
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+    src: "{{ harbor_allowed_networks | default(['any']) }}"
+  loop:
+    - "{{ harbor_port }}"
+    - "{{ harbor_https_port }}"
+    - "4443"  # Notary
+  when: ansible_os_family == "Debian"
+  become: yes
+  tags: ['harbor', 'security', 'firewall']
+
+- name: Generate Harbor security configuration
+  template:
+    src: harbor-security.conf.j2
+    dest: "{{ harbor_security_dir }}/security.conf"
+    mode: '0600'
+    owner: root
+    group: root
+  become: yes
+  tags: ['harbor', 'security', 'config']
+
+- name: Configure fail2ban for Harbor
+  template:
+    src: jail-harbor.local.j2
+    dest: /etc/fail2ban/jail.d/harbor.local
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  notify: restart fail2ban
+  when: harbor_fail2ban_enabled | default(true)
+  tags: ['harbor', 'security', 'fail2ban']
+
+- name: Create Harbor fail2ban filter
+  template:
+    src: harbor-filter.conf.j2
+    dest: /etc/fail2ban/filter.d/harbor.conf
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  notify: restart fail2ban
+  when: harbor_fail2ban_enabled | default(true)
+  tags: ['harbor', 'security', 'fail2ban']
+
+- name: Configure Harbor rate limiting
+  template:
+    src: harbor-rate-limit.conf.j2
+    dest: "{{ harbor_config_dir }}/rate-limit.conf"
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  tags: ['harbor', 'security', 'rate-limiting']
+
+- name: Setup Harbor vulnerability scanning policies
+  template:
+    src: vulnerability-policies.json.j2
+    dest: "{{ harbor_config_dir }}/vulnerability-policies.json"
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  tags: ['harbor', 'security', 'vulnerability-scanning']
+
+- name: Configure Harbor content trust (Notary)
+  template:
+    src: notary-config.json.j2
+    dest: "{{ harbor_config_dir }}/notary-config.json"
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  when: harbor_content_trust_enabled | default(true)
+  tags: ['harbor', 'security', 'content-trust']
+
+- name: Setup Harbor image scanning automation
+  template:
+    src: scan-automation.sh.j2
+    dest: /usr/local/bin/harbor-scan-automation.sh
+    mode: '0755'
+    owner: root
+    group: root
+  become: yes
+  tags: ['harbor', 'security', 'automation']
+
+- name: Schedule Harbor security scans
+  cron:
+    name: "Harbor security scan"
+    job: "/usr/local/bin/harbor-scan-automation.sh >> /var/log/harbor-security-scan.log 2>&1"
+    minute: "0"
+    hour: "2"
+    user: root
+  become: yes
+  when: harbor_automated_scanning | default(true)
+  tags: ['harbor', 'security', 'automation']
+
+- name: Configure Harbor registry proxy cache
+  template:
+    src: proxy-cache.yml.j2
+    dest: "{{ harbor_config_dir }}/proxy-cache.yml"
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  when: harbor_proxy_cache_enabled | default(false)
+  tags: ['harbor', 'security', 'proxy-cache']
+
+- name: Setup Harbor image retention policies
+  template:
+    src: retention-policies.json.j2
+    dest: "{{ harbor_config_dir }}/retention-policies.json"
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  tags: ['harbor', 'security', 'retention']
+
+- name: Configure Harbor audit logging
+  template:
+    src: audit-config.yml.j2
+    dest: "{{ harbor_config_dir }}/audit-config.yml"
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  tags: ['harbor', 'security', 'audit']
+
+- name: Setup Harbor log rotation
+  template:
+    src: harbor-logrotate.j2
+    dest: /etc/logrotate.d/harbor
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  tags: ['harbor', 'security', 'logging']
+
+- name: Create Harbor security monitoring script
+  template:
+    src: harbor-security-monitor.sh.j2
+    dest: /usr/local/bin/harbor-security-monitor.sh
+    mode: '0755'
+    owner: root
+    group: root
+  become: yes
+  tags: ['harbor', 'security', 'monitoring']
+
+- name: Schedule Harbor security monitoring
+  cron:
+    name: "Harbor security monitoring"
+    job: "/usr/local/bin/harbor-security-monitor.sh >> /var/log/harbor-security-monitor.log 2>&1"
+    minute: "*/15"
+    user: root
+  become: yes
+  when: harbor_security_monitoring_enabled | default(true)
+  tags: ['harbor', 'security', 'monitoring']
+
+- name: Configure Harbor database security
+  template:
+    src: postgres-security.conf.j2
+    dest: "{{ harbor_config_dir }}/postgres-security.conf"
+    mode: '0600'
+    owner: root
+    group: root
+  become: yes
+  tags: ['harbor', 'security', 'database']
+
+- name: Setup Harbor backup encryption
+  template:
+    src: backup-encryption.sh.j2
+    dest: /usr/local/bin/harbor-backup-encryption.sh
+    mode: '0755'
+    owner: root
+    group: root
+  become: yes
+  when: harbor_backup_encryption_enabled | default(true)
+  tags: ['harbor', 'security', 'backup']
+
+- name: Configure Harbor registry garbage collection security
+  template:
+    src: gc-security.yml.j2
+    dest: "{{ harbor_config_dir }}/gc-security.yml"
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  tags: ['harbor', 'security', 'gc']
+
+- name: Setup Harbor compliance reporting
+  template:
+    src: compliance-report.sh.j2
+    dest: /usr/local/bin/harbor-compliance-report.sh
+    mode: '0755'
+    owner: root
+    group: root
+  become: yes
+  when: harbor_compliance_reporting_enabled | default(false)
+  tags: ['harbor', 'security', 'compliance']
+
+- name: Display Harbor security status
+  debug:
+    msg: |
+      Harbor Security Hardening Status:
+      
+      Firewall Rules: Configured
+      Fail2ban Protection: {{ 'Enabled' if harbor_fail2ban_enabled | default(true) else 'Disabled' }}
+      Rate Limiting: Configured
+      Content Trust (Notary): {{ 'Enabled' if harbor_content_trust_enabled | default(true) else 'Disabled' }}
+      Vulnerability Scanning: {{ 'Enabled' if harbor_automated_scanning | default(true) else 'Disabled' }}
+      Audit Logging: Configured
+      Security Monitoring: {{ 'Enabled' if harbor_security_monitoring_enabled | default(true) else 'Disabled' }}
+      Backup Encryption: {{ 'Enabled' if harbor_backup_encryption_enabled | default(true) else 'Disabled' }}
+      Compliance Reporting: {{ 'Enabled' if harbor_compliance_reporting_enabled | default(false) else 'Disabled' }}
+      
+      Configured Policies:
+      - Image Retention: Active
+      - Vulnerability Policies: Active
+      - Rate Limiting: Active
+      - Database Security: Hardened
+  tags: ['harbor', 'security', 'info']

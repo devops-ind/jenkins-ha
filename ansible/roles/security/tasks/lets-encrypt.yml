@@ -1,0 +1,118 @@
+---
+# Let's Encrypt certificate management for production environments
+
+- name: Install certbot and dependencies
+  package:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - certbot
+    - python3-certbot-nginx
+  become: yes
+  when: ansible_os_family == "Debian"
+  tags: ['letsencrypt', 'packages']
+
+- name: Install certbot for RHEL/CentOS
+  package:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - certbot
+    - python3-certbot-nginx
+  become: yes
+  when: ansible_os_family == "RedHat"
+  tags: ['letsencrypt', 'packages']
+
+- name: Create Let's Encrypt configuration directory
+  file:
+    path: /etc/letsencrypt/live
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  become: yes
+  tags: ['letsencrypt', 'directories']
+
+- name: Generate Let's Encrypt certificates for services
+  command: >
+    certbot certonly
+    --standalone
+    --non-interactive
+    --agree-tos
+    --email {{ vault_ssl_email }}
+    --domains {{ item.letsencrypt_domains | join(',') }}
+    --cert-name {{ item.name }}
+    --preferred-challenges http
+    --http-01-port {{ item.challenge_port | default(80) }}
+  loop: "{{ ssl_services }}"
+  when: 
+    - item.use_letsencrypt | default(false)
+    - item.letsencrypt_domains is defined
+  become: yes
+  register: letsencrypt_result
+  failed_when: 
+    - letsencrypt_result.rc != 0
+    - "'Certificate not yet due for renewal' not in letsencrypt_result.stderr"
+  tags: ['letsencrypt', 'certificates']
+
+- name: Create symbolic links to Let's Encrypt certificates
+  file:
+    src: "/etc/letsencrypt/live/{{ item.name }}/fullchain.pem"
+    dest: "{{ ssl_certificate_dir }}/{{ item.name }}.crt"
+    state: link
+    force: yes
+  loop: "{{ ssl_services }}"
+  when: 
+    - item.use_letsencrypt | default(false)
+    - item.letsencrypt_domains is defined
+  become: yes
+  tags: ['letsencrypt', 'symlinks']
+
+- name: Create symbolic links to Let's Encrypt private keys
+  file:
+    src: "/etc/letsencrypt/live/{{ item.name }}/privkey.pem"
+    dest: "{{ ssl_private_key_dir }}/{{ item.name }}.key"
+    state: link
+    force: yes
+  loop: "{{ ssl_services }}"
+  when: 
+    - item.use_letsencrypt | default(false)
+    - item.letsencrypt_domains is defined
+  become: yes
+  tags: ['letsencrypt', 'symlinks']
+
+- name: Setup Let's Encrypt auto-renewal
+  cron:
+    name: "Let's Encrypt certificate renewal"
+    job: "certbot renew --quiet --post-hook 'systemctl reload nginx' >> /var/log/letsencrypt-renewal.log 2>&1"
+    minute: "0"
+    hour: "3"
+    day: "*/7"  # Weekly check
+    user: root
+  become: yes
+  when: letsencrypt_auto_renewal_enabled | default(true)
+  tags: ['letsencrypt', 'renewal']
+
+- name: Test Let's Encrypt renewal process
+  command: certbot renew --dry-run
+  become: yes
+  register: letsencrypt_test_renewal
+  failed_when: false
+  changed_when: false
+  tags: ['letsencrypt', 'test']
+
+- name: Display Let's Encrypt status
+  debug:
+    msg: |
+      Let's Encrypt Configuration:
+      
+      Auto-renewal: {{ 'Enabled' if letsencrypt_auto_renewal_enabled | default(true) else 'Disabled' }}
+      Test renewal result: {{ 'PASSED' if letsencrypt_test_renewal.rc == 0 else 'FAILED' }}
+      
+      Services with Let's Encrypt:
+      {% for service in ssl_services %}
+      {% if service.use_letsencrypt | default(false) %}
+      - {{ service.name }}: {{ service.letsencrypt_domains | join(', ') }}
+      {% endif %}
+      {% endfor %}
+  tags: ['letsencrypt', 'info']

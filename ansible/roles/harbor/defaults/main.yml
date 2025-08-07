@@ -4,31 +4,69 @@
 # Harbor configuration
 harbor_enabled: true
 harbor_version: "v2.9.0"
-harbor_hostname: "{{ harbor_registry | default('harbor.local') }}"
+harbor_hostname: "{{ harbor_registry_url | default('harbor.company.com') }}"
 harbor_port: 80
 harbor_https_port: 443
-harbor_ssl_enabled: false
+harbor_ssl_enabled: true
+harbor_ssl_verify: true
+harbor_force_config: false
 
 # Harbor installation
 harbor_install_dir: "/opt/harbor"
 harbor_data_dir: "/data/harbor"
 harbor_log_dir: "/var/log/harbor"
+harbor_config_dir: "/etc/harbor"
+harbor_ssl_dir: "/etc/harbor/ssl"
+harbor_security_dir: "/etc/harbor/security"
+harbor_backup_dir: "/backup/harbor"
 harbor_download_url: "https://github.com/goharbor/harbor/releases/download/{{ harbor_version }}/harbor-offline-installer-{{ harbor_version }}.tgz"
+harbor_installer_checksum: ""  # Optional checksum verification
+
+# Harbor API configuration
+harbor_api_base_url: "{{ 'https' if harbor_ssl_enabled else 'http' }}://{{ harbor_hostname }}:{{ harbor_https_port if harbor_ssl_enabled else harbor_port }}/api/v2.0"
 
 # Harbor database
 harbor_db_host: "localhost"
 harbor_db_port: 5432
 harbor_db_name: "registry"
 harbor_db_user: "harbor"
-harbor_db_password: "{{ vault_harbor_db_password | default('changeme') }}"
+harbor_db_password: "{{ vault_harbor_database_password }}"
+harbor_db_max_idle_conns: 50
+harbor_db_max_open_conns: 1000
 
 # Harbor Redis
 harbor_redis_host: "localhost"
 harbor_redis_port: 6379
 harbor_redis_password: "{{ vault_harbor_redis_password | default('') }}"
+harbor_redis_db_index: 0
 
-# Harbor admin
-harbor_admin_password: "{{ vault_harbor_admin_password | default('Harbor12345') }}"
+# Harbor admin credentials
+harbor_admin_username: "admin"
+harbor_admin_password: "{{ vault_harbor_admin_password }}"
+
+# Harbor service users
+harbor_service_users:
+  - username: "jenkins"
+    email: "jenkins@company.com"
+    password: "{{ vault_harbor_registry_password }}"
+    realname: "Jenkins Service Account"
+    comment: "Service account for Jenkins CI/CD"
+  - username: "monitoring"
+    email: "monitoring@company.com"
+    password: "{{ vault_harbor_monitoring_password | default('M0n1t0r1ng@2024!') }}"
+    realname: "Monitoring Service Account"
+    comment: "Service account for monitoring and metrics collection"
+
+# Harbor robot accounts for automation
+harbor_robot_accounts:
+  - name: "jenkins-ci"
+    description: "Robot account for Jenkins CI/CD operations"
+    duration: 90  # days
+    project: "jenkins-prod"
+  - name: "backup-service"
+    description: "Robot account for backup operations"
+    duration: 365  # days
+    project: "jenkins-prod"
 
 # Harbor components
 harbor_components:
@@ -44,51 +82,134 @@ harbor_components:
 
 # Harbor projects
 harbor_projects:
-  - name: "{{ jenkins_project_name | default('jenkins') }}"
+  - name: "jenkins-prod"
     public: false
     auto_scan: true
     prevent_vul: true
+    severity: "high"
+    cve_allowlist: []
+  - name: "jenkins-images"
+    public: false
+    auto_scan: true
+    prevent_vul: true
+    severity: "medium"
+    cve_allowlist: []
   - name: "library"
-    public: true
-    auto_scan: false
+    public: false  # More secure default
+    auto_scan: true
     prevent_vul: false
-
-# Harbor users
-harbor_users:
-  - username: "jenkins"
-    email: "jenkins@company.com"
-    password: "{{ vault_harbor_jenkins_password | default('Jenkins123') }}"
-    realname: "Jenkins Service Account"
-    role_id: 2  # Developer
+    severity: "low"
 
 # Harbor replication
 harbor_replication_enabled: false
 harbor_replication_targets: []
 
-# Harbor security
-harbor_token_expiration: 30
-harbor_robot_token_duration: 90
+# Harbor security configuration
+harbor_token_expiration: 30  # minutes
+harbor_robot_token_duration: 90  # days
+harbor_self_registration: false
+harbor_project_creation_restriction: "adminonly"
+harbor_count_per_project: 10000
+harbor_storage_per_project: "100GB"
+
+# Harbor scanning policies
 harbor_scan_all_policy:
   type: "daily"
   parameter:
     daily_time: "02:00"
+harbor_automated_scanning: true
+harbor_vulnerability_severity: "high"
+harbor_scan_on_push: true
 
-# Harbor storage
+# Harbor authentication
+harbor_ldap_enabled: false
+harbor_oidc_enabled: false
+harbor_oidc_name: "Company OIDC"
+harbor_oidc_endpoint: "https://auth.company.com"
+harbor_oidc_scope: "openid,profile,email,groups"
+harbor_oidc_user_claim: "name"
+harbor_oidc_groups_claim: "groups"
+harbor_oidc_admin_group: "harbor-admins"
+harbor_oidc_auto_onboard: false
+
+# Harbor content trust (Notary)
+harbor_content_trust_enabled: true
+harbor_content_trust_key_path: "{{ harbor_ssl_dir }}/notary"
+
+# Harbor storage configuration
 harbor_storage_backend: "filesystem"
 harbor_storage_config:
   filesystem:
     rootdirectory: "{{ harbor_data_dir }}/registry"
+    maxthreads: 100
   # s3:
-  #   region: us-west-1
-  #   bucket: harbor-registry
-  #   accesskey: access-key-id
-  #   secretkey: secret-access-key
+  #   region: "{{ harbor_s3_region }}"
+  #   bucket: "{{ harbor_s3_bucket }}"
+  #   accesskey: "{{ vault_harbor_s3_access_key }}"
+  #   secretkey: "{{ vault_harbor_s3_secret_key }}"
+  #   encrypt: true
+  #   secure: true
 
-# Harbor notification
-harbor_webhook_enabled: false
-harbor_webhook_endpoints: []
+# Harbor security hardening
+harbor_fail2ban_enabled: true
+harbor_security_monitoring_enabled: true
+harbor_backup_encryption_enabled: true
+harbor_compliance_reporting_enabled: false
+harbor_firewall_zone: "public"
+harbor_allowed_networks:
+  - "10.0.0.0/8"
+  - "172.16.0.0/12"
+  - "192.168.0.0/16"
+
+# Harbor rate limiting
+harbor_rate_limiting_enabled: true
+harbor_rate_limit_requests_per_minute: 300
+harbor_rate_limit_burst: 50
+
+# Harbor webhooks for notifications
+harbor_webhooks: []
+# Example webhook configuration:
+# harbor_webhooks:
+#   - name: "jenkins-webhook"
+#     project_id: 1
+#     webhook_url: "https://jenkins.company.com/harbor-webhook"
+#     event_types: ["PUSH_ARTIFACT", "PULL_ARTIFACT", "DELETE_ARTIFACT"]
+#     description: "Webhook for Jenkins integration"
+
+# Harbor email configuration
+harbor_email_from: "harbor@company.com"
+harbor_email_ssl: true
+harbor_email_insecure: false
+
+# Harbor metrics and monitoring
+harbor_metrics_enabled: true
+harbor_monitoring_enabled: true
+
+# Harbor backup configuration
+harbor_backup_enabled: true
+harbor_backup_schedule: "0 3 * * *"  # Daily at 3 AM
+harbor_backup_retention_days: 30
+harbor_backup_compression: "gzip"
 
 # Harbor resource limits
 harbor_core_replicas: 1
 harbor_jobservice_replicas: 1
 harbor_registry_replicas: 1
+harbor_proxy_cache_enabled: false
+
+# Harbor proxy cache configuration (if enabled)
+harbor_proxy_cache_upstream: "https://registry-1.docker.io"
+harbor_proxy_cache_username: ""
+harbor_proxy_cache_password: ""
+
+# Harbor garbage collection
+harbor_gc_enabled: true
+harbor_gc_schedule: "0 4 * * 0"  # Weekly on Sunday at 4 AM
+harbor_gc_delete_untagged: true
+harbor_gc_workers: 1
+
+# Harbor trivy (vulnerability scanner) configuration
+harbor_trivy_enabled: true
+harbor_trivy_update_schedule: "0 1 * * *"  # Daily at 1 AM
+harbor_trivy_ignore_unfixed: false
+harbor_trivy_skip_update: false

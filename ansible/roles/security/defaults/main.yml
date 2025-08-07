@@ -7,6 +7,107 @@ security_hardening_enabled: true
 security_scanning_enabled: true
 jenkins_security_enabled: true
 
+# SSL/TLS Configuration
+ssl_enabled: true
+ssl_force_regenerate: false
+ssl_auto_renewal_enabled: true
+ssl_backup_enabled: true
+ssl_use_letsencrypt: false
+letsencrypt_auto_renewal_enabled: true
+
+# SSL Certificate Directories
+ssl_certificate_dir: "/etc/ssl/certs"
+ssl_private_key_dir: "/etc/ssl/private"
+ssl_ca_dir: "/etc/ssl/ca"
+ssl_csr_dir: "/etc/ssl/csr"
+ssl_backup_dir: "/backup/ssl"
+
+# SSL Certificate Authority
+ssl_ca_common_name: "Jenkins HA CA"
+ssl_ca_private_key_path: "{{ ssl_ca_dir }}/ca-key.pem"
+ssl_ca_certificate_path: "{{ ssl_ca_dir }}/ca-cert.pem"
+ssl_ca_csr_path: "{{ ssl_csr_dir }}/ca.csr"
+ssl_ca_validity_days: 3650  # 10 years
+
+# SSL Certificate Configuration
+ssl_default_validity_days: 365
+ssl_renewal_threshold_days: 30
+ssl_generate_dh_params: true
+ssl_dh_params_path: "/etc/ssl/dhparam.pem"
+
+# SSL Services Configuration
+ssl_services:
+  - name: "jenkins-master"
+    common_name: "{{ jenkins_vip | default('jenkins.company.local') }}"
+    san:
+      - "DNS:{{ jenkins_vip | default('jenkins.company.local') }}"
+      - "DNS:jenkins-master-01.company.local"
+      - "DNS:jenkins-master-02.company.local"
+      - "IP:{{ vault_jenkins_vip | default('10.0.1.100') }}"
+    owner: "jenkins"
+    group: "jenkins"
+    cert_dest_path: "/var/lib/jenkins/jenkins.crt"
+    key_dest_path: "/var/lib/jenkins/jenkins.key"
+    bundle_dest_path: "/var/lib/jenkins/jenkins-bundle.crt"
+    validity_days: 365
+    use_letsencrypt: false
+  
+  - name: "harbor"
+    common_name: "{{ harbor_hostname | default('harbor.company.com') }}"
+    san:
+      - "DNS:{{ harbor_hostname | default('harbor.company.com') }}"
+      - "DNS:harbor-01.company.local"
+      - "IP:{{ vault_harbor_vip | default('10.0.1.102') }}"
+    owner: "harbor"
+    group: "harbor"
+    cert_dest_path: "/etc/harbor/ssl/harbor.crt"
+    key_dest_path: "/etc/harbor/ssl/harbor.key"
+    bundle_dest_path: "/etc/harbor/ssl/harbor-bundle.crt"
+    validity_days: 365
+    use_letsencrypt: false
+  
+  - name: "grafana"
+    common_name: "{{ monitoring_hostname | default('monitoring.company.local') }}"
+    san:
+      - "DNS:{{ monitoring_hostname | default('monitoring.company.local') }}"
+      - "DNS:monitoring-01.company.local"
+      - "IP:{{ vault_monitoring_vip | default('10.0.1.101') }}"
+    owner: "grafana"
+    group: "grafana"
+    cert_dest_path: "/etc/grafana/ssl/grafana.crt"
+    key_dest_path: "/etc/grafana/ssl/grafana.key"
+    bundle_dest_path: "/etc/grafana/ssl/grafana-bundle.crt"
+    validity_days: 365
+    use_letsencrypt: false
+  
+  - name: "prometheus"
+    common_name: "{{ monitoring_hostname | default('monitoring.company.local') }}"
+    san:
+      - "DNS:{{ monitoring_hostname | default('monitoring.company.local') }}"
+      - "DNS:monitoring-01.company.local"
+      - "IP:{{ vault_monitoring_vip | default('10.0.1.101') }}"
+    owner: "prometheus"
+    group: "prometheus"
+    cert_dest_path: "/etc/prometheus/ssl/prometheus.crt"
+    key_dest_path: "/etc/prometheus/ssl/prometheus.key"
+    bundle_dest_path: "/etc/prometheus/ssl/prometheus-bundle.crt"
+    validity_days: 365
+    use_letsencrypt: false
+
+# SSL Security Hardening
+ssl_ocsp_stapling_enabled: true
+ssl_ct_monitoring_enabled: false
+ssl_vulnerability_scanning_enabled: true
+ssl_certificate_pinning_enabled: false
+ssl_revocation_checking_enabled: true
+nginx_ssl_hardening_enabled: true
+apache_ssl_hardening_enabled: false
+fail2ban_ssl_protection_enabled: true
+
+# Java Keystore Configuration
+java_keystore_path: "/usr/lib/jvm/default-java/lib/security/cacerts"
+java_keystore_password: "changeit"
+
 # Firewall Configuration
 security_allowed_ports:
   - "22"    # SSH
@@ -14,12 +115,20 @@ security_allowed_ports:
   - "443"   # HTTPS
   - "8080"  # Jenkins primary
   - "8081"  # Jenkins secondary (if HA)
+  - "8443"  # Jenkins SSL primary
+  - "8444"  # Jenkins SSL secondary (if HA)
   - "50000" # Jenkins agent primary
   - "50001" # Jenkins agent secondary (if HA)
   - "8404"  # HAProxy stats
+  - "3000"  # Grafana
+  - "3443"  # Grafana SSL
+  - "9090"  # Prometheus
+  - "9443"  # Prometheus SSL
+  - "9093"  # Alertmanager
+  - "9493"  # Alertmanager SSL
 
-# SSH Hardening
-ssh_hardening_enabled: true
+# SSH Hardening - Basic system access only (not used for Jenkins agents)
+ssh_hardening_enabled: false  # Disabled as Jenkins no longer uses SSH for agents
 ssh_port: 22
 ssh_permit_root_login: false
 ssh_password_authentication: false

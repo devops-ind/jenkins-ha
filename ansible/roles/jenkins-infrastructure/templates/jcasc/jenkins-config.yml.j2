@@ -52,7 +52,7 @@ jenkins:
           dockerHost:
             uri: "unix:///var/run/docker.sock"
         templates:
-          - labelString: "dind docker-manager static privileged"
+          - labelString: "dind docker-manager privileged"
             name: "dind-agent"
             dockerTemplateBase:
               image: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-dind-agent:{{ jenkins_agent_image_tag }}"
@@ -79,14 +79,14 @@ jenkins:
             retentionStrategy:
               idleMinutes: 10
 
-          - labelString: "maven java-build static"
+          - labelString: "maven java-build"
             name: "maven-agent"
             dockerTemplateBase:
               image: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-maven-agent:{{ jenkins_agent_image_tag }}"
               tty: true
               memoryLimit: {{ jenkins_maven_agent_memory | default(4096) }}
               volumes:
-                - "maven-cache:/home/jenkins/.m2:rw"
+                - "jenkins-dynamic-maven-cache:/home/jenkins/.m2:rw"
                 - "{{ jenkins_shared_workspace }}:/shared-workspace:rw"
               environment:
                 - "JAVA_OPTS=-Xmx{{ jenkins_maven_agent_heap | default('3g') }}"
@@ -99,14 +99,14 @@ jenkins:
             retentionStrategy:
               idleMinutes: 15
 
-          - labelString: "python python-build static"
+          - labelString: "python python-build"
             name: "python-agent"
             dockerTemplateBase:
               image: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-python-agent:{{ jenkins_agent_image_tag }}"
               tty: true
               memoryLimit: {{ jenkins_python_agent_memory | default(2048) }}
               volumes:
-                - "pip-cache:/home/jenkins/.cache/pip:rw"
+                - "jenkins-dynamic-python-cache:/home/jenkins/.cache/pip:rw"
                 - "{{ jenkins_shared_workspace }}:/shared-workspace:rw"
               environment:
                 - "PYTHONPATH=/home/jenkins/agent"
@@ -119,14 +119,14 @@ jenkins:
             retentionStrategy:
               idleMinutes: 15
 
-          - labelString: "nodejs frontend-build static"
+          - labelString: "nodejs frontend-build"
             name: "nodejs-agent"
             dockerTemplateBase:
               image: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-nodejs-agent:{{ jenkins_agent_image_tag }}"
               tty: true
               memoryLimit: {{ jenkins_nodejs_agent_memory | default(3072) }}
               volumes:
-                - "npm-cache:/home/jenkins/.npm:rw"
+                - "jenkins-dynamic-nodejs-cache:/home/jenkins/.npm:rw"
                 - "{{ jenkins_shared_workspace }}:/shared-workspace:rw"
               environment:
                 - "NODE_ENV=production"

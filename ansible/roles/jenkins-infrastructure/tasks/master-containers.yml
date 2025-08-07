@@ -11,23 +11,37 @@
   loop: "{{ range(1, jenkins_master_count + 1) | list }}"
   tags: ['master', 'directories']
 
-- name: Generate Jenkins master container configuration
-  template:
-    src: jenkins-master-container.yml.j2
-    dest: "{{ jenkins_home_dir }}/master-{{ item }}/container-config.yml"
-    owner: "{{ jenkins_user }}"
-    group: "{{ jenkins_group }}"
-    mode: '0644'
+- name: Create Docker/Podman volumes for Jenkins masters
+  shell: |
+    {% if jenkins_container_runtime == 'docker' %}
+    docker volume create jenkins-home-{{ item }} || true
+    {% else %}
+    podman volume create jenkins-home-{{ item }} || true
+    {% endif %}
   loop: "{{ range(1, jenkins_master_count + 1) | list }}"
-  notify: restart jenkins master containers
-  tags: ['master', 'config']
+  tags: ['master', 'volumes']
+
+
+- name: Create Jenkins master environment files
+  template:
+    src: jenkins-master-env.j2
+    dest: "/etc/default/jenkins-{{ item }}"
+    mode: '0644'
+    owner: root
+    group: root
+  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
+  when: jenkins_systemd_enabled | default(false) | bool
+  tags: ['master', 'systemd']
 
 - name: Create Jenkins master systemd service files
   template:
     src: jenkins-master.service.j2
     dest: "/etc/systemd/system/jenkins-master-{{ item }}.service"
     mode: '0644'
+    owner: root
+    group: root
   loop: "{{ range(1, jenkins_master_count + 1) | list }}"
+  when: jenkins_systemd_enabled | default(false) | bool
   notify:
     - reload systemd
     - restart jenkins master containers
@@ -36,7 +50,7 @@
 - name: Start and enable Jenkins master containers (Docker)
   community.docker.docker_container:
     name: "jenkins-master-{{ item }}"
-    image: "{{ harbor_registry_url | default('jenkins') }}/{{ harbor_project | default('library') }}/jenkins-master:{{ jenkins_master_image_tag }}"
+    image: "{{ harbor_registry_url | default('docker.io') }}/{{ harbor_project | default('jenkins') }}/jenkins:{{ jenkins_master_image_tag | default('lts') }}"
     state: started
     restart_policy: "{{ jenkins_restart_policy }}"
     networks:
@@ -66,18 +80,17 @@
       retries: 3
       start_period: 60s
   loop: "{{ range(1, jenkins_master_count + 1) | list }}"
-  when: jenkins_container_runtime == 'docker'
+  when: jenkins_container_runtime == 'docker' and not (jenkins_systemd_enabled | default(false) | bool)
   register: jenkins_masters_docker
   tags: ['master', 'containers', 'docker']
 
 - name: Start and enable Jenkins master containers (Podman)
   containers.podman.podman_container:
     name: "jenkins-master-{{ item }}"
-    image: "{{ harbor_registry_url | default('jenkins') }}/{{ harbor_project | default('library') }}/jenkins-master:{{ jenkins_master_image_tag }}"
+    image: "{{ harbor_registry_url | default('docker.io') }}/{{ harbor_project | default('jenkins') }}/jenkins:{{ jenkins_master_image_tag | default('lts') }}"
     state: started
     restart_policy: "{{ jenkins_restart_policy }}"
-    networks:
-      - "{{ jenkins_network_name }}"
+    network: "{{ jenkins_network_name }}"
     ports:
       - "{{ jenkins_port + item - 1 }}:{{ jenkins_port }}"
       - "{{ jenkins_agent_port + item - 1 }}:{{ jenkins_agent_port }}"
@@ -89,9 +102,8 @@
     memory: "{{ jenkins_master_memory }}"
     cpus: "{{ jenkins_master_cpu_limit }}"
     log_driver: "{{ jenkins_log_driver }}"
-    log_opt:
+    log_options:
       max_size: "{{ jenkins_log_max_size }}"
-      max_file: "{{ jenkins_log_max_files }}"
     labels:
       service: "jenkins-master"
       instance: "{{ item }}"
@@ -102,18 +114,23 @@
     healthcheck_retries: 3
     healthcheck_start_period: 60s
   loop: "{{ range(1, jenkins_master_count + 1) | list }}"
-  when: jenkins_container_runtime == 'podman'
+  when: jenkins_container_runtime == 'podman' and not (jenkins_systemd_enabled | default(false) | bool)
   register: jenkins_masters_podman
   tags: ['master', 'containers', 'podman']
+
+- name: Reload systemd daemon to recognize new service files
+  systemd:
+    daemon_reload: yes
+  when: jenkins_systemd_enabled | default(false) | bool
+  tags: ['master', 'systemd']
 
 - name: Enable and start Jenkins master systemd services
   systemd:
     name: "jenkins-master-{{ item }}"
     enabled: yes
     state: started
-    daemon_reload: yes
   loop: "{{ range(1, jenkins_master_count + 1) | list }}"
-  when: jenkins_systemd_enabled
+  when: jenkins_systemd_enabled | default(false) | bool
   tags: ['master', 'systemd']
 
 - name: Wait for Jenkins masters to be ready
@@ -140,8 +157,18 @@
   tags: ['master', 'scripts']
 
 - name: Setup Jenkins master log rotation
-  template:
-    src: jenkins-logrotate.j2
+  copy:
+    content: |
+      {{ jenkins_home_dir }}/logs/*.log {
+          daily
+          rotate 30
+          compress
+          delaycompress
+          missingok
+          notifempty
+          copytruncate
+          su {{ jenkins_user }} {{ jenkins_group }}
+      }
     dest: /etc/logrotate.d/jenkins-master
     mode: '0644'
   tags: ['master', 'logging']

@@ -15,11 +15,30 @@
   listen: "restart jenkins"
 
 - name: restart jenkins master containers
-  docker_container:
-    name: "{{ item }}"
+  systemd:
+    name: "jenkins-master-{{ item }}"
+    state: restarted
+    enabled: yes
+  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
+  when: jenkins_systemd_enabled | default(false) | bool
+  listen: "restart jenkins master containers"
+
+- name: restart jenkins master containers (docker direct)
+  community.docker.docker_container:
+    name: "jenkins-master-{{ item }}"
     state: started
     restart: yes
-  with_items: "{{ jenkins_masters | default([]) }}"
+  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
+  when: not (jenkins_systemd_enabled | default(false) | bool) and jenkins_container_runtime == 'docker'
+  listen: "restart jenkins master containers"
+
+- name: restart jenkins master containers (podman direct)
+  containers.podman.podman_container:
+    name: "jenkins-master-{{ item }}"
+    state: started
+    restart: yes
+  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
+  when: not (jenkins_systemd_enabled | default(false) | bool) and jenkins_container_runtime == 'podman'
   listen: "restart jenkins master containers"
 
 - name: restart jenkins agents
@@ -36,3 +55,8 @@
     state: restarted
     enabled: yes
   listen: "restart firewalld"
+
+- name: reload systemd
+  systemd:
+    daemon_reload: yes
+  listen: "reload systemd"

@@ -1,0 +1,278 @@
+---
+# Disaster Recovery Testing and Automation Tasks
+
+- name: Create disaster recovery directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  loop:
+    - "{{ backup_home_dir }}/dr"
+    - "{{ backup_home_dir }}/dr/scripts"
+    - "{{ backup_home_dir }}/dr/tests"
+    - "{{ backup_home_dir }}/dr/logs"
+    - "{{ backup_home_dir }}/dr/reports"
+    - "{{ backup_home_dir }}/dr/environments"
+  become: yes
+  tags: ['dr', 'directories']
+
+- name: Generate disaster recovery automation script
+  template:
+    src: disaster-recovery-automation.sh.j2
+    dest: "{{ backup_home_dir }}/dr/scripts/disaster-recovery-automation.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  tags: ['dr', 'scripts']
+
+- name: Generate DR testing framework
+  template:
+    src: dr-test-framework.sh.j2
+    dest: "{{ backup_home_dir }}/dr/scripts/dr-test-framework.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  tags: ['dr', 'scripts']
+
+- name: Generate DR environment setup script
+  template:
+    src: dr-environment-setup.sh.j2
+    dest: "{{ backup_home_dir }}/dr/scripts/dr-environment-setup.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  tags: ['dr', 'scripts']
+
+- name: Generate DR validation tests
+  template:
+    src: dr-validation-tests.sh.j2
+    dest: "{{ backup_home_dir }}/dr/tests/dr-validation-tests.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  tags: ['dr', 'tests']
+
+- name: Generate DR rollback procedures
+  template:
+    src: dr-rollback.sh.j2
+    dest: "{{ backup_home_dir }}/dr/scripts/dr-rollback.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  tags: ['dr', 'scripts']
+
+- name: Generate DR health check script
+  template:
+    src: dr-health-check.sh.j2
+    dest: "{{ backup_home_dir }}/dr/scripts/dr-health-check.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  tags: ['dr', 'scripts']
+
+- name: Generate DR notification system
+  template:
+    src: dr-notification.sh.j2
+    dest: "{{ backup_home_dir }}/dr/scripts/dr-notification.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  tags: ['dr', 'scripts']
+
+- name: Create DR configuration file
+  template:
+    src: dr-config.yml.j2
+    dest: "{{ backup_home_dir }}/dr/dr-config.yml"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0644'
+  tags: ['dr', 'config']
+
+- name: Create DR environment configuration
+  template:
+    src: dr-environment.conf.j2
+    dest: "{{ backup_home_dir }}/dr/environments/{{ item.name }}.conf"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0644'
+  loop: "{{ dr_test_environments }}"
+  tags: ['dr', 'config']
+
+- name: Generate DR documentation
+  template:
+    src: dr-runbook.md.j2
+    dest: "{{ backup_home_dir }}/dr/DR-RUNBOOK.md"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0644'
+  tags: ['dr', 'documentation']
+
+- name: Create DR systemd service
+  template:
+    src: dr-service.service.j2
+    dest: /etc/systemd/system/jenkins-dr-test.service
+    owner: root
+    group: root
+    mode: '0644'
+  become: yes
+  tags: ['dr', 'systemd']
+
+- name: Create DR testing timer
+  template:
+    src: dr-test.timer.j2
+    dest: /etc/systemd/system/jenkins-dr-test.timer
+    owner: root
+    group: root
+    mode: '0644'
+  become: yes
+  tags: ['dr', 'systemd']
+
+- name: Create DR monitoring service
+  template:
+    src: dr-monitor.service.j2
+    dest: /etc/systemd/system/jenkins-dr-monitor.service
+    owner: root
+    group: root
+    mode: '0644'
+  become: yes
+  tags: ['dr', 'systemd']
+
+- name: Reload systemd for DR services
+  systemd:
+    daemon_reload: yes
+  become: yes
+  tags: ['dr', 'systemd']
+
+- name: Enable DR monitoring service
+  systemd:
+    name: jenkins-dr-monitor.service
+    enabled: yes
+    state: started
+  become: yes
+  when: dr_monitoring_enabled | default(true)
+  tags: ['dr', 'systemd']
+
+- name: Enable DR testing timer
+  systemd:
+    name: jenkins-dr-test.timer
+    enabled: yes
+    state: started
+  become: yes
+  when: dr_automated_testing_enabled | default(true)
+  tags: ['dr', 'systemd']
+
+- name: Create DR alert rules for Prometheus
+  template:
+    src: dr-alert-rules.yml.j2
+    dest: /etc/prometheus/rules/dr-alerts.yml
+    owner: prometheus
+    group: prometheus
+    mode: '0644'
+  become: yes
+  when: prometheus_enabled | default(true)
+  notify: reload prometheus
+  tags: ['dr', 'monitoring']
+
+- name: Setup DR dashboard in Grafana
+  template:
+    src: dr-dashboard.json.j2
+    dest: /var/lib/grafana/dashboards/dr-dashboard.json
+    owner: grafana
+    group: grafana
+    mode: '0644'
+  become: yes
+  when: grafana_enabled | default(true)
+  tags: ['dr', 'monitoring']
+
+- name: Create DR log aggregation configuration
+  template:
+    src: dr-log-config.conf.j2
+    dest: "{{ backup_home_dir }}/dr/dr-log-config.conf"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0644'
+  tags: ['dr', 'logging']
+
+- name: Setup DR log rotation
+  template:
+    src: dr-logrotate.j2
+    dest: /etc/logrotate.d/jenkins-dr
+    owner: root
+    group: root
+    mode: '0644'
+  become: yes
+  tags: ['dr', 'logging']
+
+- name: Generate DR test scenarios
+  template:
+    src: "dr-test-{{ item.name }}.sh.j2"
+    dest: "{{ backup_home_dir }}/dr/tests/dr-test-{{ item.name }}.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  loop: "{{ dr_test_scenarios }}"
+  tags: ['dr', 'tests']
+
+- name: Create DR compliance checker
+  template:
+    src: dr-compliance-check.sh.j2
+    dest: "{{ backup_home_dir }}/dr/scripts/dr-compliance-check.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  tags: ['dr', 'compliance']
+
+- name: Setup DR metrics collection
+  template:
+    src: dr-metrics-collector.sh.j2
+    dest: "{{ backup_home_dir }}/dr/scripts/dr-metrics-collector.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  tags: ['dr', 'metrics']
+
+- name: Initialize DR test environment
+  command: "{{ backup_home_dir }}/dr/scripts/dr-environment-setup.sh --initialize"
+  register: dr_init_result
+  when: dr_initialize_on_setup | default(false)
+  tags: ['dr', 'init']
+
+- name: Run initial DR validation
+  command: "{{ backup_home_dir }}/dr/tests/dr-validation-tests.sh --quick-test"
+  register: dr_validation_result
+  when: dr_run_initial_validation | default(true)
+  tags: ['dr', 'validation']
+
+- name: Generate DR status report
+  template:
+    src: dr-status-report.html.j2
+    dest: "{{ backup_home_dir }}/dr/reports/dr-status-report.html"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0644'
+  tags: ['dr', 'reporting']
+
+- name: Display disaster recovery configuration
+  debug:
+    msg: |
+      Disaster Recovery Configuration:
+      
+      DR Testing: {{ 'Enabled' if dr_automated_testing_enabled | default(true) else 'Disabled' }}
+      DR Monitoring: {{ 'Enabled' if dr_monitoring_enabled | default(true) else 'Disabled' }}
+      Test Schedule: {{ dr_test_schedule | default('0 3 * * 0') }} (Weekly)
+      
+      Test Environments: {{ dr_test_environments | length if dr_test_environments is defined else 0 }}
+      Test Scenarios: {{ dr_test_scenarios | length if dr_test_scenarios is defined else 0 }}
+      
+      RTO Target: {{ dr_rto_target | default('4 hours') }}
+      RPO Target: {{ dr_rpo_target | default('1 hour') }}
+      
+      Validation Result: {{ 'PASSED' if dr_validation_result.rc == 0 else 'FAILED' if dr_validation_result is defined else 'Not Run' }}
+      
+      Management Commands:
+      - Run DR Test: {{ backup_home_dir }}/dr/scripts/disaster-recovery-automation.sh
+      - Check Status: {{ backup_home_dir }}/dr/scripts/dr-health-check.sh
+      - Generate Report: {{ backup_home_dir }}/dr/scripts/dr-metrics-collector.sh --report
+  tags: ['dr', 'info']

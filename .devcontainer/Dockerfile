@@ -12,8 +12,7 @@ RUN set -eux; \
     python3-urllib3 python3-cryptography python3-venv python3-packaging \
     ansible openssh-client openssh-server sshpass git curl wget vim nano jq tree htop \
     net-tools iputils-ping telnet unzip ca-certificates gnupg lsb-release \
-    podman podman-compose ntp \
-    sudo \
+    podman podman-compose sudo \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

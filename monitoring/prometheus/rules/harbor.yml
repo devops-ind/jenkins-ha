@@ -1,0 +1,168 @@
+groups:
+  - name: harbor.infrastructure
+    rules:
+      # Harbor Service Availability
+      - alert: HarborServiceDown
+        expr: up{job="harbor"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: harbor
+          component: core
+        annotations:
+          summary: "Harbor service is down"
+          description: "Harbor service {{ $labels.instance }} has been down for more than 2 minutes."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/harbor-down"
+
+      - alert: HarborDatabaseDown
+        expr: up{job="harbor-database"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: harbor
+          component: database
+        annotations:
+          summary: "Harbor database is down"
+          description: "Harbor database {{ $labels.instance }} is down. Registry operations will fail."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/harbor-db-down"
+
+      - alert: HarborRedisDown
+        expr: up{job="harbor-redis"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          service: harbor
+          component: redis
+        annotations:
+          summary: "Harbor Redis is down"
+          description: "Harbor Redis {{ $labels.instance }} is down. Caching and sessions may be affected."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/harbor-redis-down"
+
+  - name: harbor.performance
+    rules:
+      # Harbor Performance Metrics
+      - alert: HarborHighResponseTime
+        expr: harbor_http_request_duration_seconds{quantile="0.95"} > 5
+        for: 10m
+        labels:
+          severity: warning
+          service: harbor
+          component: api
+        annotations:
+          summary: "Harbor API response time is high"
+          description: "Harbor API 95th percentile response time is {{ $value }}s for {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/harbor-slow-response"
+
+      - alert: HarborHighErrorRate
+        expr: (rate(harbor_http_requests_total{code=~"5.."}[5m]) / rate(harbor_http_requests_total[5m])) * 100 > 5
+        for: 10m
+        labels:
+          severity: warning
+          service: harbor
+          component: api
+        annotations:
+          summary: "Harbor error rate is high"
+          description: "Harbor error rate is {{ $value }}% for {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/harbor-high-errors"
+
+      - alert: HarborDiskSpaceHigh
+        expr: harbor_registry_storage_bytes / harbor_registry_storage_max_bytes * 100 > 85
+        for: 30m
+        labels:
+          severity: warning
+          service: harbor
+          component: storage
+        annotations:
+          summary: "Harbor registry storage usage is high"
+          description: "Harbor registry storage is {{ $value }}% full on {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/harbor-storage-cleanup"
+
+      - alert: HarborDiskSpaceCritical
+        expr: harbor_registry_storage_bytes / harbor_registry_storage_max_bytes * 100 > 95
+        for: 5m
+        labels:
+          severity: critical
+          service: harbor
+          component: storage
+        annotations:
+          summary: "Harbor registry storage usage is critical"
+          description: "Harbor registry storage is {{ $value }}% full on {{ $labels.instance }}. Immediate cleanup required."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/harbor-storage-critical"
+
+  - name: harbor.security
+    rules:
+      # Harbor Security Alerts
+      - alert: HarborUnauthorizedPulls
+        expr: increase(harbor_unauthorized_pulls_total[5m]) > 10
+        for: 0m
+        labels:
+          severity: warning
+          service: harbor
+          component: security
+        annotations:
+          summary: "High number of unauthorized pull attempts in Harbor"
+          description: "{{ $value }} unauthorized pull attempts in the last 5 minutes from {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/harbor-unauthorized-pulls"
+
+      - alert: HarborVulnerabilityFound
+        expr: harbor_vulnerability_critical_count > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: harbor
+          component: security
+        annotations:
+          summary: "Critical vulnerabilities found in Harbor images"
+          description: "{{ $value }} critical vulnerabilities found in Harbor registry {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/harbor-vulnerabilities"
+
+      - alert: HarborSSLCertificateExpiring
+        expr: (harbor_ssl_certificate_expiry_timestamp - time()) / 86400 < 30
+        for: 0m
+        labels:
+          severity: warning
+          service: harbor
+          component: ssl
+        annotations:
+          summary: "Harbor SSL certificate expiring soon"
+          description: "SSL certificate for Harbor {{ $labels.instance }} expires in {{ $value }} days."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/harbor-ssl-renewal"
+
+  - name: harbor.operations
+    rules:
+      # Harbor Operations
+      - alert: HarborReplicationFailed
+        expr: increase(harbor_replication_failed_total[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          service: harbor
+          component: replication
+        annotations:
+          summary: "Harbor replication has failed"
+          description: "{{ $value }} replication failures in the last hour for {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/harbor-replication-failed"
+
+      - alert: HarborGarbageCollectionFailed
+        expr: harbor_gc_last_success_timestamp < time() - 172800  # 48 hours
+        for: 0m
+        labels:
+          severity: warning
+          service: harbor
+          component: gc
+        annotations:
+          summary: "Harbor garbage collection has not run successfully"
+          description: "Harbor garbage collection has not succeeded in the last 48 hours for {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/harbor-gc-failed"
+
+      - alert: HarborImageScanQueueBacklog
+        expr: harbor_scan_queue_size > 50
+        for: 30m
+        labels:
+          severity: warning
+          service: harbor
+          component: scanning
+        annotations:
+          summary: "Harbor image scan queue has significant backlog"
+          description: "Harbor scan queue has {{ $value }} items waiting for more than 30 minutes."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/harbor-scan-backlog"

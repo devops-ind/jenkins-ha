@@ -1,0 +1,321 @@
+groups:
+  - name: infrastructure.nodes
+    rules:
+      # Node Health
+      - alert: NodeDown
+        expr: up{job="node-exporter"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: infrastructure
+          component: node
+        annotations:
+          summary: "Node {{ $labels.instance }} is down"
+          description: "Node {{ $labels.instance }} has been down for more than 5 minutes."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/node-down"
+
+      - alert: NodeHighCPUUsage
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 15m
+        labels:
+          severity: warning
+          service: infrastructure
+          component: cpu
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value }}% on {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/high-cpu"
+
+      - alert: NodeHighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+          service: infrastructure
+          component: memory
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is {{ $value }}% on {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/high-memory"
+
+      - alert: NodeHighDiskUsage
+        expr: (1 - (node_filesystem_free_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+          service: infrastructure
+          component: disk
+        annotations:
+          summary: "High disk usage on {{ $labels.instance }}"
+          description: "Disk usage is {{ $value }}% on {{ $labels.instance }} ({{ $labels.mountpoint }})."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/high-disk"
+
+      - alert: NodeDiskIOHigh
+        expr: rate(node_disk_io_time_seconds_total[5m]) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: infrastructure
+          component: disk
+        annotations:
+          summary: "High disk I/O on {{ $labels.instance }}"
+          description: "Disk I/O utilization is {{ $value }} on {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/high-disk-io"
+
+  - name: infrastructure.network
+    rules:
+      # Network Health
+      - alert: NodeHighNetworkTraffic
+        expr: rate(node_network_receive_bytes_total[5m]) + rate(node_network_transmit_bytes_total[5m]) > 100 * 1024 * 1024  # 100MB/s
+        for: 15m
+        labels:
+          severity: warning
+          service: infrastructure
+          component: network
+        annotations:
+          summary: "High network traffic on {{ $labels.instance }}"
+          description: "Network traffic is {{ $value | humanize }}B/s on {{ $labels.instance }} interface {{ $labels.device }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/high-network"
+
+      - alert: NodeNetworkInterfaceDown
+        expr: node_network_up == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: infrastructure
+          component: network
+        annotations:
+          summary: "Network interface down on {{ $labels.instance }}"
+          description: "Network interface {{ $labels.device }} is down on {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/interface-down"
+
+      - alert: NodeHighNetworkErrors
+        expr: rate(node_network_receive_errs_total[5m]) + rate(node_network_transmit_errs_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: infrastructure
+          component: network
+        annotations:
+          summary: "High network errors on {{ $labels.instance }}"
+          description: "Network errors rate is {{ $value }}/s on {{ $labels.instance }} interface {{ $labels.device }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/network-errors"
+
+  - name: infrastructure.docker
+    rules:
+      # Docker Health
+      - alert: DockerServiceDown
+        expr: up{job="docker"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: infrastructure
+          component: docker
+        annotations:
+          summary: "Docker service is down on {{ $labels.instance }}"
+          description: "Docker service has been down for more than 2 minutes on {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/docker-down"
+
+      - alert: DockerHighContainerCount
+        expr: docker_containers_running > 50
+        for: 30m
+        labels:
+          severity: warning
+          service: infrastructure
+          component: docker
+        annotations:
+          summary: "High number of running containers"
+          description: "{{ $value }} containers are running on {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/high-container-count"
+
+      - alert: DockerContainerRestarting
+        expr: increase(docker_container_restarts_total[1h]) > 5
+        for: 0m
+        labels:
+          severity: warning
+          service: infrastructure
+          component: docker
+        annotations:
+          summary: "Container {{ $labels.name }} is frequently restarting"
+          description: "Container {{ $labels.name }} has restarted {{ $value }} times in the last hour on {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/container-restarts"
+
+      - alert: DockerImagePullFailures
+        expr: increase(docker_image_pull_failures_total[10m]) > 3
+        for: 0m
+        labels:
+          severity: warning
+          service: infrastructure
+          component: docker
+        annotations:
+          summary: "Docker image pull failures"
+          description: "{{ $value }} image pull failures in the last 10 minutes on {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/image-pull-failures"
+
+  - name: infrastructure.loadbalancer
+    rules:
+      # Load Balancer Health
+      - alert: HAProxyDown
+        expr: up{job="haproxy"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: infrastructure
+          component: loadbalancer
+        annotations:
+          summary: "HAProxy is down"
+          description: "HAProxy {{ $labels.instance }} has been down for more than 1 minute."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/haproxy-down"
+
+      - alert: HAProxyBackendDown
+        expr: haproxy_backend_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: infrastructure
+          component: loadbalancer
+        annotations:
+          summary: "HAProxy backend {{ $labels.backend }} is down"
+          description: "HAProxy backend {{ $labels.backend }} on {{ $labels.instance }} has been down for more than 2 minutes."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/backend-down"
+
+      - alert: HAProxyHighResponseTime
+        expr: haproxy_backend_response_time_average_seconds > 5
+        for: 10m
+        labels:
+          severity: warning
+          service: infrastructure
+          component: loadbalancer
+        annotations:
+          summary: "HAProxy backend {{ $labels.backend }} has high response time"
+          description: "Average response time is {{ $value }}s for backend {{ $labels.backend }} on {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/lb-slow-response"
+
+      - alert: HAProxySessionLimitReached
+        expr: haproxy_backend_current_sessions / haproxy_backend_max_sessions * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+          service: infrastructure
+          component: loadbalancer
+        annotations:
+          summary: "HAProxy backend {{ $labels.backend }} session limit nearly reached"
+          description: "Session usage is {{ $value }}% for backend {{ $labels.backend }} on {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/session-limit"
+
+  - name: infrastructure.storage
+    rules:
+      # Storage Health
+      - alert: NFSServerDown
+        expr: up{job="nfs-server"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: infrastructure
+          component: storage
+        annotations:
+          summary: "NFS server is down"
+          description: "NFS server {{ $labels.instance }} has been down for more than 5 minutes."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/nfs-down"
+
+      - alert: NFSMountStale
+        expr: node_filesystem_device_error{fstype="nfs"} > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: infrastructure
+          component: storage
+        annotations:
+          summary: "NFS mount is stale"
+          description: "NFS mount {{ $labels.mountpoint }} on {{ $labels.instance }} is stale or inaccessible."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/nfs-stale"
+
+      - alert: StorageIOErrors
+        expr: increase(node_filesystem_device_error[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: infrastructure
+          component: storage
+        annotations:
+          summary: "Storage I/O errors detected"
+          description: "{{ $value }} I/O errors detected on {{ $labels.device }} ({{ $labels.mountpoint }}) on {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/storage-io-errors"
+
+  - name: infrastructure.certificates
+    rules:
+      # Certificate Management
+      - alert: SSLCertificateExpiringSoon
+        expr: (ssl_certificate_expiry_timestamp - time()) / 86400 < 7
+        for: 0m
+        labels:
+          severity: critical
+          service: infrastructure
+          component: ssl
+        annotations:
+          summary: "SSL certificate expiring in less than 7 days"
+          description: "SSL certificate for {{ $labels.instance }} ({{ $labels.cn }}) expires in {{ $value }} days."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/ssl-expiring"
+
+      - alert: SSLCertificateExpired
+        expr: ssl_certificate_expiry_timestamp < time()
+        for: 0m
+        labels:
+          severity: critical
+          service: infrastructure
+          component: ssl
+        annotations:
+          summary: "SSL certificate has expired"
+          description: "SSL certificate for {{ $labels.instance }} ({{ $labels.cn }}) has expired."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/ssl-expired"
+
+  - name: infrastructure.monitoring
+    rules:
+      # Monitoring Stack Health
+      - alert: PrometheusDown
+        expr: up{job="prometheus"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: monitoring
+          component: prometheus
+        annotations:
+          summary: "Prometheus is down"
+          description: "Prometheus {{ $labels.instance }} has been down for more than 2 minutes."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/prometheus-down"
+
+      - alert: GrafanaDown
+        expr: up{job="grafana"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: monitoring
+          component: grafana
+        annotations:
+          summary: "Grafana is down"
+          description: "Grafana {{ $labels.instance }} has been down for more than 5 minutes."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/grafana-down"
+
+      - alert: AlertmanagerDown
+        expr: up{job="alertmanager"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: monitoring
+          component: alertmanager
+        annotations:
+          summary: "Alertmanager is down"
+          description: "Alertmanager {{ $labels.instance }} has been down for more than 2 minutes."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/alertmanager-down"
+
+      - alert: PrometheusTargetDown
+        expr: up == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: monitoring
+          component: targets
+        annotations:
+          summary: "Prometheus target {{ $labels.instance }} is down"
+          description: "Prometheus target {{ $labels.instance }} ({{ $labels.job }}) has been down for more than 10 minutes."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/target-down"

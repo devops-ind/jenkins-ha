@@ -4,24 +4,24 @@
 
 # Default Jenkins version (can be overridden per environment)
 jenkins_version: "2.426.1"
-jenkins_agent_version: "{{ jenkins_version }}"
+jenkins_dynamic_agent_version: "{{ jenkins_version }}"
 
 # Default ports
 jenkins_master_port: 8080
-jenkins_agent_port: 50000
+jenkins_jnlp_port: 50000  # Used for dynamic agent connections
 
 # Default paths - should be overridden in environment-specific configs
 jenkins_home_dir: "/var/jenkins"
 jenkins_user: "jenkins"
 jenkins_group: "jenkins"
-jenkins_uid: 1000
-jenkins_gid: 1000
+jenkins_uid: 1002
+jenkins_gid: 1002
 
 # Default Jenkins configuration
 jenkins_admin_user: "admin"
 jenkins_enable_security: true
 jenkins_enable_csrf: true
-jenkins_enable_agent_protocols: "JNLP4-connect"
+jenkins_enable_agent_protocols: "JNLP4-connect"  # Protocol for dynamic agents
 
 # Default plugins - can be extended in environment configs
 jenkins_plugins:
@@ -43,7 +43,7 @@ jenkins_master_java_opts: "-Djenkins.install.runSetupWizard=false"
 
 # Default network settings
 jenkins_network_name: "jenkins-net"
-jenkins_network_subnet: "172.18.0.0/16"
+jenkins_network_subnet: "172.20.0.0/16"
 
 # Default backup settings
 jenkins_backup_enabled: false

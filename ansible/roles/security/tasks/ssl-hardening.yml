@@ -1,0 +1,172 @@
+---
+# SSL/TLS Security Hardening Tasks
+
+- name: Configure SSL cipher suites and protocols
+  template:
+    src: ssl-hardening.conf.j2
+    dest: /etc/ssl/ssl-hardening.conf
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  tags: ['ssl', 'hardening', 'config']
+
+- name: Configure strong SSL parameters for nginx
+  template:
+    src: ssl-params-nginx.conf.j2
+    dest: /etc/nginx/conf.d/ssl-params.conf
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  when: nginx_ssl_hardening_enabled | default(true)
+  notify: reload nginx
+  tags: ['ssl', 'hardening', 'nginx']
+
+- name: Configure strong SSL parameters for Apache
+  template:
+    src: ssl-params-apache.conf.j2
+    dest: /etc/apache2/conf-available/ssl-params.conf
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  when: 
+    - apache_ssl_hardening_enabled | default(false)
+    - ansible_os_family == "Debian"
+  notify: reload apache2
+  tags: ['ssl', 'hardening', 'apache']
+
+- name: Enable Apache SSL hardening configuration
+  command: a2enconf ssl-params
+  become: yes
+  when: 
+    - apache_ssl_hardening_enabled | default(false)
+    - ansible_os_family == "Debian"
+  notify: reload apache2
+  tags: ['ssl', 'hardening', 'apache']
+
+- name: Generate strong Diffie-Hellman parameters
+  openssl_dhparam:
+    path: "{{ ssl_dh_params_path }}"
+    size: 2048
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  when: ssl_generate_dh_params | default(true)
+  tags: ['ssl', 'hardening', 'dh-params']
+
+- name: Configure OCSP stapling
+  template:
+    src: ocsp-stapling.conf.j2
+    dest: /etc/ssl/ocsp-stapling.conf
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  when: ssl_ocsp_stapling_enabled | default(true)
+  tags: ['ssl', 'hardening', 'ocsp']
+
+- name: Setup SSL certificate transparency monitoring
+  template:
+    src: ct-monitor.sh.j2
+    dest: /usr/local/bin/ct-monitor.sh
+    mode: '0755'
+    owner: root
+    group: root
+  become: yes
+  when: ssl_ct_monitoring_enabled | default(false)
+  tags: ['ssl', 'hardening', 'ct-monitoring']
+
+- name: Create SSL security headers configuration
+  template:
+    src: security-headers.conf.j2
+    dest: /etc/ssl/security-headers.conf
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  tags: ['ssl', 'hardening', 'security-headers']
+
+- name: Configure SSL session management
+  template:
+    src: ssl-session.conf.j2
+    dest: /etc/ssl/ssl-session.conf
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  tags: ['ssl', 'hardening', 'session']
+
+- name: Setup SSL vulnerability scanner
+  template:
+    src: ssl-vuln-scan.sh.j2
+    dest: /usr/local/bin/ssl-vuln-scan.sh
+    mode: '0755'
+    owner: root
+    group: root
+  become: yes
+  when: ssl_vulnerability_scanning_enabled | default(true)
+  tags: ['ssl', 'hardening', 'vulnerability-scanning']
+
+- name: Schedule regular SSL vulnerability scans
+  cron:
+    name: "SSL vulnerability scan"
+    job: "/usr/local/bin/ssl-vuln-scan.sh >> /var/log/ssl-vuln-scan.log 2>&1"
+    minute: "0"
+    hour: "4"
+    weekday: "1"  # Monday
+    user: root
+  become: yes
+  when: ssl_vulnerability_scanning_enabled | default(true)
+  tags: ['ssl', 'hardening', 'vulnerability-scanning']
+
+- name: Configure SSL certificate pinning headers
+  template:
+    src: ssl-pinning.conf.j2
+    dest: /etc/ssl/ssl-pinning.conf
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  when: ssl_certificate_pinning_enabled | default(false)
+  tags: ['ssl', 'hardening', 'pinning']
+
+- name: Setup SSL certificate revocation checking
+  template:
+    src: ssl-revocation-check.sh.j2
+    dest: /usr/local/bin/ssl-revocation-check.sh
+    mode: '0755'
+    owner: root
+    group: root
+  become: yes
+  when: ssl_revocation_checking_enabled | default(true)
+  tags: ['ssl', 'hardening', 'revocation']
+
+- name: Configure fail2ban for SSL attacks
+  template:
+    src: jail-ssl.local.j2
+    dest: /etc/fail2ban/jail.d/ssl.local
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  notify: restart fail2ban
+  when: fail2ban_ssl_protection_enabled | default(true)
+  tags: ['ssl', 'hardening', 'fail2ban']
+
+- name: Display SSL hardening status
+  debug:
+    msg: |
+      SSL Security Hardening Status:
+      
+      Strong Cipher Suites: Configured
+      Diffie-Hellman Parameters: {{ 'Generated' if ssl_generate_dh_params | default(true) else 'Disabled' }}
+      OCSP Stapling: {{ 'Enabled' if ssl_ocsp_stapling_enabled | default(true) else 'Disabled' }}
+      Security Headers: Configured
+      Vulnerability Scanning: {{ 'Enabled' if ssl_vulnerability_scanning_enabled | default(true) else 'Disabled' }}
+      Certificate Pinning: {{ 'Enabled' if ssl_certificate_pinning_enabled | default(false) else 'Disabled' }}
+      Revocation Checking: {{ 'Enabled' if ssl_revocation_checking_enabled | default(true) else 'Disabled' }}
+      Fail2ban SSL Protection: {{ 'Enabled' if fail2ban_ssl_protection_enabled | default(true) else 'Disabled' }}
+  tags: ['ssl', 'hardening', 'info']

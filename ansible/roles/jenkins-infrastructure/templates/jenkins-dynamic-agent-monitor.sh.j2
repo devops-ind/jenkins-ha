@@ -1,0 +1,126 @@
+#!/bin/bash
+# Jenkins Dynamic Agent Monitoring Script
+# Managed by Ansible - DO NOT EDIT MANUALLY
+
+set -euo pipefail
+
+# Configuration
+LOG_FILE="{{ jenkins_home_dir }}/logs/dynamic-agent-monitor.log"
+JENKINS_URL="{{ jenkins_master_url | default('http://localhost:8080') }}"
+JENKINS_USER="{{ jenkins_admin_username | default('admin') }}"
+JENKINS_TOKEN="{{ jenkins_admin_api_token }}"
+MAX_LOG_SIZE=10485760  # 10MB
+
+# Logging function
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+# Rotate log if too large
+rotate_log() {
+    if [[ -f "$LOG_FILE" && $(stat -f%z "$LOG_FILE" 2>/dev/null || stat -c%s "$LOG_FILE" 2>/dev/null || echo 0) -gt $MAX_LOG_SIZE ]]; then
+        mv "$LOG_FILE" "${LOG_FILE}.old"
+        touch "$LOG_FILE"
+        log "Log rotated due to size limit"
+    fi
+}
+
+# Check Jenkins master connectivity
+check_jenkins_master() {
+    local response
+    if response=$(curl -s -w "HTTPSTATUS:%{http_code}" -u "$JENKINS_USER:$JENKINS_TOKEN" "$JENKINS_URL/api/json" 2>/dev/null); then
+        local http_code
+        http_code=$(echo "$response" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
+        if [[ "$http_code" -eq 200 ]]; then
+            log "Jenkins master is accessible"
+            return 0
+        else
+            log "ERROR: Jenkins master returned HTTP $http_code"
+            return 1
+        fi
+    else
+        log "ERROR: Cannot connect to Jenkins master at $JENKINS_URL"
+        return 1
+    fi
+}
+
+# Monitor dynamic agent containers
+monitor_dynamic_agents() {
+{% if jenkins_container_runtime == 'docker' %}
+    local agent_containers
+    agent_containers=$(docker ps --filter "label=service=jenkins-agent" --filter "label=type=dynamic" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" 2>/dev/null || echo "")
+    
+    if [[ -n "$agent_containers" ]]; then
+        log "Active dynamic agent containers:"
+        echo "$agent_containers" | tail -n +2 | while read -r line; do
+            log "  $line"
+        done
+    else
+        log "No active dynamic agent containers found"
+    fi
+{% elif jenkins_container_runtime == 'podman' %}
+    local agent_containers
+    agent_containers=$(podman ps --filter "label=service=jenkins-agent" --filter "label=type=dynamic" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" 2>/dev/null || echo "")
+    
+    if [[ -n "$agent_containers" ]]; then
+        log "Active dynamic agent containers:"
+        echo "$agent_containers" | tail -n +2 | while read -r line; do
+            log "  $line"
+        done
+    else
+        log "No active dynamic agent containers found"
+    fi
+{% endif %}
+}
+
+# Check Docker/Podman health
+check_container_runtime() {
+{% if jenkins_container_runtime == 'docker' %}
+    if docker info >/dev/null 2>&1; then
+        log "Docker daemon is running"
+        return 0
+    else
+        log "ERROR: Docker daemon is not accessible"
+        return 1
+    fi
+{% elif jenkins_container_runtime == 'podman' %}
+    if podman info >/dev/null 2>&1; then
+        log "Podman is accessible"
+        return 0
+    else
+        log "ERROR: Podman is not accessible"
+        return 1
+    fi
+{% endif %}
+}
+
+# Main monitoring function
+main() {
+    # Create log directory if it doesn't exist
+    mkdir -p "$(dirname "$LOG_FILE")"
+    
+    # Rotate log if necessary
+    rotate_log
+    
+    log "Starting dynamic agent monitoring check"
+    
+    # Check container runtime
+    if ! check_container_runtime; then
+        log "Container runtime check failed"
+        exit 1
+    fi
+    
+    # Check Jenkins master
+    if ! check_jenkins_master; then
+        log "Jenkins master check failed"
+        exit 1
+    fi
+    
+    # Monitor dynamic agents
+    monitor_dynamic_agents
+    
+    log "Dynamic agent monitoring check completed successfully"
+}
+
+# Run main function
+main "$@"

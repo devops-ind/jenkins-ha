@@ -1,18 +1,348 @@
 groups:
-  - name: jenkins
+  - name: jenkins.infrastructure
     rules:
-      - alert: JenkinsDown
-        expr: up{job="jenkins"} == 0
+      # Jenkins Master Availability
+      - alert: JenkinsMasterDown
+        expr: up{job="jenkins-master"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: jenkins
+          component: master
+        annotations:
+          summary: "Jenkins Master instance {{ $labels.instance }} is down"
+          description: "Jenkins Master {{ $labels.instance }} has been down for more than 2 minutes. High Availability may be compromised."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/master-down"
+
+      - alert: JenkinsAllMastersDown
+        expr: count(up{job="jenkins-master"} == 1) == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: jenkins
+          component: master
+        annotations:
+          summary: "All Jenkins Masters are down - Service outage"
+          description: "All Jenkins Master instances are down. Complete service outage."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/all-masters-down"
+
+      - alert: JenkinsHADegraded
+        expr: count(up{job="jenkins-master"} == 1) == 1
+        for: 5m
+        labels:
+          severity: warning
+          service: jenkins
+          component: master
+        annotations:
+          summary: "Jenkins HA is degraded - Only one master available"
+          description: "Only one Jenkins Master is available. HA redundancy is lost."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/ha-degraded"
+
+      # Jenkins Agent Availability
+      - alert: JenkinsAgentDown
+        expr: up{job="jenkins-agent"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: jenkins
+          component: agent
+        annotations:
+          summary: "Jenkins Agent {{ $labels.instance }} is down"
+          description: "Jenkins Agent {{ $labels.instance }} has been down for more than 5 minutes."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/agent-down"
+
+      - alert: JenkinsAgentCapacityLow
+        expr: (count(up{job="jenkins-agent"} == 1) / count(up{job="jenkins-agent"})) < 0.5
+        for: 10m
+        labels:
+          severity: warning
+          service: jenkins
+          component: agent
+        annotations:
+          summary: "Jenkins Agent capacity is critically low"
+          description: "Less than 50% of Jenkins Agents are available. Build capacity is severely reduced."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/low-agent-capacity"
+
+  - name: jenkins.performance
+    rules:
+      # Memory Usage
+      - alert: JenkinsMasterHighMemoryUsage
+        expr: (jenkins_memory_used_bytes / jenkins_memory_total_bytes) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+          service: jenkins
+          component: master
+        annotations:
+          summary: "Jenkins Master {{ $labels.instance }} memory usage is high"
+          description: "Jenkins Master {{ $labels.instance }} memory usage is {{ $value }}%. Consider scaling or memory optimization."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/high-memory"
+
+      - alert: JenkinsMasterCriticalMemoryUsage
+        expr: (jenkins_memory_used_bytes / jenkins_memory_total_bytes) * 100 > 95
         for: 5m
         labels:
           severity: critical
+          service: jenkins
+          component: master
         annotations:
-          summary: "Jenkins instance is down"
-          
-      - alert: JenkinsBuildFailure
-        expr: increase(jenkins_builds_failure_total[1h]) > 5
+          summary: "Jenkins Master {{ $labels.instance }} memory usage is critical"
+          description: "Jenkins Master {{ $labels.instance }} memory usage is {{ $value }}%. Immediate action required."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/critical-memory"
+
+      # CPU Usage
+      - alert: JenkinsMasterHighCPUUsage
+        expr: rate(jenkins_cpu_usage_seconds_total[5m]) * 100 > 80
+        for: 15m
+        labels:
+          severity: warning
+          service: jenkins
+          component: master
+        annotations:
+          summary: "Jenkins Master {{ $labels.instance }} CPU usage is high"
+          description: "Jenkins Master {{ $labels.instance }} CPU usage is {{ $value }}% over the last 5 minutes."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/high-cpu"
+
+      # Disk Usage
+      - alert: JenkinsMasterHighDiskUsage
+        expr: (node_filesystem_size_bytes{fstype!="tmpfs",mountpoint="/"} - node_filesystem_free_bytes{fstype!="tmpfs",mountpoint="/"}) / node_filesystem_size_bytes{fstype!="tmpfs",mountpoint="/"} * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+          service: jenkins
+          component: storage
+        annotations:
+          summary: "Jenkins Master {{ $labels.instance }} disk usage is high"
+          description: "Jenkins Master {{ $labels.instance }} disk usage is {{ $value }}%. Cleanup may be required."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/high-disk"
+
+      - alert: JenkinsMasterCriticalDiskUsage
+        expr: (node_filesystem_size_bytes{fstype!="tmpfs",mountpoint="/"} - node_filesystem_free_bytes{fstype!="tmpfs",mountpoint="/"}) / node_filesystem_size_bytes{fstype!="tmpfs",mountpoint="/"} * 100 > 95
+        for: 5m
+        labels:
+          severity: critical
+          service: jenkins
+          component: storage
+        annotations:
+          summary: "Jenkins Master {{ $labels.instance }} disk usage is critical"
+          description: "Jenkins Master {{ $labels.instance }} disk usage is {{ $value }}%. Immediate cleanup required."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/critical-disk"
+
+  - name: jenkins.builds
+    rules:
+      # Build Performance
+      - alert: JenkinsBuildFailureRateHigh
+        expr: (rate(jenkins_builds_failure_total[1h]) / rate(jenkins_builds_total[1h])) * 100 > 20
+        for: 15m
+        labels:
+          severity: warning
+          service: jenkins
+          component: builds
+        annotations:
+          summary: "Jenkins build failure rate is high"
+          description: "Jenkins build failure rate is {{ $value }}% over the last hour. Investigation required."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/high-failure-rate"
+
+      - alert: JenkinsBuildQueueBacklog
+        expr: jenkins_queue_size > 10
+        for: 30m
+        labels:
+          severity: warning
+          service: jenkins
+          component: builds
+        annotations:
+          summary: "Jenkins build queue has significant backlog"
+          description: "Jenkins build queue has {{ $value }} items waiting for more than 30 minutes."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/queue-backlog"
+
+      - alert: JenkinsBuildTimeIncreasing
+        expr: increase(jenkins_builds_duration_seconds_sum[1h]) / increase(jenkins_builds_total[1h]) > 1800
+        for: 30m
+        labels:
+          severity: warning
+          service: jenkins
+          component: builds
+        annotations:
+          summary: "Jenkins average build time is increasing"
+          description: "Average Jenkins build time is {{ $value }} seconds over the last hour."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/slow-builds"
+
+      - alert: JenkinsLongRunningBuild
+        expr: jenkins_builds_duration_seconds > 7200
         for: 0m
         labels:
           severity: warning
+          service: jenkins
+          component: builds
         annotations:
-          summary: "High build failure rate in Jenkins"
+          summary: "Jenkins build {{ $labels.job_name }} is running for an unusually long time"
+          description: "Build {{ $labels.job_name }} has been running for {{ $value }} seconds (>2 hours)."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/long-running-build"
+
+  - name: jenkins.security
+    rules:
+      # Security Alerts
+      - alert: JenkinsFailedLoginAttempts
+        expr: increase(jenkins_security_failed_login_total[5m]) > 10
+        for: 0m
+        labels:
+          severity: warning
+          service: jenkins
+          component: security
+        annotations:
+          summary: "High number of failed login attempts to Jenkins"
+          description: "{{ $value }} failed login attempts in the last 5 minutes from {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/failed-logins"
+
+      - alert: JenkinsUnauthorizedAccess
+        expr: increase(jenkins_security_unauthorized_access_total[1m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: jenkins
+          component: security
+        annotations:
+          summary: "Unauthorized access attempt detected in Jenkins"
+          description: "Unauthorized access attempt detected on Jenkins instance {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/unauthorized-access"
+
+      - alert: JenkinsSSLCertificateExpiring
+        expr: (jenkins_ssl_certificate_expiry_timestamp - time()) / 86400 < 30
+        for: 0m
+        labels:
+          severity: warning
+          service: jenkins
+          component: ssl
+        annotations:
+          summary: "Jenkins SSL certificate expiring soon"
+          description: "SSL certificate for {{ $labels.instance }} expires in {{ $value }} days."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/ssl-renewal"
+
+      - alert: JenkinsSSLCertificateExpired
+        expr: jenkins_ssl_certificate_expiry_timestamp < time()
+        for: 0m
+        labels:
+          severity: critical
+          service: jenkins
+          component: ssl
+        annotations:
+          summary: "Jenkins SSL certificate has expired"
+          description: "SSL certificate for {{ $labels.instance }} has expired."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/ssl-expired"
+
+  - name: jenkins.connectivity
+    rules:
+      # Network and Connectivity
+      - alert: JenkinsAgentConnectionLoss
+        expr: increase(jenkins_agent_connection_lost_total[5m]) > 3
+        for: 0m
+        labels:
+          severity: warning
+          service: jenkins
+          component: connectivity
+        annotations:
+          summary: "Jenkins agents are frequently losing connection"
+          description: "{{ $value }} agent connection losses in the last 5 minutes."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/agent-connection-loss"
+
+      - alert: JenkinsLoadBalancerUnhealthy
+        expr: up{job="jenkins-loadbalancer"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: jenkins
+          component: loadbalancer
+        annotations:
+          summary: "Jenkins Load Balancer is down"
+          description: "Jenkins Load Balancer {{ $labels.instance }} is down. Traffic routing may be affected."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/lb-down"
+
+      - alert: JenkinsBackendUnhealthy
+        expr: haproxy_backend_up{backend=~"jenkins.*"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: jenkins
+          component: loadbalancer
+        annotations:
+          summary: "Jenkins backend {{ $labels.backend }} is unhealthy"
+          description: "HAProxy backend {{ $labels.backend }} for Jenkins is marked as down."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/backend-unhealthy"
+
+  - name: jenkins.storage
+    rules:
+      # Storage and Backup
+      - alert: JenkinsSharedStorageDown
+        expr: up{job="jenkins-storage"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: jenkins
+          component: storage
+        annotations:
+          summary: "Jenkins shared storage is down"
+          description: "Jenkins shared storage {{ $labels.instance }} is down. Data persistence may be affected."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/storage-down"
+
+      - alert: JenkinsBackupFailed
+        expr: jenkins_backup_last_success_timestamp < time() - 86400
+        for: 0m
+        labels:
+          severity: critical
+          service: jenkins
+          component: backup
+        annotations:
+          summary: "Jenkins backup has failed"
+          description: "Jenkins backup for {{ $labels.instance }} has not succeeded in the last 24 hours."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/backup-failed"
+
+      - alert: JenkinsArtifactStorageHigh
+        expr: jenkins_artifact_storage_bytes / jenkins_artifact_storage_max_bytes * 100 > 85
+        for: 30m
+        labels:
+          severity: warning
+          service: jenkins
+          component: storage
+        annotations:
+          summary: "Jenkins artifact storage usage is high"
+          description: "Jenkins artifact storage is {{ $value }}% full. Cleanup may be required."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/artifact-cleanup"
+
+  - name: jenkins.plugins
+    rules:
+      # Plugin Health
+      - alert: JenkinsPluginErrors
+        expr: increase(jenkins_plugin_error_total[1h]) > 5
+        for: 0m
+        labels:
+          severity: warning
+          service: jenkins
+          component: plugins
+        annotations:
+          summary: "Jenkins plugin errors detected"
+          description: "{{ $value }} plugin errors detected in the last hour on {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/plugin-errors"
+
+      - alert: JenkinsPluginUpdateAvailable
+        expr: jenkins_plugin_updates_available > 10
+        for: 0m
+        labels:
+          severity: info
+          service: jenkins
+          component: plugins
+        annotations:
+          summary: "Multiple Jenkins plugin updates available"
+          description: "{{ $value }} plugin updates are available for {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/plugin-updates"
+
+      - alert: JenkinsPluginSecurityUpdates
+        expr: jenkins_plugin_security_updates_available > 0
+        for: 0m
+        labels:
+          severity: warning
+          service: jenkins
+          component: plugins
+        annotations:
+          summary: "Jenkins security plugin updates available"
+          description: "{{ $value }} security updates available for plugins on {{ $labels.instance }}."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/security-updates"

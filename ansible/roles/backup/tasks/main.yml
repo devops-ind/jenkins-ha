@@ -226,6 +226,19 @@
     - "'already exists' not in borg_init.stderr"
   when: backup_method == 'borg'
 
+- name: Include disaster recovery tasks
+  include_tasks: disaster-recovery.yml
+  tags: ['backup', 'disaster-recovery']
+
+- name: Include backup testing automation
+  include_tasks: backup-testing.yml
+  when: backup_testing_enabled | default(true)
+  tags: ['backup', 'testing']
+
+- name: Include backup verification automation
+  include_tasks: backup-verification.yml
+  tags: ['backup', 'verification']
+
 - name: Create initial backup
   command: "{{ backup_home_dir }}/scripts/backup-master.sh --initial"
   register: initial_backup

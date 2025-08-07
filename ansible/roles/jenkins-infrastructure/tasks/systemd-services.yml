@@ -15,18 +15,7 @@
   when: jenkins_role == 'master' or jenkins_role is not defined
   become: yes
 
-- name: Generate Jenkins agent systemd service
-  template:
-    src: jenkins-agent.service.j2
-    dest: /etc/systemd/system/jenkins-agent.service
-    owner: root
-    group: root
-    mode: '0644'
-  notify:
-    - reload systemd
-    - restart jenkins-agent
-  when: jenkins_role == 'agent'
-  become: yes
+# Static agent systemd service removed - dynamic agents don't need systemd services
 
 - name: Generate HAProxy systemd service
   template:
@@ -72,13 +61,7 @@
   when: jenkins_role == 'master' or jenkins_role is not defined
   become: yes
 
-- name: Enable and start Jenkins agent service
-  systemd:
-    name: jenkins-agent
-    enabled: yes
-    state: started
-  when: jenkins_role == 'agent'
-  become: yes
+# Static agent service start removed - dynamic agents are managed by Docker/Podman
 
 - name: Enable and start HAProxy service
   systemd:

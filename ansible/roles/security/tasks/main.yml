@@ -10,8 +10,16 @@
     - aide
     - rkhunter
     - chkrootkit
+    - openssl
+    - ca-certificates
   become: yes
   tags: ['security', 'packages']
+
+# SSL/TLS Certificate Management
+- name: Include SSL certificate tasks
+  include_tasks: ssl-certificates.yml
+  when: ssl_enabled | default(true)
+  tags: ['security', 'ssl', 'certificates']
 
 - name: Configure fail2ban for SSH protection
   template:

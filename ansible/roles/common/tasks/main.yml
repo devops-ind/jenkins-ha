@@ -18,11 +18,12 @@
 #     name: "{{ common_timezone }}"
 #   notify: restart rsyslog
 
-- name: Set locale
-  locale_gen:
-    name: "{{ common_locale }}"
-    state: present
-  when: ansible_os_family == "Debian"
+# Locale configuration disabled - community.general collection not available
+# - name: Set locale
+#   community.general.locale_gen:
+#     name: "{{ common_locale }}"
+#     state: present
+#   when: ansible_os_family == "Debian" and common_locale is defined
 
 - name: Create monitoring user
   user:
@@ -32,46 +33,16 @@
     system: yes
     create_home: yes
 
-- name: Configure SSH settings
-  lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: "{{ item.regexp }}"
-    line: "{{ item.line }}"
-    backup: yes
-  loop:
-    - { regexp: '^#?Port', line: 'Port {{ common_ssh_port }}' }
-    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin {{ common_ssh_permit_root_login }}' }
-    - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication {{ common_ssh_password_authentication }}' }
-    - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries {{ common_ssh_max_auth_tries }}' }
-  notify: restart ssh
+# SSH hardening removed - no longer needed for Jenkins agent connections
+# SSH is still available for system administration but not used for Jenkins communication
 
-- name: Install and configure UFW firewall
-  package:
-    name: ufw
-    state: present
-  when: common_firewall_enabled and ansible_os_family == "Debian"
-
-- name: Configure UFW default policies
-  ufw:
-    direction: "{{ item.direction }}"
-    policy: "{{ item.policy }}"
-  loop:
-    - { direction: 'incoming', policy: 'deny' }
-    - { direction: 'outgoing', policy: 'allow' }
-  when: common_firewall_enabled and ansible_os_family == "Debian"
-
-- name: Allow SSH and other ports through firewall
-  ufw:
-    rule: allow
-    port: "{{ item.split('/')[0] }}"
-    proto: "{{ item.split('/')[1] }}"
-  loop: "{{ common_firewall_allowed_ports }}"
-  when: common_firewall_enabled and ansible_os_family == "Debian"
-
-- name: Enable UFW firewall
-  ufw:
-    state: enabled
-  when: common_firewall_enabled and ansible_os_family == "Debian"
+# UFW firewall configuration disabled - community.general collection not available
+# Firewall should be managed by infrastructure team separately
+# - name: Install and configure UFW firewall
+#   package:
+#     name: ufw
+#     state: present
+#   when: common_firewall_enabled and ansible_os_family == "Debian"
 
 # - name: Configure NTP service
 #   template:

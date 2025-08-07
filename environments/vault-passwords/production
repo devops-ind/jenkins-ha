@@ -1,0 +1,13 @@
+# This file should contain the vault password for production environment
+# Example strong password (replace with your actual vault password):
+# Pr0duct10n@V@ult@P@ssw0rd@2024!V3ryStr0ng&S3cur3
+# 
+# This file should be:
+# 1. Owned by the user running ansible
+# 2. Have 600 permissions (readable only by owner)
+# 3. Not committed to version control (add to .gitignore)
+# 4. Backed up securely and separately from the repository
+#
+# To set the password:
+# echo "your-strong-vault-password" > environments/vault-passwords/production
+# chmod 600 environments/vault-passwords/production

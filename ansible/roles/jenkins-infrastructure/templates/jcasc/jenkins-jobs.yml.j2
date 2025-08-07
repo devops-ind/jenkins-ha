@@ -222,7 +222,7 @@ jobs:
             choiceParam {
               name('UPDATE_SCOPE')
               description('Scope of the update')
-              choices(['all', 'masters-only', 'agents-only', 'configuration-only'])
+              choices(['all', 'masters-only', 'configuration-only'])
             }
             booleanParam {
               name('SKIP_HEALTH_CHECKS')
@@ -427,7 +427,7 @@ jobs:
             choiceParam {
               name('CHECK_SCOPE')
               description('Scope of health checks')
-              choices(['all', 'masters-only', 'agents-only', 'services-only', 'network-only'])
+              choices(['all', 'masters-only', 'services-only', 'network-only'])
             }
             booleanParam {
               name('DETAILED_REPORTING')
@@ -473,7 +473,7 @@ jobs:
           - Repository-based job definitions processing
           
           Agent: Runs on python dynamic agents with Job DSL capabilities
-          Labels: python, python-build, dynamic
+          Labels: python, python-build
         ''')
         
         properties {
@@ -690,7 +690,7 @@ jobs:
           - Manage job lifecycle and cleanup
           
           Agent: python-agent (dynamic scaling)
-          Labels: python, python-build, static
+          Labels: python, python-build
         ''')
         
         label('python')  // Runs on python-agent

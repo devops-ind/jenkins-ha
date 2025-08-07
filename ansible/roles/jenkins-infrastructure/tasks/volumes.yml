@@ -112,7 +112,8 @@
     mode: '0755'
     recurse: yes
   loop: "{{ jenkins_volumes }}"
-  when: item.source != '/var/run/docker.sock'
+  when: 
+    - item.type == 'named' or (item.type == 'bind' and item.source != '/var/run/docker.sock')
   tags: ['volumes', 'permissions']
 
 - name: Create volume configuration file
@@ -127,9 +128,9 @@
 - name: Verify volume configuration
   command: >
     {% if jenkins_container_runtime == 'docker' %}
-    docker volume ls --format "table {{.Name}}\t{{.Driver}}\t{{.Mountpoint}}"
+    docker volume ls --format "table {{ '{{.Name}}' }}\t{{ '{{.Driver}}' }}\t{{ '{{.Mountpoint}}' }}"
     {% else %}
-    podman volume ls --format "table {{.Name}}\t{{.Driver}}\t{{.Mountpoint}}"
+    podman volume ls --format "table {{ '{{.Name}}' }}\t{{ '{{.Driver}}' }}\t{{ '{{.Mountpoint}}' }}"
     {% endif %}
   register: volume_info
   changed_when: false

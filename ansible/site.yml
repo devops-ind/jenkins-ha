@@ -78,16 +78,7 @@
         - jenkins_ha_enabled | default(false)
         - groups['jenkins_masters'] | default([]) | length > 1
 
-- name: Deploy Jenkins Agents
-  hosts: localhost
-  become: yes
-  gather_facts: yes
-  serial: "{{ agent_serial_execution | default('50%') }}"
-  roles:
-    - role: jenkins-infrastructure
-      vars:
-        jenkins_role: agent
-      tags: ['agents', 'deploy']
+# Dynamic Jenkins Agents are configured via JCasC - no separate deployment needed
 
 - name: Setup Monitoring Stack
   hosts: localhost
@@ -157,10 +148,10 @@
           Password: [ENCRYPTED - Check vault]
           
           🏷️ Available Agent Labels:
-          • dind docker-manager static privileged
-          • maven java dynamic
-          • python py dynamic
-          • nodejs javascript dynamic
+          • dind docker-manager privileged (dynamic)
+          • maven java-build (dynamic)
+          • python python-build (dynamic)
+          • nodejs frontend-build (dynamic)
           
           📊 Monitoring Status: {{ monitoring_enabled | default(true) and 'Enabled' or 'Disabled' }}
           💾 Backup Status: {{ backup_enabled | default(true) and 'Enabled' or 'Disabled' }}

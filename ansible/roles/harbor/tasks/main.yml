@@ -1,52 +1,163 @@
 ---
 # Tasks for harbor role
 
+- name: Create Harbor system user
+  user:
+    name: harbor
+    system: yes
+    shell: /bin/false
+    home: "{{ harbor_data_dir }}"
+    create_home: no
+  become: yes
+  tags: ['harbor', 'users']
+
 - name: Create Harbor directories
   file:
-    path: "{{ item }}"
+    path: "{{ item.path }}"
     state: directory
-    mode: '0755'
+    mode: "{{ item.mode }}"
+    owner: "{{ item.owner | default('harbor') }}"
+    group: "{{ item.group | default('harbor') }}"
   loop:
-    - "{{ harbor_install_dir }}"
-    - "{{ harbor_data_dir }}"
-    - "{{ harbor_log_dir }}"
-    - "{{ harbor_data_dir }}/registry"
-    - "{{ harbor_data_dir }}/database"
-    - "{{ harbor_data_dir }}/redis"
+    - { path: "{{ harbor_install_dir }}", mode: '0755', owner: 'root', group: 'root' }
+    - { path: "{{ harbor_data_dir }}", mode: '0755' }
+    - { path: "{{ harbor_log_dir }}", mode: '0755' }
+    - { path: "{{ harbor_data_dir }}/registry", mode: '0755' }
+    - { path: "{{ harbor_data_dir }}/database", mode: '0700' }
+    - { path: "{{ harbor_data_dir }}/redis", mode: '0755' }
+    - { path: "{{ harbor_ssl_dir }}", mode: '0755', owner: 'root', group: 'root' }
+    - { path: "{{ harbor_config_dir }}", mode: '0755', owner: 'root', group: 'root' }
+    - { path: "{{ harbor_backup_dir }}", mode: '0755' }
+  become: yes
+  tags: ['harbor', 'directories']
+
+- name: Install Harbor dependencies
+  package:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - docker-compose
+    - python3-docker
+    - python3-requests
+    - openssl
+    - curl
+    - jq
+  become: yes
+  tags: ['harbor', 'dependencies']
 
 - name: Download Harbor installer
   get_url:
     url: "{{ harbor_download_url }}"
-    dest: "/tmp/harbor-installer.tgz"
+    dest: "/tmp/harbor-installer-{{ harbor_version }}.tgz"
     mode: '0644'
+    checksum: "{{ harbor_installer_checksum | default(omit) }}"
+    timeout: 300
   register: harbor_download
+  tags: ['harbor', 'download']
 
 - name: Extract Harbor installer
   unarchive:
-    src: "/tmp/harbor-installer.tgz"
+    src: "/tmp/harbor-installer-{{ harbor_version }}.tgz"
     dest: "{{ harbor_install_dir }}"
     remote_src: yes
     extra_opts: [--strip-components=1]
+    owner: root
+    group: root
   when: harbor_download.changed
+  become: yes
+  tags: ['harbor', 'install']
+
+# SSL/TLS Certificate setup
+- name: Include SSL certificate tasks
+  include_tasks: ssl-setup.yml
+  when: harbor_ssl_enabled | default(true)
+  tags: ['harbor', 'ssl']
+
+# Security configuration
+- name: Include security hardening tasks
+  include_tasks: security-hardening.yml
+  tags: ['harbor', 'security']
 
 - name: Generate Harbor configuration
   template:
     src: harbor.yml.j2
     dest: "{{ harbor_install_dir }}/harbor.yml"
     backup: yes
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
   notify: restart harbor
+  tags: ['harbor', 'config']
+
+- name: Generate Harbor environment file
+  template:
+    src: harbor.env.j2
+    dest: "{{ harbor_config_dir }}/harbor.env"
+    mode: '0600'
+    owner: root
+    group: root
+  become: yes
+  tags: ['harbor', 'config']
 
 - name: Check if Harbor is already installed
   stat:
     path: "{{ harbor_install_dir }}/common/config"
   register: harbor_installed
+  tags: ['harbor', 'install']
 
-- name: Run Harbor installer
-  command: "{{ harbor_install_dir }}/install.sh --with-trivy"
+- name: Validate Harbor configuration
+  command: "{{ harbor_install_dir }}/prepare"
   args:
     chdir: "{{ harbor_install_dir }}"
+  environment:
+    HARBOR_CONFIG_FILE: "{{ harbor_install_dir }}/harbor.yml"
+  become: yes
+  when: not harbor_installed.stat.exists
+  tags: ['harbor', 'install']
+
+- name: Run Harbor installer with security features
+  command: >
+    {{ harbor_install_dir }}/install.sh
+    --with-trivy
+    --with-notary
+    {% if harbor_metrics_enabled | default(true) %}--with-metrics{% endif %}
+  args:
+    chdir: "{{ harbor_install_dir }}"
+  environment:
+    HARBOR_CONFIG_FILE: "{{ harbor_install_dir }}/harbor.yml"
+  become: yes
   when: not harbor_installed.stat.exists
   register: harbor_install_result
+  tags: ['harbor', 'install']
+
+# Post-installation configuration
+- name: Include post-installation tasks
+  include_tasks: post-install.yml
+  when: harbor_install_result.changed or harbor_force_config | default(false)
+  tags: ['harbor', 'post-install']
+
+# Authentication and user management
+- name: Include authentication tasks
+  include_tasks: authentication.yml
+  tags: ['harbor', 'auth']
+
+# Project and RBAC setup
+- name: Include project management tasks
+  include_tasks: projects.yml
+  tags: ['harbor', 'projects']
+
+# Backup configuration
+- name: Include backup tasks
+  include_tasks: backup.yml
+  when: harbor_backup_enabled | default(true)
+  tags: ['harbor', 'backup']
+
+# Monitoring setup
+- name: Include monitoring tasks
+  include_tasks: monitoring.yml
+  when: harbor_monitoring_enabled | default(true)
+  tags: ['harbor', 'monitoring']
 
 - name: Wait for Harbor to be ready
   uri:
