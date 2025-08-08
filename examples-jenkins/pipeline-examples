@@ -1,0 +1,2489 @@
+// ================================================================================
+// JENKINS PIPELINE & JOB DSL COMPLETE EXAMPLES REFERENCE
+// ================================================================================
+// This file contains all Jenkins Pipeline and Job DSL examples for DevOps workflows
+// Sections:
+// 1. Declarative Pipeline Examples
+// 2. Scripted Pipeline Examples  
+// 3. Job DSL Examples
+// 4. Advanced Pipeline Features
+// 5. Best Practices Examples
+// ================================================================================
+
+// ================================================================================
+// 1. DECLARATIVE PIPELINE EXAMPLES
+// ================================================================================
+
+// --------------- Basic CI/CD Pipeline ---------------
+pipeline {
+    agent any
+    
+    environment {
+        DOCKER_REGISTRY = 'your-registry.com'
+        APP_NAME = 'myapp'
+        AWS_REGION = 'us-west-2'
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        
+        stage('Build') {
+            steps {
+                sh 'mvn clean compile'
+            }
+        }
+        
+        stage('Test') {
+            steps {
+                sh 'mvn test'
+            }
+            post {
+                always {
+                    junit 'target/surefire-reports/*.xml'
+                }
+            }
+        }
+        
+        stage('Package') {
+            steps {
+                sh 'mvn package'
+                archiveArtifacts artifacts: 'target/*.jar'
+            }
+        }
+        
+        stage('Docker Build') {
+            steps {
+                script {
+                    def image = docker.build("${DOCKER_REGISTRY}/${APP_NAME}:${BUILD_NUMBER}")
+                    image.push()
+                    image.push("latest")
+                }
+            }
+        }
+        
+        stage('Deploy to Dev') {
+            when {
+                branch 'develop'
+            }
+            steps {
+                sh """
+                    aws ecs update-service \
+                        --cluster dev-cluster \
+                        --service ${APP_NAME}-dev \
+                        --force-new-deployment \
+                        --region ${AWS_REGION}
+                """
+            }
+        }
+        
+        stage('Deploy to Prod') {
+            when {
+                branch 'main'
+            }
+            steps {
+                input message: 'Deploy to production?', ok: 'Deploy'
+                sh """
+                    aws ecs update-service \
+                        --cluster prod-cluster \
+                        --service ${APP_NAME}-prod \
+                        --force-new-deployment \
+                        --region ${AWS_REGION}
+                """
+            }
+        }
+    }
+    
+    post {
+        success {
+            slackSend channel: '#deployments',
+                     color: 'good',
+                     message: "✅ ${JOB_NAME} #${BUILD_NUMBER} succeeded"
+        }
+        failure {
+            slackSend channel: '#deployments',
+                     color: 'danger',
+                     message: "❌ ${JOB_NAME} #${BUILD_NUMBER} failed"
+        }
+        always {
+            cleanWs()
+        }
+    }
+}
+
+// --------------- Terraform Infrastructure Pipeline ---------------
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'ACTION',
+            choices: ['plan', 'apply', 'destroy'],
+            description: 'Terraform action to perform'
+        )
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Target environment'
+        )
+    }
+    
+    environment {
+        TF_VAR_environment = "${params.ENVIRONMENT}"
+        AWS_DEFAULT_REGION = 'us-west-2'
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        
+        stage('Terraform Init') {
+            steps {
+                dir('terraform') {
+                    sh """
+                        terraform init \
+                            -backend-config="bucket=terraform-state-${params.ENVIRONMENT}" \
+                            -backend-config="key=${params.ENVIRONMENT}/terraform.tfstate" \
+                            -backend-config="region=us-west-2"
+                    """
+                }
+            }
+        }
+        
+        stage('Terraform Plan') {
+            steps {
+                dir('terraform') {
+                    sh """
+                        terraform plan \
+                            -var-file="environments/${params.ENVIRONMENT}.tfvars" \
+                            -out=tfplan
+                    """
+                }
+            }
+        }
+        
+        stage('Terraform Apply/Destroy') {
+            when {
+                anyOf {
+                    equals expected: 'apply', actual: params.ACTION
+                    equals expected: 'destroy', actual: params.ACTION
+                }
+            }
+            steps {
+                script {
+                    if (params.ENVIRONMENT == 'prod') {
+                        input message: "Confirm ${params.ACTION} on ${params.ENVIRONMENT}?", ok: 'Proceed'
+                    }
+                }
+                dir('terraform') {
+                    script {
+                        if (params.ACTION == 'apply') {
+                            sh 'terraform apply -auto-approve tfplan'
+                        } else if (params.ACTION == 'destroy') {
+                            sh """
+                                terraform destroy -auto-approve \
+                                    -var-file="environments/${params.ENVIRONMENT}.tfvars"
+                            """
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            dir('terraform') {
+                sh 'terraform show -no-color > terraform-output.txt'
+                archiveArtifacts artifacts: 'terraform-output.txt'
+            }
+        }
+    }
+}
+
+// --------------- Multi-Agent Pipeline ---------------
+pipeline {
+    agent none
+    
+    stages {
+        stage('Build on Linux') {
+            agent {
+                label 'linux'
+            }
+            steps {
+                sh 'make build-linux'
+                stash includes: 'dist/linux/**', name: 'linux-artifacts'
+            }
+        }
+        
+        stage('Build on Windows') {
+            agent {
+                label 'windows'
+            }
+            steps {
+                bat 'make.bat build-windows'
+                stash includes: 'dist/windows/**', name: 'windows-artifacts'
+            }
+        }
+        
+        stage('Package') {
+            agent any
+            steps {
+                unstash 'linux-artifacts'
+                unstash 'windows-artifacts'
+                sh 'tar -czf release.tar.gz dist/'
+                archiveArtifacts artifacts: 'release.tar.gz'
+            }
+        }
+    }
+}
+
+// --------------- Matrix Builds ---------------
+pipeline {
+    agent none
+    
+    stages {
+        stage('Test') {
+            matrix {
+                axes {
+                    axis {
+                        name 'PLATFORM'
+                        values 'linux', 'windows', 'mac'
+                    }
+                    axis {
+                        name 'BROWSER'
+                        values 'chrome', 'firefox', 'safari'
+                    }
+                }
+                excludes {
+                    exclude {
+                        axis {
+                            name 'PLATFORM'
+                            values 'linux'
+                        }
+                        axis {
+                            name 'BROWSER'
+                            values 'safari'
+                        }
+                    }
+                }
+                stages {
+                    stage('Test') {
+                        agent {
+                            label "${PLATFORM}"
+                        }
+                        steps {
+                            sh "run-tests.sh ${BROWSER}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --------------- Blue-Green Deployment Pipeline ---------------
+pipeline {
+    agent any
+    
+    parameters {
+        booleanParam('SKIP_TESTS', false, 'Skip test execution')
+        string(name: 'VERSION', defaultValue: 'latest', description: 'Version to deploy')
+    }
+    
+    stages {
+        stage('Prepare') {
+            steps {
+                script {
+                    env.CURRENT_ENV = sh(
+                        script: "kubectl get service myapp-active -o jsonpath='{.spec.selector.version}'",
+                        returnStdout: true
+                    ).trim()
+                    
+                    env.TARGET_ENV = env.CURRENT_ENV == 'blue' ? 'green' : 'blue'
+                    
+                    echo "Current active: ${env.CURRENT_ENV}"
+                    echo "Deploying to: ${env.TARGET_ENV}"
+                }
+            }
+        }
+        
+        stage('Deploy to Inactive') {
+            steps {
+                sh """
+                    kubectl set image deployment/myapp-${env.TARGET_ENV} \
+                        myapp=myapp:${params.VERSION}
+                    
+                    kubectl rollout status deployment/myapp-${env.TARGET_ENV}
+                """
+            }
+        }
+        
+        stage('Smoke Tests') {
+            when {
+                not { params.SKIP_TESTS }
+            }
+            steps {
+                sh """
+                    # Port forward to test the inactive environment
+                    kubectl port-forward deployment/myapp-${env.TARGET_ENV} 8080:8080 &
+                    PF_PID=\$!
+                    
+                    sleep 10
+                    curl -f http://localhost:8080/health
+                    
+                    kill \$PF_PID
+                """
+            }
+        }
+        
+        stage('Switch Traffic') {
+            steps {
+                input message: 'Switch traffic to new version?', ok: 'Switch'
+                
+                sh """
+                    kubectl patch service myapp-active \
+                        -p '{"spec":{"selector":{"version":"${env.TARGET_ENV}"}}}'
+                    
+                    echo "Traffic switched to ${env.TARGET_ENV}"
+                """
+            }
+        }
+        
+        stage('Cleanup Previous') {
+            steps {
+                script {
+                    timeout(time: 5, unit: 'MINUTES') {
+                        input message: 'Clean up previous version?', ok: 'Cleanup'
+                    }
+                }
+                
+                sh """
+                    kubectl scale deployment myapp-${env.CURRENT_ENV} --replicas=0
+                """
+            }
+        }
+    }
+    
+    post {
+        failure {
+            script {
+                if (env.TARGET_ENV) {
+                    sh """
+                        echo "Rolling back due to failure"
+                        kubectl patch service myapp-active \
+                            -p '{"spec":{"selector":{"version":"${env.CURRENT_ENV}"}}}'
+                    """
+                }
+            }
+        }
+    }
+}
+
+// ================================================================================
+// 2. SCRIPTED PIPELINE EXAMPLES
+// ================================================================================
+
+// --------------- Dynamic Pipeline with Parallel Execution ---------------
+node {
+    def deploymentTargets = ['dev', 'staging']
+    def parallelBuilds = [:]
+    
+    stage('Checkout') {
+        checkout scm
+    }
+    
+    stage('Build') {
+        sh 'docker build -t myapp:${BUILD_NUMBER} .'
+    }
+    
+    stage('Test') {
+        parallel(
+            'unit-tests': {
+                sh 'npm run test:unit'
+            },
+            'integration-tests': {
+                sh 'npm run test:integration'
+            },
+            'security-scan': {
+                sh 'npm audit --audit-level=moderate'
+            }
+        )
+    }
+    
+    // Dynamic parallel deployment
+    for (int i = 0; i < deploymentTargets.size(); i++) {
+        def target = deploymentTargets[i]
+        parallelBuilds[target] = {
+            stage("Deploy to ${target}") {
+                sh """
+                    kubectl set image deployment/myapp \
+                        myapp=myapp:${BUILD_NUMBER} \
+                        --namespace=${target}
+                """
+            }
+        }
+    }
+    
+    stage('Parallel Deploy') {
+        parallel parallelBuilds
+    }
+}
+
+// --------------- Conditional Pipeline with Error Handling ---------------
+node {
+    try {
+        stage('Preparation') {
+            checkout scm
+            def props = readProperties file: 'build.properties'
+            env.APP_VERSION = props.version
+        }
+        
+        stage('Build') {
+            if (env.BRANCH_NAME == 'main') {
+                sh 'mvn clean package -Pprod'
+            } else {
+                sh 'mvn clean package -Pdev'
+            }
+        }
+        
+        stage('Deploy') {
+            if (env.BRANCH_NAME == 'main') {
+                timeout(time: 5, unit: 'MINUTES') {
+                    input message: 'Deploy to production?'
+                }
+                sh 'ansible-playbook deploy-prod.yml'
+            } else {
+                sh 'ansible-playbook deploy-dev.yml'
+            }
+        }
+        
+        currentBuild.result = 'SUCCESS'
+        
+    } catch (Exception e) {
+        currentBuild.result = 'FAILURE'
+        throw e
+        
+    } finally {
+        stage('Cleanup') {
+            sh 'docker system prune -f'
+            publishHTML([
+                allowMissing: false,
+                alwaysLinkToLastBuild: true,
+                keepAll: true,
+                reportDir: 'target/site',
+                reportFiles: 'index.html',
+                reportName: 'Build Report'
+            ])
+        }
+        
+        // Send notifications
+        if (currentBuild.result == 'SUCCESS') {
+            emailext (
+                subject: "✅ Build Success: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: "Build completed successfully.",
+                to: "${env.CHANGE_AUTHOR_EMAIL}"
+            )
+        } else {
+            emailext (
+                subject: "❌ Build Failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: "Build failed. Check console output.",
+                to: "${env.CHANGE_AUTHOR_EMAIL}"
+            )
+        }
+    }
+}
+
+// ================================================================================
+// 3. JOB DSL EXAMPLES
+// ================================================================================
+
+// --------------- Basic Job Creation ---------------
+job('my-basic-job') {
+    description('A basic job created with Job DSL')
+    
+    scm {
+        git {
+            remote {
+                url('https://github.com/user/repo.git')
+                credentials('github-credentials')
+            }
+            branch('*/main')
+        }
+    }
+    
+    triggers {
+        scm('H/5 * * * *')  // Poll SCM every 5 minutes
+    }
+    
+    steps {
+        shell('mvn clean test')
+        shell('mvn package')
+    }
+    
+    publishers {
+        archiveArtifacts {
+            pattern('target/*.jar')
+            onlyIfSuccessful()
+        }
+        
+        junit('target/surefire-reports/*.xml')
+        
+        emailNotification {
+            recipients('team@company.com')
+            sendToRequester()
+            sendToFailureList()
+        }
+    }
+}
+
+// --------------- Pipeline Job with DSL ---------------
+pipelineJob('terraform-pipeline') {
+    description('Terraform infrastructure pipeline')
+    
+    parameters {
+        choiceParam('ENVIRONMENT', ['dev', 'staging', 'prod'], 'Target environment')
+        choiceParam('ACTION', ['plan', 'apply', 'destroy'], 'Terraform action')
+        booleanParam('AUTO_APPROVE', false, 'Auto approve terraform apply')
+    }
+    
+    definition {
+        cpsScm {
+            scm {
+                git {
+                    remote {
+                        url('https://github.com/company/infrastructure.git')
+                        credentials('github-token')
+                    }
+                    branch('*/main')
+                }
+            }
+            scriptPath('jenkins/Jenkinsfile')
+        }
+    }
+    
+    properties {
+        buildDiscarder {
+            numToKeep(10)
+        }
+        
+        disableConcurrentBuilds()
+    }
+}
+
+// --------------- Multi-Job DSL Generator ---------------
+def services = [
+    'user-service': [
+        repo: 'https://github.com/company/user-service.git',
+        port: 8080,
+        healthCheck: '/health'
+    ],
+    'order-service': [
+        repo: 'https://github.com/company/order-service.git',
+        port: 8081,
+        healthCheck: '/actuator/health'
+    ],
+    'payment-service': [
+        repo: 'https://github.com/company/payment-service.git',
+        port: 8082,
+        healthCheck: '/api/health'
+    ]
+]
+
+services.each { serviceName, config ->
+    pipelineJob("${serviceName}-pipeline") {
+        description("CI/CD pipeline for ${serviceName}")
+        
+        parameters {
+            gitParam('BRANCH') {
+                description('Branch to build')
+                type('BRANCH')
+                defaultValue('origin/main')
+            }
+        }
+        
+        definition {
+            cps {
+                script("""
+                    pipeline {
+                        agent any
+                        
+                        environment {
+                            SERVICE_NAME = '${serviceName}'
+                            SERVICE_PORT = '${config.port}'
+                            HEALTH_CHECK = '${config.healthCheck}'
+                        }
+                        
+                        stages {
+                            stage('Checkout') {
+                                steps {
+                                    git branch: '\${params.BRANCH}', 
+                                        url: '${config.repo}',
+                                        credentialsId: 'github-token'
+                                }
+                            }
+                            
+                            stage('Build') {
+                                steps {
+                                    sh 'docker build -t \${SERVICE_NAME}:\${BUILD_NUMBER} .'
+                                }
+                            }
+                            
+                            stage('Test') {
+                                steps {
+                                    sh 'mvn test'
+                                }
+                                post {
+                                    always {
+                                        junit 'target/surefire-reports/*.xml'
+                                    }
+                                }
+                            }
+                            
+                            stage('Deploy') {
+                                steps {
+                                    sh '''
+                                        kubectl set image deployment/\${SERVICE_NAME} \\
+                                            \${SERVICE_NAME}=\${SERVICE_NAME}:\${BUILD_NUMBER}
+                                        
+                                        kubectl rollout status deployment/\${SERVICE_NAME}
+                                        
+                                        # Health check
+                                        sleep 30
+                                        kubectl exec -it deployment/\${SERVICE_NAME} -- \\
+                                            curl -f http://localhost:\${SERVICE_PORT}\${HEALTH_CHECK}
+                                    '''
+                                }
+                            }
+                        }
+                    }
+                """)
+                sandbox()
+            }
+        }
+        
+        triggers {
+            githubPush()
+        }
+    }
+}
+
+// --------------- Folder and View Creation ---------------
+folder('microservices') {
+    description('All microservice pipelines')
+}
+
+folder('infrastructure') {
+    description('Infrastructure and DevOps jobs')
+}
+
+// Create a list view
+listView('Failed Jobs') {
+    jobs {
+        regex('.*')
+    }
+    
+    columns {
+        status()
+        weather()
+        name()
+        lastSuccess()
+        lastFailure()
+        lastDuration()
+        buildButton()
+    }
+    
+    jobFilters {
+        status {
+            status(Status.FAILED)
+        }
+    }
+}
+
+// Create a build pipeline view
+buildPipelineView('Deployment Pipeline') {
+    selectedJob('build-job')
+    numDisplayedBuilds(5)
+    showParameterizedBuild()
+    refreshFrequency(60)
+}
+
+// ================================================================================
+// 4. ADVANCED PIPELINE FEATURES
+// ================================================================================
+
+// --------------- Shared Libraries Usage ---------------
+@Library('company-jenkins-library') _
+
+pipeline {
+    agent any
+    
+    stages {
+        stage('Deploy') {
+            steps {
+                script {
+                    deployToKubernetes([
+                        namespace: 'production',
+                        image: 'myapp:latest',
+                        replicas: 3
+                    ])
+                }
+            }
+        }
+    }
+}
+
+// ================================================================================
+// 5. BEST PRACTICES EXAMPLES
+// ================================================================================
+
+// --------------- Security Best Practices ---------------
+pipeline {
+    agent any
+    
+    environment {
+        // Use credentials securely
+        AWS_ACCESS_KEY_ID = credentials('aws-access-key')
+        AWS_SECRET_ACCESS_KEY = credentials('aws-secret-key')
+        DATABASE_URL = credentials('database-url')
+    }
+    
+    stages {
+        stage('Security Scan') {
+            parallel {
+                stage('Dependency Check') {
+                    steps {
+                        sh 'mvn org.owasp:dependency-check-maven:check'
+                        publishHTML([
+                            allowMissing: false,
+                            alwaysLinkToLastBuild: true,
+                            keepAll: true,
+                            reportDir: 'target',
+                            reportFiles: 'dependency-check-report.html',
+                            reportName: 'Dependency Check Report'
+                        ])
+                    }
+                }
+                
+                stage('Docker Security Scan') {
+                    steps {
+                        sh 'docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image myapp:latest'
+                    }
+                }
+                
+                stage('Infrastructure Scan') {
+                    steps {
+                        sh 'checkov -d terraform/ --framework terraform'
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --------------- Performance Optimization ---------------
+pipeline {
+    agent any
+    
+    options {
+        // Build timeout
+        timeout(time: 30, unit: 'MINUTES')
+        
+        // Skip default checkout
+        skipDefaultCheckout()
+        
+        // Keep builds
+        buildDiscarder(logRotator(
+            numToKeepStr: '10',
+            artifactNumToKeepStr: '5'
+        ))
+        
+        // Disable concurrent builds
+        disableConcurrentBuilds()
+        
+        // Retry failed builds
+        retry(3)
+    }
+    
+    stages {
+        stage('Optimized Checkout') {
+            steps {
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: '*/main']],
+                    doGenerateSubmoduleConfigurations: false,
+                    extensions: [
+                        [$class: 'CloneOption', depth: 1, shallow: true],
+                        [$class: 'CheckoutOption', timeout: 20]
+                    ],
+                    userRemoteConfigs: [[url: 'https://github.com/company/repo.git']]
+                ])
+            }
+        }
+        
+        stage('Cached Build') {
+            steps {
+                // Use Docker layer caching
+                sh '''
+                    docker build \
+                        --cache-from myapp:cache \
+                        --tag myapp:${BUILD_NUMBER} \
+                        --tag myapp:cache .
+                '''
+            }
+        }
+    }
+}
+
+// --------------- Error Handling and Notifications ---------------
+pipeline {
+    agent any
+    
+    stages {
+        stage('Build') {
+            steps {
+                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                    sh 'mvn clean compile'
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                def buildStatus = currentBuild.result ?: 'SUCCESS'
+                def color = buildStatus == 'SUCCESS' ? 'good' : 
+                           buildStatus == 'UNSTABLE' ? 'warning' : 'danger'
+                
+                slackSend(
+                    channel: '#ci-cd',
+                    color: color,
+                    message: """
+                        *${buildStatus}*: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'
+                        
+                        *Branch*: ${env.BRANCH_NAME}
+                        *Duration*: ${currentBuild.durationString}
+                        *Console*: ${env.BUILD_URL}console
+                        
+                        ${buildStatus == 'FAILURE' ? '@channel' : ''}
+                    """.stripIndent()
+                )
+            }
+        }
+        
+        success {
+            emailext (
+                subject: "✅ Build Success: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: """
+                    Build completed successfully!
+                    
+                    Job: ${env.JOB_NAME}
+                    Build: #${env.BUILD_NUMBER}
+                    Duration: ${currentBuild.durationString}
+                    Console: ${env.BUILD_URL}console
+                """,
+                recipientProviders: [developers(), requestor()]
+            )
+        }
+        
+        failure {
+            emailext (
+                subject: "❌ Build Failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: """
+                    Build failed!
+                    
+                    Job: ${env.JOB_NAME}
+                    Build: #${env.BUILD_NUMBER}
+                    Console: ${env.BUILD_URL}console
+                    
+                    Please check the console output for details.
+                """,
+                recipientProviders: [culprits(), developers(), requestor()]
+            )
+        }
+        
+        cleanup {
+            cleanWs()
+        }
+    }
+}
+
+// --------------- Comprehensive Testing Strategy ---------------
+pipeline {
+    agent any
+    
+    stages {
+        stage('Test Strategy') {
+            parallel {
+                stage('Unit Tests') {
+                    steps {
+                        sh 'mvn test'
+                    }
+                    post {
+                        always {
+                            junit 'target/surefire-reports/*.xml'
+                            publishCoverage(
+                                adapters: [jacocoAdapter('target/site/jacoco/jacoco.xml')],
+                                sourceFileResolver: sourceFiles('STORE_LAST_BUILD')
+                            )
+                        }
+                    }
+                }
+                
+                stage('Integration Tests') {
+                    steps {
+                        sh '''
+                            docker-compose -f docker-compose.test.yml up -d
+                            mvn verify -Pintegration-tests
+                        '''
+                    }
+                    post {
+                        always {
+                            sh 'docker-compose -f docker-compose.test.yml down'
+                            junit 'target/failsafe-reports/*.xml'
+                        }
+                    }
+                }
+                
+                stage('Contract Tests') {
+                    steps {
+                        sh 'mvn verify -Pcontract-tests'
+                    }
+                    post {
+                        always {
+                            publishHTML([
+                                allowMissing: false,
+                                alwaysLinkToLastBuild: true,
+                                keepAll: true,
+                                reportDir: 'target/pact',
+                                reportFiles: '*.html',
+                                reportName: 'Pact Contract Tests'
+                            ])
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --------------- Ansible Deployment Pipeline (Traditional Shell) ---------------
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Target environment'
+        )
+        string(
+            name: 'APP_VERSION',
+            defaultValue: 'latest',
+            description: 'Application version to deploy'
+        )
+    }
+    
+    environment {
+        ANSIBLE_HOST_KEY_CHECKING = 'False'
+        ANSIBLE_VAULT_PASSWORD_FILE = credentials('ansible-vault-password')
+    }
+    
+    stages {
+        stage('Prepare Inventory') {
+            steps {
+                script {
+                    writeFile file: 'hosts.ini', text: """
+                        [${params.ENVIRONMENT}]
+                        ${params.ENVIRONMENT == 'prod' ? 
+                          'prod-server-1 ansible_host=10.0.1.10\nprod-server-2 ansible_host=10.0.1.11' :
+                          params.ENVIRONMENT + '-server ansible_host=10.0.2.10'
+                        }
+                        
+                        [${params.ENVIRONMENT}:vars]
+                        app_version=${params.APP_VERSION}
+                        environment=${params.ENVIRONMENT}
+                    """
+                }
+            }
+        }
+        
+        stage('Deploy Application') {
+            steps {
+                withCredentials([sshUserPrivateKey(credentialsId: 'deploy-ssh-key', keyFileVariable: 'SSH_KEY')]) {
+                    sh """
+                        ansible-playbook \
+                            -i hosts.ini \
+                            --private-key=\$SSH_KEY \
+                            --vault-password-file=\$ANSIBLE_VAULT_PASSWORD_FILE \
+                            -e "target_environment=${params.ENVIRONMENT}" \
+                            -e "app_version=${params.APP_VERSION}" \
+                            deploy.yml
+                    """
+                }
+            }
+        }
+        
+        stage('Health Check') {
+            steps {
+                sh """
+                    ansible \
+                        -i hosts.ini \
+                        ${params.ENVIRONMENT} \
+                        -m uri \
+                        -a "url=http://{{ ansible_host }}:8080/health return_content=yes" \
+                        --private-key=\$SSH_KEY
+                """
+            }
+        }
+    }
+}
+
+// ================================================================================
+// ANSIBLE JENKINS PLUGIN EXAMPLES
+// ================================================================================
+
+// --------------- Ansible Plugin - Basic Playbook Execution ---------------
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Target environment'
+        )
+        booleanParam(
+            name: 'DRY_RUN', 
+            defaultValue: false, 
+            description: 'Run in check mode (dry run)'
+        )
+    }
+    
+    stages {
+        stage('Deploy with Ansible Plugin') {
+            steps {
+                // Using ansiblePlaybook step from Ansible plugin
+                ansiblePlaybook(
+                    playbook: 'deploy.yml',
+                    inventory: 'inventories/${params.ENVIRONMENT}/hosts.ini',
+                    credentialsId: 'ansible-ssh-key',
+                    vaultCredentialsId: 'ansible-vault-password',
+                    extraVars: [
+                        environment: params.ENVIRONMENT,
+                        app_version: env.BUILD_NUMBER,
+                        deploy_user: 'ubuntu'
+                    ],
+                    extras: params.DRY_RUN ? '--check --diff' : '--diff',
+                    colorized: true,
+                    disableHostKeyChecking: true
+                )
+            }
+        }
+    }
+    
+    post {
+        always {
+            // Archive Ansible logs
+            archiveArtifacts artifacts: 'ansible.log', allowEmptyArchive: true
+        }
+    }
+}
+
+// --------------- Ansible Plugin - Multi-Playbook Deployment ---------------
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Target environment'
+        )
+        booleanParam(
+            name: 'SKIP_BACKUP',
+            defaultValue: false,
+            description: 'Skip backup step'
+        )
+    }
+    
+    stages {
+        stage('Pre-deployment Backup') {
+            when {
+                not { params.SKIP_BACKUP }
+            }
+            steps {
+                ansiblePlaybook(
+                    playbook: 'playbooks/backup.yml',
+                    inventory: 'inventories/${params.ENVIRONMENT}/hosts.ini',
+                    credentialsId: 'ansible-ssh-key',
+                    vaultCredentialsId: 'ansible-vault-password',
+                    extraVars: [
+                        backup_timestamp: new Date().format('yyyy-MM-dd-HH-mm-ss'),
+                        environment: params.ENVIRONMENT
+                    ],
+                    colorized: true,
+                    disableHostKeyChecking: true
+                )
+            }
+        }
+        
+        stage('Deploy Infrastructure') {
+            steps {
+                ansiblePlaybook(
+                    playbook: 'playbooks/infrastructure.yml',
+                    inventory: 'inventories/${params.ENVIRONMENT}/hosts.ini',
+                    credentialsId: 'ansible-ssh-key',
+                    vaultCredentialsId: 'ansible-vault-password',
+                    limit: 'infrastructure',
+                    tags: 'setup,configure',
+                    extraVars: [
+                        environment: params.ENVIRONMENT,
+                        build_number: env.BUILD_NUMBER
+                    ],
+                    colorized: true,
+                    disableHostKeyChecking: true,
+                    extras: '--force-handlers'
+                )
+            }
+        }
+        
+        stage('Deploy Applications') {
+            parallel {
+                stage('Web Servers') {
+                    steps {
+                        ansiblePlaybook(
+                            playbook: 'playbooks/webservers.yml',
+                            inventory: 'inventories/${params.ENVIRONMENT}/hosts.ini',
+                            credentialsId: 'ansible-ssh-key',
+                            vaultCredentialsId: 'ansible-vault-password',
+                            limit: 'webservers',
+                            extraVars: [
+                                app_version: env.BUILD_NUMBER,
+                                environment: params.ENVIRONMENT,
+                                max_fail_percentage: 25
+                            ],
+                            colorized: true,
+                            disableHostKeyChecking: true,
+                            extras: '--serial=2'
+                        )
+                    }
+                }
+                
+                stage('Database Servers') {
+                    steps {
+                        ansiblePlaybook(
+                            playbook: 'playbooks/databases.yml',
+                            inventory: 'inventories/${params.ENVIRONMENT}/hosts.ini',
+                            credentialsId: 'ansible-ssh-key',
+                            vaultCredentialsId: 'ansible-vault-password',
+                            limit: 'databases',
+                            tags: 'migration,update',
+                            extraVars: [
+                                db_version: env.BUILD_NUMBER,
+                                environment: params.ENVIRONMENT
+                            ],
+                            colorized: true,
+                            disableHostKeyChecking: true
+                        )
+                    }
+                }
+            }
+        }
+        
+        stage('Post-deployment Verification') {
+            steps {
+                ansiblePlaybook(
+                    playbook: 'playbooks/verify.yml',
+                    inventory: 'inventories/${params.ENVIRONMENT}/hosts.ini',
+                    credentialsId: 'ansible-ssh-key',
+                    extraVars: [
+                        environment: params.ENVIRONMENT,
+                        expected_version: env.BUILD_NUMBER
+                    ],
+                    colorized: true,
+                    disableHostKeyChecking: true
+                )
+            }
+        }
+    }
+    
+    post {
+        failure {
+            script {
+                if (params.ENVIRONMENT == 'prod') {
+                    // Rollback on production failure
+                    ansiblePlaybook(
+                        playbook: 'playbooks/rollback.yml',
+                        inventory: 'inventories/${params.ENVIRONMENT}/hosts.ini',
+                        credentialsId: 'ansible-ssh-key',
+                        vaultCredentialsId: 'ansible-vault-password',
+                        extraVars: [
+                            environment: params.ENVIRONMENT,
+                            rollback_version: 'previous'
+                        ],
+                        colorized: true,
+                        disableHostKeyChecking: true
+                    )
+                }
+            }
+        }
+    }
+}
+
+// --------------- Ansible Plugin - Dynamic Inventory with AWX/Tower ---------------
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'DEPLOYMENT_TYPE',
+            choices: ['blue_green', 'rolling', 'canary'],
+            description: 'Deployment strategy'
+        )
+        string(
+            name: 'CANARY_PERCENTAGE',
+            defaultValue: '10',
+            description: 'Canary deployment percentage (for canary strategy)'
+        )
+    }
+    
+    environment {
+        AWX_HOST = credentials('awx-host')
+        AWX_TOKEN = credentials('awx-token')
+    }
+    
+    stages {
+        stage('Get Dynamic Inventory') {
+            steps {
+                script {
+                    // Fetch inventory from AWX/Tower
+                    sh '''
+                        curl -k -H "Authorization: Bearer $AWX_TOKEN" \
+                             "$AWX_HOST/api/v2/inventories/1/script/" > dynamic_inventory.py
+                        chmod +x dynamic_inventory.py
+                    '''
+                }
+            }
+        }
+        
+        stage('Deploy with Dynamic Strategy') {
+            steps {
+                script {
+                    def extraVars = [
+                        deployment_strategy: params.DEPLOYMENT_TYPE,
+                        build_number: env.BUILD_NUMBER,
+                        jenkins_build_url: env.BUILD_URL
+                    ]
+                    
+                    if (params.DEPLOYMENT_TYPE == 'canary') {
+                        extraVars.canary_percentage = params.CANARY_PERCENTAGE
+                    }
+                    
+                    ansiblePlaybook(
+                        playbook: 'playbooks/dynamic-deploy.yml',
+                        inventory: 'dynamic_inventory.py',
+                        credentialsId: 'ansible-ssh-key',
+                        vaultCredentialsId: 'ansible-vault-password',
+                        extraVars: extraVars,
+                        colorized: true,
+                        disableHostKeyChecking: true,
+                        extras: '--connection=smart'
+                    )
+                }
+            }
+        }
+        
+        stage('Validate Deployment') {
+            steps {
+                ansiblePlaybook(
+                    playbook: 'playbooks/validate.yml',
+                    inventory: 'dynamic_inventory.py',
+                    credentialsId: 'ansible-ssh-key',
+                    extraVars: [
+                        deployment_strategy: params.DEPLOYMENT_TYPE,
+                        expected_build: env.BUILD_NUMBER
+                    ],
+                    colorized: true,
+                    disableHostKeyChecking: true
+                )
+            }
+        }
+    }
+}
+
+// --------------- Ansible Plugin - Galaxy and Requirements ---------------
+pipeline {
+    agent any
+    
+    parameters {
+        booleanParam(
+            name: 'UPDATE_GALAXY_ROLES',
+            defaultValue: true,
+            description: 'Update Ansible Galaxy roles'
+        )
+    }
+    
+    stages {
+        stage('Install Ansible Dependencies') {
+            steps {
+                script {
+                    if (params.UPDATE_GALAXY_ROLES) {
+                        // Install/update Ansible Galaxy roles
+                        ansibleGalaxy(
+                            roleFile: 'requirements.yml',
+                            rolesPath: 'roles/',
+                            force: true
+                        )
+                        
+                        // Install collections
+                        sh '''
+                            ansible-galaxy collection install -r collections/requirements.yml \
+                                --collections-path collections/ --force
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('Validate Roles') {
+            steps {
+                sh '''
+                    # Validate role syntax
+                    for role in roles/*/; do
+                        echo "Validating role: $role"
+                        ansible-playbook --syntax-check \
+                            --inventory=/dev/null \
+                            -e "{'hosts': 'localhost'}" \
+                            "$role/tests/test.yml" || true
+                    done
+                '''
+            }
+        }
+        
+        stage('Deploy with Galaxy Roles') {
+            steps {
+                ansiblePlaybook(
+                    playbook: 'site.yml',
+                    inventory: 'inventories/production/hosts.ini',
+                    credentialsId: 'ansible-ssh-key',
+                    vaultCredentialsId: 'ansible-vault-password',
+                    extraVars: [
+                        environment: 'production',
+                        use_galaxy_roles: true
+                    ],
+                    colorized: true,
+                    disableHostKeyChecking: true
+                )
+            }
+        }
+    }
+}
+
+// --------------- Ansible Plugin - Vault and Secrets Management ---------------
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'VAULT_ACTION',
+            choices: ['deploy', 'encrypt_vars', 'decrypt_check'],
+            description: 'Vault operation to perform'
+        )
+    }
+    
+    stages {
+        stage('Vault Operations') {
+            steps {
+                script {
+                    switch(params.VAULT_ACTION) {
+                        case 'deploy':
+                            // Standard deployment with vault
+                            ansiblePlaybook(
+                                playbook: 'deploy.yml',
+                                inventory: 'inventories/production/hosts.ini',
+                                credentialsId: 'ansible-ssh-key',
+                                vaultCredentialsId: 'ansible-vault-password',
+                                extraVars: [
+                                    environment: 'production'
+                                ],
+                                colorized: true,
+                                disableHostKeyChecking: true
+                            )
+                            break
+                            
+                        case 'encrypt_vars':
+                            // Encrypt sensitive variables
+                            ansibleVault(
+                                action: 'encrypt',
+                                input: 'group_vars/production/vault.yml',
+                                vaultCredentialsId: 'ansible-vault-password'
+                            )
+                            break
+                            
+                        case 'decrypt_check':
+                            // Decrypt and validate vault files
+                            ansibleVault(
+                                action: 'view',
+                                input: 'group_vars/production/vault.yml',
+                                vaultCredentialsId: 'ansible-vault-password',
+                                output: 'decrypted_vars.yml'
+                            )
+                            
+                            // Validate the decrypted content
+                            sh '''
+                                echo "Validating decrypted vault content:"
+                                cat decrypted_vars.yml
+                                rm -f decrypted_vars.yml  # Clean up
+                            '''
+                            break
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --------------- Ansible Plugin - Ad-hoc Commands ---------------
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'ADHOC_ACTION',
+            choices: ['system_info', 'disk_usage', 'service_status', 'custom_command'],
+            description: 'Ad-hoc command to run'
+        )
+        string(
+            name: 'CUSTOM_MODULE',
+            defaultValue: 'shell',
+            description: 'Ansible module for custom command'
+        )
+        string(
+            name: 'CUSTOM_ARGS',
+            defaultValue: 'uptime',
+            description: 'Arguments for custom command'
+        )
+        choice(
+            name: 'TARGET_HOSTS',
+            choices: ['all', 'webservers', 'databases', 'loadbalancers'],
+            description: 'Target host group'
+        )
+    }
+    
+    stages {
+        stage('Execute Ad-hoc Commands') {
+            steps {
+                script {
+                    def moduleArgs = ""
+                    def moduleName = "setup"
+                    
+                    switch(params.ADHOC_ACTION) {
+                        case 'system_info':
+                            moduleName = "setup"
+                            moduleArgs = "filter=ansible_*"
+                            break
+                        case 'disk_usage':
+                            moduleName = "shell"
+                            moduleArgs = "df -h"
+                            break
+                        case 'service_status':
+                            moduleName = "service_facts"
+                            moduleArgs = ""
+                            break
+                        case 'custom_command':
+                            moduleName = params.CUSTOM_MODULE
+                            moduleArgs = params.CUSTOM_ARGS
+                            break
+                    }
+                    
+                    // Execute ad-hoc command using Ansible plugin
+                    ansibleAdhoc(
+                        pattern: params.TARGET_HOSTS,
+                        inventory: 'inventories/production/hosts.ini',
+                        module: moduleName,
+                        moduleArguments: moduleArgs,
+                        credentialsId: 'ansible-ssh-key',
+                        colorized: true,
+                        disableHostKeyChecking: true,
+                        extras: '--one-line'
+                    )
+                }
+            }
+        }
+        
+        stage('Generate Report') {
+            steps {
+                script {
+                    // Generate a simple report of the ad-hoc command execution
+                    writeFile file: 'adhoc-report.txt', text: """
+Ad-hoc Command Execution Report
+===============================
+Action: ${params.ADHOC_ACTION}
+Target Hosts: ${params.TARGET_HOSTS}
+Executed at: ${new Date().format('yyyy-MM-dd HH:mm:ss')}
+Build: ${env.BUILD_NUMBER}
+
+Check the console output for detailed results.
+                    """
+                }
+                archiveArtifacts artifacts: 'adhoc-report.txt'
+            }
+        }
+    }
+}
+
+// --------------- Ansible Plugin - Integration with Jenkins Job DSL ---------------
+// Job DSL for creating Ansible deployment jobs
+def environments = ['dev', 'staging', 'prod']
+def services = ['webapp', 'api', 'database', 'cache']
+
+environments.each { env ->
+    services.each { service ->
+        pipelineJob("ansible-deploy-${service}-${env}") {
+            description("Deploy ${service} to ${env} environment using Ansible")
+            
+            parameters {
+                stringParam('APP_VERSION', 'latest', 'Version to deploy')
+                booleanParam('DRY_RUN', false, 'Run in check mode')
+                choiceParam('STRATEGY', ['linear', 'free', 'debug'], 'Ansible strategy')
+            }
+            
+            definition {
+                cps {
+                    script("""
+                        pipeline {
+                            agent any
+                            
+                            stages {
+                                stage('Deploy ${service} to ${env}') {
+                                    steps {
+                                        ansiblePlaybook(
+                                            playbook: 'playbooks/${service}.yml',
+                                            inventory: 'inventories/${env}/hosts.ini',
+                                            credentialsId: 'ansible-ssh-key',
+                                            vaultCredentialsId: 'ansible-vault-password',
+                                            extraVars: [
+                                                service_name: '${service}',
+                                                environment: '${env}',
+                                                app_version: params.APP_VERSION,
+                                                strategy: params.STRATEGY
+                                            ],
+                                            extras: params.DRY_RUN ? '--check --diff' : '--diff',
+                                            colorized: true,
+                                            disableHostKeyChecking: true
+                                        )
+                                    }
+                                }
+                                
+                                stage('Verify Deployment') {
+                                    steps {
+                                        ansiblePlaybook(
+                                            playbook: 'playbooks/verify-${service}.yml',
+                                            inventory: 'inventories/${env}/hosts.ini',
+                                            credentialsId: 'ansible-ssh-key',
+                                            extraVars: [
+                                                service_name: '${service}',
+                                                environment: '${env}',
+                                                expected_version: params.APP_VERSION
+                                            ],
+                                            colorized: true,
+                                            disableHostKeyChecking: true
+                                        )
+                                    }
+                                }
+                            }
+                            
+                            post {
+                                always {
+                                    archiveArtifacts artifacts: 'ansible.log', allowEmptyArchive: true
+                                }
+                                success {
+                                    slackSend(
+                                        channel: '#deployments',
+                                        color: 'good',
+                                        message: "✅ ${service} deployed successfully to ${env}"
+                                    )
+                                }
+                                failure {
+                                    slackSend(
+                                        channel: '#deployments',
+                                        color: 'danger',
+                                        message: "❌ ${service} deployment to ${env} failed"
+                                    )
+                                }
+                            }
+                        }
+                    """)
+                    sandbox()
+                }
+            }
+            
+            triggers {
+                if (env == 'dev') {
+                    githubPush()
+                }
+            }
+        }
+    }
+}
+
+// --------------- Docker Multi-Stage Build Pipeline ---------------
+pipeline {
+    agent any
+    
+    environment {
+        REGISTRY = 'docker.io'
+        IMAGE_NAME = 'mycompany/myapp'
+        DOCKER_BUILDKIT = '1'
+    }
+    
+    stages {
+        stage('Build Multi-Stage') {
+            parallel {
+                stage('Build Dev Image') {
+                    steps {
+                        script {
+                            def devImage = docker.build(
+                                "${REGISTRY}/${IMAGE_NAME}:dev-${BUILD_NUMBER}",
+                                "--target development ."
+                            )
+                            devImage.push()
+                        }
+                    }
+                }
+                
+                stage('Build Test Image') {
+                    steps {
+                        script {
+                            def testImage = docker.build(
+                                "${REGISTRY}/${IMAGE_NAME}:test-${BUILD_NUMBER}",
+                                "--target testing ."
+                            )
+                            
+                            // Run tests in container
+                            testImage.inside {
+                                sh 'npm test'
+                                sh 'npm run test:coverage'
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Build Production Image') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    def prodImage = docker.build(
+                        "${REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER}",
+                        "--target production ."
+                    )
+                    prodImage.push()
+                    prodImage.push("latest")
+                }
+            }
+        }
+        
+        stage('Security Scan') {
+            steps {
+                sh """
+                    docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+                        aquasec/trivy image ${REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER}
+                """
+            }
+        }
+    }
+}
+
+// ================================================================================
+// COMMON ENVIRONMENT VARIABLES REFERENCE
+// ================================================================================
+/*
+Jenkins built-in variables:
+BUILD_NUMBER          // Current build number
+BUILD_ID              // Current build ID
+BUILD_URL             // URL of the build
+JOB_NAME              // Name of the job
+JOB_URL               // URL of the job
+WORKSPACE             // Workspace directory
+JENKINS_URL           // Jenkins server URL
+NODE_NAME             // Name of the node
+BRANCH_NAME           // Branch name (for multibranch pipelines)
+CHANGE_ID             // Pull request ID
+CHANGE_AUTHOR         // Pull request author
+GIT_COMMIT            // Git commit hash
+GIT_BRANCH            // Git branch
+*/
+
+// ================================================================================
+// USEFUL PIPELINE FUNCTIONS REFERENCE
+// ================================================================================
+/*
+// File operations
+readFile('path/to/file')
+writeFile file: 'output.txt', text: 'content'
+fileExists('path/to/file')
+
+// JSON/YAML operations
+def data = readJSON file: 'data.json'
+writeJSON file: 'output.json', json: data
+def yamlData = readYaml file: 'config.yml'
+writeYaml file: 'output.yml', data: yamlData
+
+// Properties
+def props = readProperties file: 'build.properties'
+
+// Environment
+env.VAR_NAME = 'value'
+withEnv(['VAR=value']) { /* steps */ }
+
+// Credentials
+withCredentials([string(credentialsId: 'id', variable: 'VAR')]) { /* steps */ }
+withCredentials([usernamePassword(credentialsId: 'id', usernameVariable: 'USER', passwordVariable: 'PASS')]) { /* steps */ }
+withCredentials([sshUserPrivateKey(credentialsId: 'id', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) { /* steps */ }
+
+// Directory operations
+dir('subdirectory') { /* steps */ }
+
+// Timeout
+timeout(time: 5, unit: 'MINUTES') { /* steps */ }
+
+// Retry
+retry(3) { /* steps */ }
+
+// Input
+input message: 'Proceed?', ok: 'Yes'
+def userInput = input message: 'Please provide parameters', parameters: [
+    choice(choices: 'option1\noption2', description: 'Choose option', name: 'OPTION'),
+    string(defaultValue: 'default', description: 'Enter value', name: 'VALUE')
+]
+
+// Stash/Unstash
+stash includes: '**/*', name: 'source'
+unstash 'source'
+
+// Archive and publish
+archiveArtifacts artifacts: 'build/libs/*.jar', fingerprint: true
+publishHTML([
+    allowMissing: false,
+    alwaysLinkToLastBuild: true,
+    keepAll: true,
+    reportDir: 'reports',
+    reportFiles: 'index.html',
+    reportName: 'HTML Report'
+])
+*/
+
+// ================================================================================
+// KUBERNETES DEPLOYMENT EXAMPLES
+// ================================================================================
+
+// --------------- Kubernetes Deployment with Helm ---------------
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Target environment'
+        )
+        string(
+            name: 'IMAGE_TAG',
+            defaultValue: 'latest',
+            description: 'Docker image tag'
+        )
+    }
+    
+    environment {
+        KUBECONFIG = credentials('kubeconfig')
+        HELM_EXPERIMENTAL_OCI = '1'
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        
+        stage('Prepare Helm Values') {
+            steps {
+                script {
+                    def values = [
+                        image: [
+                            repository: 'myregistry/myapp',
+                            tag: params.IMAGE_TAG
+                        ],
+                        environment: params.ENVIRONMENT,
+                        replicas: params.ENVIRONMENT == 'prod' ? 3 : 1,
+                        resources: params.ENVIRONMENT == 'prod' ? [
+                            limits: [cpu: '500m', memory: '1Gi'],
+                            requests: [cpu: '250m', memory: '512Mi']
+                        ] : [
+                            limits: [cpu: '200m', memory: '256Mi'],
+                            requests: [cpu: '100m', memory: '128Mi']
+                        ]
+                    ]
+                    
+                    writeYaml file: "values-${params.ENVIRONMENT}.yaml", data: values
+                }
+            }
+        }
+        
+        stage('Deploy with Helm') {
+            steps {
+                sh """
+                    helm upgrade --install myapp ./helm/myapp \
+                        --namespace ${params.ENVIRONMENT} \
+                        --create-namespace \
+                        --values values-${params.ENVIRONMENT}.yaml \
+                        --wait --timeout=300s
+                """
+            }
+        }
+        
+        stage('Verify Deployment') {
+            steps {
+                sh """
+                    kubectl get pods -n ${params.ENVIRONMENT} -l app=myapp
+                    kubectl rollout status deployment/myapp -n ${params.ENVIRONMENT}
+                    
+                    # Health check
+                    kubectl run --rm -i --tty health-check \
+                        --image=curlimages/curl \
+                        --restart=Never \
+                        --namespace=${params.ENVIRONMENT} \
+                        -- curl -f http://myapp:8080/health
+                """
+            }
+        }
+    }
+    
+    post {
+        always {
+            sh """
+                helm list -n ${params.ENVIRONMENT}
+                kubectl get all -n ${params.ENVIRONMENT} -l app=myapp
+            """
+        }
+    }
+}
+
+// --------------- Kubernetes GitOps with ArgoCD ---------------
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Target environment'
+        )
+    }
+    
+    environment {
+        ARGOCD_SERVER = credentials('argocd-server')
+        ARGOCD_AUTH_TOKEN = credentials('argocd-auth-token')
+        GIT_REPO = 'https://github.com/company/k8s-manifests.git'
+    }
+    
+    stages {
+        stage('Build and Push Image') {
+            steps {
+                script {
+                    def image = docker.build("myregistry/myapp:${BUILD_NUMBER}")
+                    image.push()
+                    image.push("latest")
+                }
+            }
+        }
+        
+        stage('Update Manifests') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'git-credentials', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+                    sh """
+                        git clone https://${GIT_USER}:${GIT_TOKEN}@github.com/company/k8s-manifests.git
+                        cd k8s-manifests
+                        
+                        # Update image tag in kustomization.yaml
+                        sed -i 's|newTag:.*|newTag: ${BUILD_NUMBER}|' overlays/${params.ENVIRONMENT}/kustomization.yaml
+                        
+                        git add .
+                        git commit -m "Update ${params.ENVIRONMENT} image tag to ${BUILD_NUMBER}"
+                        git push origin main
+                    """
+                }
+            }
+        }
+        
+        stage('Sync ArgoCD Application') {
+            steps {
+                sh """
+                    argocd app sync myapp-${params.ENVIRONMENT} \
+                        --server ${ARGOCD_SERVER} \
+                        --auth-token ${ARGOCD_AUTH_TOKEN} \
+                        --prune
+                    
+                    argocd app wait myapp-${params.ENVIRONMENT} \
+                        --server ${ARGOCD_SERVER} \
+                        --auth-token ${ARGOCD_AUTH_TOKEN} \
+                        --health \
+                        --timeout 300
+                """
+            }
+        }
+    }
+}
+
+// ================================================================================
+// PACKER IMAGE BUILDING EXAMPLES
+// ================================================================================
+
+// --------------- Packer AMI Building Pipeline ---------------
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'OS_TYPE',
+            choices: ['ubuntu', 'centos', 'amazon-linux'],
+            description: 'Base OS for AMI'
+        )
+        string(
+            name: 'APP_VERSION',
+            defaultValue: 'latest',
+            description: 'Application version to bake into AMI'
+        )
+    }
+    
+    environment {
+        AWS_DEFAULT_REGION = 'us-west-2'
+        PACKER_LOG = '1'
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        
+        stage('Validate Packer Template') {
+            steps {
+                dir('packer') {
+                    sh """
+                        packer validate \
+                            -var 'os_type=${params.OS_TYPE}' \
+                            -var 'app_version=${params.APP_VERSION}' \
+                            -var 'build_number=${BUILD_NUMBER}' \
+                            template.json
+                    """
+                }
+            }
+        }
+        
+        stage('Build AMI') {
+            steps {
+                dir('packer') {
+                    sh """
+                        packer build \
+                            -var 'os_type=${params.OS_TYPE}' \
+                            -var 'app_version=${params.APP_VERSION}' \
+                            -var 'build_number=${BUILD_NUMBER}' \
+                            template.json
+                    """
+                }
+            }
+        }
+        
+        stage('Test AMI') {
+            steps {
+                script {
+                    def amiId = sh(
+                        script: "grep 'ami-' manifest.json | cut -d'\"' -f4",
+                        returnStdout: true
+                    ).trim()
+                    
+                    sh """
+                        # Launch test instance
+                        INSTANCE_ID=\$(aws ec2 run-instances \
+                            --image-id ${amiId} \
+                            --instance-type t3.micro \
+                            --key-name test-key \
+                            --security-group-ids sg-test \
+                            --subnet-id subnet-test \
+                            --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=packer-test-${BUILD_NUMBER}}]' \
+                            --query 'Instances[0].InstanceId' \
+                            --output text)
+                        
+                        # Wait for instance to be ready
+                        aws ec2 wait instance-running --instance-ids \$INSTANCE_ID
+                        
+                        # Get public IP
+                        PUBLIC_IP=\$(aws ec2 describe-instances \
+                            --instance-ids \$INSTANCE_ID \
+                            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+                            --output text)
+                        
+                        # Test application
+                        sleep 60  # Wait for app to start
+                        curl -f http://\$PUBLIC_IP:8080/health
+                        
+                        # Terminate test instance
+                        aws ec2 terminate-instances --instance-ids \$INSTANCE_ID
+                    """
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            archiveArtifacts artifacts: 'packer/manifest.json', fingerprint: true
+        }
+        
+        success {
+            script {
+                def amiId = sh(
+                    script: "grep 'ami-' packer/manifest.json | cut -d'\"' -f4",
+                    returnStdout: true
+                ).trim()
+                
+                slackSend(
+                    channel: '#infrastructure',
+                    color: 'good',
+                    message: "✅ AMI built successfully: ${amiId} (${params.OS_TYPE}, ${params.APP_VERSION})"
+                )
+            }
+        }
+    }
+}
+
+// ================================================================================
+// VAGRANT TESTING ENVIRONMENTS
+// ================================================================================
+
+// --------------- Vagrant Multi-Machine Testing ---------------
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'TEST_ENVIRONMENT',
+            choices: ['single-node', 'cluster', 'ha-setup'],
+            description: 'Vagrant environment to test'
+        )
+    }
+    
+    environment {
+        VAGRANT_LOG = 'info'
+    }
+    
+    stages {
+        stage('Setup Vagrant Environment') {
+            steps {
+                dir('vagrant') {
+                    sh """
+                        # Copy appropriate Vagrantfile
+                        cp Vagrantfile.${params.TEST_ENVIRONMENT} Vagrantfile
+                        
+                        # Start environment
+                        vagrant up
+                        
+                        # Show status
+                        vagrant status
+                    """
+                }
+            }
+        }
+        
+        stage('Deploy Application') {
+            steps {
+                dir('vagrant') {
+                    sh """
+                        # Run deployment playbook
+                        vagrant provision --provision-with ansible
+                        
+                        # Verify deployment
+                        vagrant ssh -c "sudo systemctl status myapp" app-server
+                    """
+                }
+            }
+        }
+        
+        stage('Run Tests') {
+            parallel {
+                stage('Unit Tests') {
+                    steps {
+                        dir('vagrant') {
+                            sh 'vagrant ssh -c "cd /app && npm test" app-server'
+                        }
+                    }
+                }
+                
+                stage('Integration Tests') {
+                    steps {
+                        dir('vagrant') {
+                            sh """
+                                vagrant ssh -c "cd /app && npm run test:integration" app-server
+                            """
+                        }
+                    }
+                }
+                
+                stage('Load Tests') {
+                    when {
+                        equals expected: 'cluster', actual: params.TEST_ENVIRONMENT
+                    }
+                    steps {
+                        dir('vagrant') {
+                            sh """
+                                vagrant ssh -c "ab -n 1000 -c 10 http://localhost:8080/" load-tester
+                            """
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Collect Logs') {
+            steps {
+                dir('vagrant') {
+                    sh """
+                        mkdir -p logs
+                        vagrant ssh -c "sudo journalctl -u myapp > /vagrant/logs/app.log" app-server
+                        vagrant ssh -c "sudo cat /var/log/nginx/access.log > /vagrant/logs/nginx.log" app-server || true
+                    """
+                    archiveArtifacts artifacts: 'logs/*.log', allowEmptyArchive: true
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            dir('vagrant') {
+                sh 'vagrant destroy -f || true'
+            }
+        }
+    }
+}
+
+// ================================================================================
+// CHEF COOKBOOK TESTING PIPELINE
+// ================================================================================
+
+// --------------- Chef Cookbook CI/CD Pipeline ---------------
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'CHEF_ENVIRONMENT',
+            choices: ['development', 'staging', 'production'],
+            description: 'Chef environment to deploy to'
+        )
+    }
+    
+    environment {
+        CHEF_SERVER_URL = credentials('chef-server-url')
+        CHEF_CLIENT_KEY = credentials('chef-client-key')
+        CHEF_NODE_NAME = credentials('chef-node-name')
+    }
+    
+    stages {
+        stage('Cookbook Lint') {
+            steps {
+                sh '''
+                    # Install dependencies
+                    chef install
+                    
+                    # Run cookstyle (rubocop for chef)
+                    cookstyle
+                    
+                    # Run foodcritic
+                    foodcritic .
+                '''
+            }
+        }
+        
+        stage('Unit Tests') {
+            steps {
+                sh '''
+                    # Run ChefSpec tests
+                    chef exec rspec spec/unit/
+                '''
+            }
+            post {
+                always {
+                    publishHTML([
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'coverage',
+                        reportFiles: 'index.html',
+                        reportName: 'Coverage Report'
+                    ])
+                }
+            }
+        }
+        
+        stage('Integration Tests') {
+            steps {
+                sh '''
+                    # Run Test Kitchen
+                    kitchen test
+                '''
+            }
+            post {
+                always {
+                    sh 'kitchen destroy || true'
+                }
+            }
+        }
+        
+        stage('Upload Cookbook') {
+            when {
+                branch 'main'
+            }
+            steps {
+                withCredentials([file(credentialsId: 'chef-client-pem', variable: 'CHEF_KEY_FILE')]) {
+                    sh """
+                        # Configure knife
+                        mkdir -p ~/.chef
+                        cp \$CHEF_KEY_FILE ~/.chef/client.pem
+                        
+                        cat > ~/.chef/config.rb << EOF
+server_url '${CHEF_SERVER_URL}'
+client_key '~/.chef/client.pem'
+node_name '${CHEF_NODE_NAME}'
+cookbook_path ['.']
+EOF
+                        
+                        # Upload cookbook
+                        knife cookbook upload mycookbook --freeze
+                        
+                        # Update environment
+                        knife environment from file environments/${params.CHEF_ENVIRONMENT}.json
+                    """
+                }
+            }
+        }
+        
+        stage('Deploy to Nodes') {
+            when {
+                branch 'main'
+            }
+            steps {
+                withCredentials([file(credentialsId: 'chef-client-pem', variable: 'CHEF_KEY_FILE')]) {
+                    sh """
+                        # Get nodes in environment
+                        NODES=\$(knife search node "chef_environment:${params.CHEF_ENVIRONMENT}" -i | grep -v "^Found")
+                        
+                        for NODE in \$NODES; do
+                            echo "Updating node: \$NODE"
+                            knife ssh "name:\$NODE" "sudo chef-client" -x ubuntu --identity-file ~/.ssh/id_rsa
+                        done
+                    """
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            slackSend(
+                channel: '#chef-deployments',
+                color: 'good',
+                message: "✅ Cookbook deployed to ${params.CHEF_ENVIRONMENT}: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+            )
+        }
+        
+        failure {
+            slackSend(
+                channel: '#chef-deployments',
+                color: 'danger',
+                message: "❌ Cookbook deployment failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+            )
+        }
+    }
+}
+
+// ================================================================================
+// MONITORING AND ALERTING INTEGRATION
+// ================================================================================
+
+// --------------- Application Deployment with Monitoring ---------------
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Target environment'
+        )
+    }
+    
+    environment {
+        PROMETHEUS_URL = 'http://prometheus.monitoring.svc.cluster.local:9090'
+        GRAFANA_URL = 'http://grafana.monitoring.svc.cluster.local:3000'
+        ALERTMANAGER_URL = 'http://alertmanager.monitoring.svc.cluster.local:9093'
+    }
+    
+    stages {
+        stage('Pre-deployment Health Check') {
+            steps {
+                sh """
+                    # Check current application metrics
+                    curl -s '${PROMETHEUS_URL}/api/v1/query?query=up{job="myapp",environment="${params.ENVIRONMENT}"}' | \
+                        jq -r '.data.result[0].value[1]' > current_status.txt
+                    
+                    if [ "\$(cat current_status.txt)" != "1" ]; then
+                        echo "Application is currently down, proceeding with deployment"
+                    else
+                        echo "Application is healthy, proceeding with rolling deployment"
+                    fi
+                """
+            }
+        }
+        
+        stage('Deploy Application') {
+            steps {
+                sh """
+                    kubectl set image deployment/myapp \
+                        myapp=myapp:${BUILD_NUMBER} \
+                        --namespace=${params.ENVIRONMENT}
+                    
+                    kubectl rollout status deployment/myapp \
+                        --namespace=${params.ENVIRONMENT} \
+                        --timeout=300s
+                """
+            }
+        }
+        
+        stage('Post-deployment Monitoring') {
+            steps {
+                script {
+                    def healthCheckPassed = false
+                    def maxRetries = 10
+                    def retryCount = 0
+                    
+                    while (!healthCheckPassed && retryCount < maxRetries) {
+                        try {
+                            sh """
+                                # Wait for metrics to be collected
+                                sleep 30
+                                
+                                # Check application health via Prometheus
+                                HEALTH_STATUS=\$(curl -s '${PROMETHEUS_URL}/api/v1/query?query=up{job="myapp",environment="${params.ENVIRONMENT}"}' | \
+                                    jq -r '.data.result[0].value[1]')
+                                
+                                # Check response time
+                                RESPONSE_TIME=\$(curl -s '${PROMETHEUS_URL}/api/v1/query?query=avg(http_request_duration_seconds{job="myapp",environment="${params.ENVIRONMENT}"})' | \
+                                    jq -r '.data.result[0].value[1]')
+                                
+                                # Check error rate
+                                ERROR_RATE=\$(curl -s '${PROMETHEUS_URL}/api/v1/query?query=rate(http_requests_total{job="myapp",environment="${params.ENVIRONMENT}",status=~"5.."}[5m])' | \
+                                    jq -r '.data.result[0].value[1] // "0"')
+                                
+                                echo "Health: \$HEALTH_STATUS, Response Time: \$RESPONSE_TIME, Error Rate: \$ERROR_RATE"
+                                
+                                if [ "\$HEALTH_STATUS" = "1" ] && [ "\$(echo "\$RESPONSE_TIME < 0.5" | bc)" = "1" ] && [ "\$(echo "\$ERROR_RATE < 0.01" | bc)" = "1" ]; then
+                                    echo "Health checks passed!"
+                                    exit 0
+                                else
+                                    echo "Health checks failed, retrying..."
+                                    exit 1
+                                fi
+                            """
+                            healthCheckPassed = true
+                        } catch (Exception e) {
+                            retryCount++
+                            echo "Health check attempt ${retryCount} failed: ${e.getMessage()}"
+                            if (retryCount >= maxRetries) {
+                                error("Health checks failed after ${maxRetries} attempts")
+                            }
+                            sleep 30
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Create Deployment Annotation') {
+            steps {
+                sh """
+                    # Add deployment annotation to Grafana
+                    curl -X POST '${GRAFANA_URL}/api/annotations' \
+                        -H 'Content-Type: application/json' \
+                        -H 'Authorization: Bearer \${GRAFANA_API_TOKEN}' \
+                        -d '{
+                            "text": "Deployment ${BUILD_NUMBER} to ${params.ENVIRONMENT}",
+                            "tags": ["deployment", "${params.ENVIRONMENT}"],
+                            "time": '"\$(date +%s)000"'
+                        }'
+                """
+            }
+        }
+    }
+    
+    post {
+        failure {
+            script {
+                // Rollback on failure
+                sh """
+                    echo "Rolling back due to health check failure"
+                    kubectl rollout undo deployment/myapp --namespace=${params.ENVIRONMENT}
+                    kubectl rollout status deployment/myapp --namespace=${params.ENVIRONMENT}
+                """
+                
+                // Create alert
+                sh """
+                    curl -X POST '${ALERTMANAGER_URL}/api/v1/alerts' \
+                        -H 'Content-Type: application/json' \
+                        -d '[{
+                            "labels": {
+                                "alertname": "DeploymentFailed",
+                                "environment": "${params.ENVIRONMENT}",
+                                "service": "myapp",
+                                "severity": "critical"
+                            },
+                            "annotations": {
+                                "summary": "Deployment ${BUILD_NUMBER} failed and was rolled back"
+                            }
+                        }]'
+                """
+            }
+        }
+        
+        success {
+            slackSend(
+                channel: '#deployments',
+                color: 'good',
+                message: """✅ Successful deployment to ${params.ENVIRONMENT}
+                    
+                    *Version*: ${BUILD_NUMBER}
+                    *Environment*: ${params.ENVIRONMENT}
+                    *Grafana*: ${GRAFANA_URL}/d/app-dashboard
+                    *Duration*: ${currentBuild.durationString}"""
+            )
+        }
+    }
+}
+
+// ================================================================================
+// END OF EXAMPLES
+// ================================================================================
