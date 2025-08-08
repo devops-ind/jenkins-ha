@@ -28,7 +28,7 @@
   tags: ['agents', 'workspace', 'dynamic']
 
 - name: Create Docker cache volumes for dynamic agents
-  docker_volume:
+  community.docker.docker_volume:
     name: "{{ item }}"
     state: present
   loop:
@@ -57,6 +57,15 @@
     dest: /etc/logrotate.d/jenkins-dynamic-agents
     mode: '0644'
   tags: ['agents', 'logging', 'dynamic']
+
+- name: Create Jenkins bin directory
+  file:
+    path: "{{ jenkins_home_dir }}/bin"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+  tags: ['agents', 'directories', 'bin']
 
 - name: Create dynamic agent monitoring script
   template:

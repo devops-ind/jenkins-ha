@@ -1,193 +1,322 @@
 ---
-# Jenkins Infrastructure - Master Container Configuration Tasks
+# Jenkins Infrastructure - Blue-Green Multi-Team Master Container Configuration
 
-- name: Create Jenkins master configuration directory
+- name: Create team-specific Jenkins directories
   file:
-    path: "{{ jenkins_home_dir }}/master-{{ item }}"
+    path: "{{ jenkins_home_dir }}/{{ item.name }}"
     state: directory
     owner: "{{ jenkins_user }}"
     group: "{{ jenkins_group }}"
     mode: '0755'
-  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
-  tags: ['master', 'directories']
+    recurse: yes
+  loop: "{{ jenkins_teams }}"
+  tags: ['master', 'directories', 'blue-green']
 
-- name: Create Docker/Podman volumes for Jenkins masters
-  shell: |
-    {% if jenkins_container_runtime == 'docker' %}
-    docker volume create jenkins-home-{{ item }} || true
-    {% else %}
-    podman volume create jenkins-home-{{ item }} || true
-    {% endif %}
-  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
-  tags: ['master', 'volumes']
+- name: Create blue-green environment directories for each team
+  file:
+    path: "{{ jenkins_home_dir }}/{{ item.0.name }}/{{ item.1 }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+    recurse: yes
+  with_nested:
+    - "{{ jenkins_teams }}"
+    - ['blue', 'green']
+  tags: ['master', 'directories', 'blue-green']
 
+- name: Create Jenkins volumes for blue-green environments
+  community.docker.docker_volume:
+    name: "jenkins-{{ item.0.name }}-{{ item.1 }}-home"
+    driver: "local"
+    state: present
+  with_nested:
+    - "{{ jenkins_teams }}"
+    - ['blue', 'green']
+  when: jenkins_container_runtime == 'docker'
+  tags: ['master', 'volumes', 'docker']
 
-- name: Create Jenkins master environment files
-  template:
-    src: jenkins-master-env.j2
-    dest: "/etc/default/jenkins-{{ item }}"
-    mode: '0644'
-    owner: root
-    group: root
-  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
-  when: jenkins_systemd_enabled | default(false) | bool
-  tags: ['master', 'systemd']
+- name: Create Jenkins volumes for blue-green environments (Podman)
+  containers.podman.podman_volume:
+    name: "jenkins-{{ item.0.name }}-{{ item.1 }}-home"
+    driver: "local"
+    state: present
+  with_nested:
+    - "{{ jenkins_teams }}"
+    - ['blue', 'green']
+  when: jenkins_container_runtime == 'podman'
+  tags: ['master', 'volumes', 'podman']
 
-- name: Create Jenkins master systemd service files
-  template:
-    src: jenkins-master.service.j2
-    dest: "/etc/systemd/system/jenkins-master-{{ item }}.service"
-    mode: '0644'
-    owner: root
-    group: root
-  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
-  when: jenkins_systemd_enabled | default(false) | bool
-  notify:
-    - reload systemd
-    - restart jenkins master containers
-  tags: ['master', 'systemd']
+- name: Create Jenkins shared volumes for teams
+  community.docker.docker_volume:
+    name: "jenkins-{{ item.name }}-shared"
+    driver: "local"
+    state: present
+  loop: "{{ jenkins_teams }}"
+  when: jenkins_container_runtime == 'docker'
+  tags: ['master', 'volumes', 'docker']
 
-- name: Start and enable Jenkins master containers (Docker)
+- name: Create Jenkins shared volumes for teams (Podman)
+  containers.podman.podman_volume:
+    name: "jenkins-{{ item.name }}-shared"
+    driver: "local"
+    state: present
+  loop: "{{ jenkins_teams }}"
+  when: jenkins_container_runtime == 'podman'
+  tags: ['master', 'volumes', 'podman']
+
+# Deploy Blue Environment Containers
+- name: Deploy Jenkins Blue Environment (Docker)
   community.docker.docker_container:
-    name: "jenkins-master-{{ item }}"
+    name: "jenkins-{{ item.name }}-blue"
     image: "{{ harbor_registry_url | default('docker.io') }}/{{ harbor_project | default('jenkins') }}/jenkins:{{ jenkins_master_image_tag | default('lts') }}"
-    state: started
+    state: "{{ 'started' if item.active_environment == 'blue' else 'stopped' }}"
     restart_policy: "{{ jenkins_restart_policy }}"
     networks:
       - name: "{{ jenkins_network_name }}"
     ports:
-      - "{{ jenkins_port + item - 1 }}:{{ jenkins_port }}"
-      - "{{ jenkins_agent_port + item - 1 }}:{{ jenkins_agent_port }}"
+      - "{{ item.port }}:{{ jenkins_port }}"
+      - "{{ item.agent_port }}:{{ jenkins_agent_port }}"
     volumes:
-      - "jenkins-home-{{ item }}:{{ jenkins_home_dir }}"
-      - "jenkins-shared:{{ shared_storage_path | default('/shared/jenkins') }}"
+      - "jenkins-{{ item.name }}-blue-home:{{ jenkins_home_dir }}"
+      - "jenkins-{{ item.name }}-shared:{{ shared_storage_path | default('/shared/jenkins') }}"
       - "/var/run/docker.sock:/var/run/docker.sock"
-    env: "{{ jenkins_env_vars }}"
-    memory: "{{ jenkins_master_memory }}"
-    cpus: "{{ jenkins_master_cpu_limit }}"
+    env:
+      JAVA_OPTS: "{{ jenkins_master_java_opts }}"
+      JENKINS_OPTS: "--httpPort={{ jenkins_port }}"
+      CASC_JENKINS_CONFIG: "/var/jenkins_home/casc_configs"
+      JENKINS_TEAM: "{{ item.name }}"
+      JENKINS_ENVIRONMENT: "blue"
+    memory: "{{ item.memory }}"
+    cpus: "{{ item.cpu_limit }}"
     log_driver: "{{ jenkins_log_driver }}"
     log_options:
       max-size: "{{ jenkins_log_max_size }}"
       max-file: "{{ jenkins_log_max_files }}"
     labels:
       service: "jenkins-master"
-      instance: "{{ item }}"
-      cluster: "{{ jenkins_cluster_name }}"
+      team: "{{ item.name }}"
+      environment: "blue"
+      active: "{{ 'true' if item.active_environment == 'blue' else 'false' }}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_port }}/login"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
-  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
-  when: jenkins_container_runtime == 'docker' and not (jenkins_systemd_enabled | default(false) | bool)
-  register: jenkins_masters_docker
-  tags: ['master', 'containers', 'docker']
+  loop: "{{ jenkins_teams }}"
+  when: jenkins_container_runtime == 'docker'
+  register: jenkins_blue_docker
+  tags: ['master', 'containers', 'docker', 'blue']
 
-- name: Start and enable Jenkins master containers (Podman)
-  containers.podman.podman_container:
-    name: "jenkins-master-{{ item }}"
+# Deploy Green Environment Containers
+- name: Deploy Jenkins Green Environment (Docker)
+  community.docker.docker_container:
+    name: "jenkins-{{ item.name }}-green"
     image: "{{ harbor_registry_url | default('docker.io') }}/{{ harbor_project | default('jenkins') }}/jenkins:{{ jenkins_master_image_tag | default('lts') }}"
-    state: started
+    state: "{{ 'started' if item.active_environment == 'green' else 'stopped' }}"
+    restart_policy: "{{ jenkins_restart_policy }}"
+    networks:
+      - name: "{{ jenkins_network_name }}"
+    # Green environment uses different internal ports to avoid conflicts
+    ports: []  # No external ports for inactive environment
+    volumes:
+      - "jenkins-{{ item.name }}-green-home:{{ jenkins_home_dir }}"
+      - "jenkins-{{ item.name }}-shared:{{ shared_storage_path | default('/shared/jenkins') }}"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    env:
+      JAVA_OPTS: "{{ jenkins_master_java_opts }}"
+      JENKINS_OPTS: "--httpPort={{ jenkins_port }}"
+      CASC_JENKINS_CONFIG: "/var/jenkins_home/casc_configs"
+      JENKINS_TEAM: "{{ item.name }}"
+      JENKINS_ENVIRONMENT: "green"
+    memory: "{{ item.memory }}"
+    cpus: "{{ item.cpu_limit }}"
+    log_driver: "{{ jenkins_log_driver }}"
+    log_options:
+      max-size: "{{ jenkins_log_max_size }}"
+      max-file: "{{ jenkins_log_max_files }}"
+    labels:
+      service: "jenkins-master"
+      team: "{{ item.name }}"
+      environment: "green"
+      active: "{{ 'true' if item.active_environment == 'green' else 'false' }}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_port }}/login"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+  loop: "{{ jenkins_teams }}"
+  when: jenkins_container_runtime == 'docker'
+  register: jenkins_green_docker
+  tags: ['master', 'containers', 'docker', 'green']
+
+# Podman Blue Environment
+- name: Deploy Jenkins Blue Environment (Podman)
+  containers.podman.podman_container:
+    name: "jenkins-{{ item.name }}-blue"
+    image: "{{ harbor_registry_url | default('docker.io') }}/{{ harbor_project | default('jenkins') }}/jenkins:{{ jenkins_master_image_tag | default('lts') }}"
+    state: "{{ 'started' if item.active_environment == 'blue' else 'stopped' }}"
     restart_policy: "{{ jenkins_restart_policy }}"
     network: "{{ jenkins_network_name }}"
     ports:
-      - "{{ jenkins_port + item - 1 }}:{{ jenkins_port }}"
-      - "{{ jenkins_agent_port + item - 1 }}:{{ jenkins_agent_port }}"
+      - "{{ item.port }}:{{ jenkins_port }}"
+      - "{{ item.agent_port }}:{{ jenkins_agent_port }}"
     volumes:
-      - "jenkins-home-{{ item }}:{{ jenkins_home_dir }}"
-      - "jenkins-shared:{{ shared_storage_path | default('/shared/jenkins') }}"
+      - "jenkins-{{ item.name }}-blue-home:{{ jenkins_home_dir }}"
+      - "jenkins-{{ item.name }}-shared:{{ shared_storage_path | default('/shared/jenkins') }}"
       - "/var/run/docker.sock:/var/run/docker.sock"
-    env: "{{ jenkins_env_vars }}"
-    memory: "{{ jenkins_master_memory }}"
-    cpus: "{{ jenkins_master_cpu_limit }}"
+    env:
+      JAVA_OPTS: "{{ jenkins_master_java_opts }}"
+      JENKINS_OPTS: "--httpPort={{ jenkins_port }}"
+      CASC_JENKINS_CONFIG: "/var/jenkins_home/casc_configs"
+      JENKINS_TEAM: "{{ item.name }}"
+      JENKINS_ENVIRONMENT: "blue"
+    memory: "{{ item.memory }}"
+    cpus: "{{ item.cpu_limit }}"
     log_driver: "{{ jenkins_log_driver }}"
     log_options:
       max_size: "{{ jenkins_log_max_size }}"
     labels:
       service: "jenkins-master"
-      instance: "{{ item }}"
-      cluster: "{{ jenkins_cluster_name }}"
+      team: "{{ item.name }}"
+      environment: "blue"
+      active: "{{ 'true' if item.active_environment == 'blue' else 'false' }}"
     healthcheck: "curl -f http://localhost:{{ jenkins_port }}/login || exit 1"
     healthcheck_interval: 30s
     healthcheck_timeout: 10s
     healthcheck_retries: 3
     healthcheck_start_period: 60s
-  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
-  when: jenkins_container_runtime == 'podman' and not (jenkins_systemd_enabled | default(false) | bool)
-  register: jenkins_masters_podman
-  tags: ['master', 'containers', 'podman']
+  loop: "{{ jenkins_teams }}"
+  when: jenkins_container_runtime == 'podman'
+  register: jenkins_blue_podman
+  tags: ['master', 'containers', 'podman', 'blue']
 
-- name: Reload systemd daemon to recognize new service files
-  systemd:
-    daemon_reload: yes
-  when: jenkins_systemd_enabled | default(false) | bool
-  tags: ['master', 'systemd']
+# Podman Green Environment
+- name: Deploy Jenkins Green Environment (Podman)
+  containers.podman.podman_container:
+    name: "jenkins-{{ item.name }}-green"
+    image: "{{ harbor_registry_url | default('docker.io') }}/{{ harbor_project | default('jenkins') }}/jenkins:{{ jenkins_master_image_tag | default('lts') }}"
+    state: "{{ 'started' if item.active_environment == 'green' else 'stopped' }}"
+    restart_policy: "{{ jenkins_restart_policy }}"
+    network: "{{ jenkins_network_name }}"
+    ports: []  # No external ports for inactive environment
+    volumes:
+      - "jenkins-{{ item.name }}-green-home:{{ jenkins_home_dir }}"
+      - "jenkins-{{ item.name }}-shared:{{ shared_storage_path | default('/shared/jenkins') }}"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    env:
+      JAVA_OPTS: "{{ jenkins_master_java_opts }}"
+      JENKINS_OPTS: "--httpPort={{ jenkins_port }}"
+      CASC_JENKINS_CONFIG: "/var/jenkins_home/casc_configs"
+      JENKINS_TEAM: "{{ item.name }}"
+      JENKINS_ENVIRONMENT: "green"
+    memory: "{{ item.memory }}"
+    cpus: "{{ item.cpu_limit }}"
+    log_driver: "{{ jenkins_log_driver }}"
+    log_options:
+      max_size: "{{ jenkins_log_max_size }}"
+    labels:
+      service: "jenkins-master"
+      team: "{{ item.name }}"
+      environment: "green"
+      active: "{{ 'true' if item.active_environment == 'green' else 'false' }}"
+    healthcheck: "curl -f http://localhost:{{ jenkins_port }}/login || exit 1"
+    healthcheck_interval: 30s
+    healthcheck_timeout: 10s
+    healthcheck_retries: 3
+    healthcheck_start_period: 60s
+  loop: "{{ jenkins_teams }}"
+  when: jenkins_container_runtime == 'podman'
+  register: jenkins_green_podman
+  tags: ['master', 'containers', 'podman', 'green']
 
-- name: Enable and start Jenkins master systemd services
-  systemd:
-    name: "jenkins-master-{{ item }}"
-    enabled: yes
-    state: started
-  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
-  when: jenkins_systemd_enabled | default(false) | bool
-  tags: ['master', 'systemd']
-
-- name: Wait for Jenkins masters to be ready
+# Health checks for active environments
+- name: Wait for active Jenkins environments to be ready
   uri:
-    url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_port + item - 1 }}/login"
+    url: "http://{{ ansible_default_ipv4.address }}:{{ item.port }}/login"
     method: GET
     status_code: 200
-  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
+  loop: "{{ jenkins_teams }}"
   retries: 30
   delay: 10
   tags: ['master', 'health-check']
 
-- name: Create Jenkins master monitoring scripts
+# Create load balancer configuration for blue-green routing
+- name: Create HAProxy configuration directory
+  file:
+    path: /etc/haproxy/conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  tags: ['master', 'haproxy', 'blue-green']
+
+- name: Create HAProxy configuration for blue-green routing
+  template:
+    src: haproxy-jenkins-blue-green.conf.j2
+    dest: "/etc/haproxy/conf.d/jenkins-{{ item.name }}.cfg"
+    owner: root
+    group: root
+    mode: '0644'
+  loop: "{{ jenkins_teams }}"
+  notify: reload haproxy
+  tags: ['master', 'haproxy', 'blue-green']
+
+- name: Create HAProxy main configuration
+  template:
+    src: haproxy-main.cfg.j2
+    dest: "/etc/haproxy/haproxy.cfg"
+    owner: root
+    group: root
+    mode: '0644'
+    backup: yes
+  notify: reload haproxy
+  tags: ['master', 'haproxy', 'blue-green']
+
+# Monitoring and logging
+- name: Create Jenkins scripts directory
+  file:
+    path: "{{ jenkins_home_dir }}/scripts"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+  tags: ['master', 'directories', 'scripts']
+
+- name: Create monitoring scripts for blue-green environments
   template:
     src: "{{ item.src }}"
-    dest: "{{ item.dest }}"
+    dest: "{{ jenkins_home_dir }}/scripts/{{ item.dest }}"
     owner: "{{ jenkins_user }}"
     group: "{{ jenkins_group }}"
     mode: '0755'
   loop:
-    - { src: 'jenkins-healthcheck.sh.j2', dest: "{{ jenkins_home_dir }}/scripts/healthcheck.sh" }
-    - { src: 'jenkins-monitor.sh.j2', dest: "{{ jenkins_home_dir }}/scripts/monitor.sh" }
-    - { src: 'jenkins-prestart.sh.j2', dest: "{{ jenkins_home_dir }}/scripts/prestart.sh" }
-  tags: ['master', 'scripts']
+    - { src: 'jenkins-blue-green-healthcheck.sh.j2', dest: 'blue-green-healthcheck.sh' }
+    - { src: 'jenkins-blue-green-switch.sh.j2', dest: 'blue-green-switch.sh' }
+    - { src: 'jenkins-team-monitor.sh.j2', dest: 'team-monitor.sh' }
+  tags: ['master', 'scripts', 'monitoring']
 
-- name: Setup Jenkins master log rotation
-  copy:
-    content: |
-      {{ jenkins_home_dir }}/logs/*.log {
-          daily
-          rotate 30
-          compress
-          delaycompress
-          missingok
-          notifempty
-          copytruncate
-          su {{ jenkins_user }} {{ jenkins_group }}
-      }
-    dest: /etc/logrotate.d/jenkins-master
-    mode: '0644'
-  tags: ['master', 'logging']
-
-- name: Display Jenkins master status
+# Display deployment status
+- name: Display Jenkins Blue-Green Multi-Team Deployment Status
   debug:
     msg: |
-      Jenkins Master Deployment Status:
+      Jenkins Blue-Green Multi-Team Deployment Status:
       
-      {% for i in range(1, jenkins_master_count + 1) %}
-      Master {{ i }}:
-        URL: http://{{ ansible_default_ipv4.address }}:{{ jenkins_port + i - 1 }}
-        Agent Port: {{ jenkins_agent_port + i - 1 }}
-        Container: jenkins-master-{{ i }}
-        Service: jenkins-master-{{ i }}.service
+      {% for team in jenkins_teams %}
+      Team: {{ team.name | upper }}
+        Active Environment: {{ team.active_environment | upper }}
+        URL: http://{{ ansible_default_ipv4.address }}:{{ team.port }}
+        Agent Port: {{ team.agent_port }}
+        Blue Container: jenkins-{{ team.name }}-blue ({{ 'RUNNING' if team.active_environment == 'blue' else 'STOPPED' }})
+        Green Container: jenkins-{{ team.name }}-green ({{ 'RUNNING' if team.active_environment == 'green' else 'STOPPED' }})
+        Memory: {{ team.memory }}
+        CPU: {{ team.cpu_limit }}
+      
       {% endfor %}
-      
       Runtime: {{ jenkins_container_runtime }}
       Network: {{ jenkins_network_name }}
       Shared Storage: {{ shared_storage_path | default('/shared/jenkins') }}
-      HA Mode: {{ jenkins_ha_mode }}
+      Blue-Green Enabled: {{ jenkins_blue_green_enabled }}
   tags: ['master', 'info']

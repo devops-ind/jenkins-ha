@@ -91,14 +91,14 @@
   when: docker_compose_enabled
 
 - name: Create Docker networks
-  docker_network:
+  community.docker.docker_network:
     name: "{{ item.name }}"
     driver: "{{ item.driver | default('bridge') }}"
     ipam_config: "{{ item.ipam_config | default(omit) }}"
   loop: "{{ docker_networks }}"
 
 - name: Create Docker volumes
-  docker_volume:
+  community.docker.docker_volume:
     name: "{{ item }}"
   loop: "{{ docker_volumes }}"
 

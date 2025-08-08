@@ -57,3 +57,50 @@ jenkins_metrics_enabled: true
 # Default security settings
 jenkins_security_realm: "local"
 jenkins_authorization_strategy: "logged_in_users_can_do_anything"
+
+# Blue-Green Deployment Configuration
+# Controls single-master deployment with blue-green switching capability
+jenkins_deployment_mode: "blue-green"  # Options: "ha" (dual-master) or "blue-green" (single-master)
+jenkins_blue_green_enabled: true
+jenkins_current_environment: "blue"  # Current active environment: "blue" or "green"
+jenkins_target_environment: "green"   # Target environment for next deployment
+jenkins_blue_green_port_offset: 10     # Port offset between blue and green (blue: 8080, green: 8090)
+jenkins_blue_green_shared_data: true    # Share Jenkins data between environments
+jenkins_blue_green_health_check_retries: 10
+jenkins_blue_green_health_check_delay: 15
+jenkins_blue_green_switch_timeout: 300  # Timeout for environment switching in seconds
+
+# Blue-Green Environment Specific Configuration
+jenkins_blue_container_name: "jenkins-blue"
+jenkins_green_container_name: "jenkins-green"
+jenkins_blue_port: "{{ jenkins_master_port }}"
+jenkins_green_port: "{{ jenkins_master_port + jenkins_blue_green_port_offset }}"
+jenkins_blue_agent_port: "{{ jenkins_jnlp_port }}"
+jenkins_green_agent_port: "{{ jenkins_jnlp_port + jenkins_blue_green_port_offset }}"
+
+# Blue-Green Volume Configuration
+jenkins_shared_home_volume: "jenkins-shared-home"  # Shared between blue and green
+jenkins_blue_temp_volume: "jenkins-blue-temp"      # Blue-specific temporary data
+jenkins_green_temp_volume: "jenkins-green-temp"    # Green-specific temporary data
+jenkins_shared_plugins_volume: "jenkins-shared-plugins"  # Shared plugin directory
+
+# Blue-Green Load Balancer Integration
+jenkins_load_balancer_backend_file: "/etc/haproxy/conf.d/jenkins-backend.cfg"
+jenkins_active_backend_port: "{{ jenkins_blue_port if jenkins_current_environment == 'blue' else jenkins_green_port }}"
+jenkins_standby_backend_port: "{{ jenkins_green_port if jenkins_current_environment == 'blue' else jenkins_blue_port }}"
+
+# Blue-Green Health Check Configuration
+jenkins_health_check_endpoint: "/api/json?pretty=true"
+jenkins_health_check_expected_status: 200
+jenkins_health_check_timeout: 10
+
+# Blue-Green Deployment Strategy Settings
+jenkins_pre_deployment_backup: true     # Create backup before switching environments
+jenkins_post_deployment_verification: true  # Run verification tests after switching
+jenkins_auto_rollback_enabled: true     # Automatically rollback on health check failure
+jenkins_rollback_timeout: 120           # Time to wait before automatic rollback
+
+# Blue-Green Network Configuration
+jenkins_blue_network_alias: "jenkins-blue"
+jenkins_green_network_alias: "jenkins-green"
+jenkins_active_network_alias: "jenkins-active"  # DNS alias pointing to active environment

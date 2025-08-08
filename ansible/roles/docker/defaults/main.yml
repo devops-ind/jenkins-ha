@@ -22,8 +22,8 @@ docker_daemon_options:
       soft: 65536
       hard: 65536
 
-# Docker Compose
-docker_compose_enabled: true
+# Docker Compose (disabled for blue-green deployment)
+docker_compose_enabled: false
 docker_compose_version: "2.21.0"
 docker_compose_path: "/usr/local/bin/docker-compose"
 

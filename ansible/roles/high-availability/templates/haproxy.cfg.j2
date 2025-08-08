@@ -29,15 +29,27 @@ defaults
 frontend jenkins_frontend
     bind {{ vip_address | default('*') }}:{{ jenkins_port | default('8080') }}
     default_backend jenkins_backend
-    option httpchk GET /login
+    option httpchk GET {{ jenkins_context_path | default('') }}/login
+    
+    # Blue-Green deployment headers
+    http-request set-header X-Forwarded-Proto https if { ssl_fc }
+    http-request set-header X-Forwarded-For %[src]
+    http-response set-header X-Jenkins-Environment {{ jenkins_current_environment | default('unknown') }}
 
+# Include blue-green backend configuration
+{% if jenkins_deployment_mode | default('ha') == 'blue-green' %}
+# Blue-Green deployment backend - dynamically managed
+include {{ jenkins_load_balancer_backend_file | default('/etc/haproxy/conf.d/jenkins-backend.cfg') }}
+{% else %}
+# Traditional HA backend configuration
 backend jenkins_backend
     balance roundrobin
-    option httpchk GET /login
+    option httpchk GET {{ jenkins_context_path | default('') }}/login
     http-check expect status 200
 {% for host in groups['jenkins_masters'] %}
     server {{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ jenkins_port | default('8080') }} check
 {% endfor %}
+{% endif %}
 
 listen stats
     bind {{ vip_address | default('*') }}:{{ haproxy_stats_port | default('8404') }}

@@ -1,0 +1,208 @@
+---
+# Jenkins Blue-Green Backup Tasks
+# Creates backups before environment switches and rollbacks
+
+- name: Initialize backup variables
+  set_fact:
+    backup_timestamp: "{{ ansible_date_time.epoch }}"
+    backup_date: "{{ ansible_date_time.iso8601_basic_short }}"
+    backup_env: "{{ backup_env | default(jenkins_current_environment) }}"
+    backup_reason: "{{ backup_reason | default('Pre-deployment backup') }}"
+  tags: ['blue-green', 'backup', 'init']
+
+- name: Create backup directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+  loop:
+    - "{{ shared_storage_path | default('/shared/jenkins') }}/backups"
+    - "{{ shared_storage_path | default('/shared/jenkins') }}/backups/{{ backup_date }}"
+    - "{{ shared_storage_path | default('/shared/jenkins') }}/backups/{{ backup_date }}/jenkins-home"
+    - "{{ shared_storage_path | default('/shared/jenkins') }}/backups/{{ backup_date }}/plugins"
+    - "{{ shared_storage_path | default('/shared/jenkins') }}/backups/{{ backup_date }}/config"
+  tags: ['blue-green', 'backup', 'directories']
+
+- name: Display backup initiation information
+  debug:
+    msg: |
+      === Jenkins Blue-Green Backup Initiated ===
+      
+      Backup Reason: {{ backup_reason }}
+      Environment: {{ backup_env | upper }}
+      Timestamp: {{ ansible_date_time.iso8601 }}
+      Backup Directory: {{ shared_storage_path | default('/shared/jenkins') }}/backups/{{ backup_date }}
+  tags: ['blue-green', 'backup', 'info']
+
+- name: Create Jenkins home backup
+  synchronize:
+    src: "{{ shared_storage_path | default('/shared/jenkins') }}/shared-home/"
+    dest: "{{ shared_storage_path | default('/shared/jenkins') }}/backups/{{ backup_date }}/jenkins-home/"
+    delete: no
+    recursive: yes
+    times: yes
+    compress: yes
+  register: jenkins_home_backup
+  tags: ['blue-green', 'backup', 'jenkins-home']
+
+- name: Create plugins backup
+  synchronize:
+    src: "{{ shared_storage_path | default('/shared/jenkins') }}/shared-plugins/"
+    dest: "{{ shared_storage_path | default('/shared/jenkins') }}/backups/{{ backup_date }}/plugins/"
+    delete: no
+    recursive: yes
+    times: yes
+    compress: yes
+  register: plugins_backup
+  when: shared_storage_path is defined
+  tags: ['blue-green', 'backup', 'plugins']
+
+- name: Create configuration backup
+  copy:
+    src: "{{ jenkins_home_dir }}/casc/"
+    dest: "{{ shared_storage_path | default('/shared/jenkins') }}/backups/{{ backup_date }}/config/"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: preserve
+    remote_src: yes
+  register: config_backup
+  tags: ['blue-green', 'backup', 'config']
+
+- name: Create blue-green state backup
+  copy:
+    src: "{{ jenkins_home_dir }}/blue-green/state.json"
+    dest: "{{ shared_storage_path | default('/shared/jenkins') }}/backups/{{ backup_date }}/blue-green-state.json"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+    remote_src: yes
+  when: jenkins_home_dir + '/blue-green/state.json' is file
+  tags: ['blue-green', 'backup', 'state']
+
+- name: Capture container information
+  command: >
+    {% if jenkins_container_runtime == 'docker' %}
+    docker inspect {{ jenkins_blue_container_name }} {{ jenkins_green_container_name }}
+    {% else %}
+    podman inspect {{ jenkins_blue_container_name }} {{ jenkins_green_container_name }}
+    {% endif %}
+  register: container_info
+  failed_when: false
+  tags: ['blue-green', 'backup', 'container-info']
+
+- name: Save container information to backup
+  copy:
+    content: "{{ container_info.stdout }}"
+    dest: "{{ shared_storage_path | default('/shared/jenkins') }}/backups/{{ backup_date }}/container-info.json"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  when: container_info is succeeded
+  tags: ['blue-green', 'backup', 'container-info']
+
+- name: Create backup manifest
+  template:
+    src: backup-manifest.json.j2
+    dest: "{{ shared_storage_path | default('/shared/jenkins') }}/backups/{{ backup_date }}/manifest.json"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  vars:
+    backup_files:
+      jenkins_home: "{{ jenkins_home_backup.cmd | default('') }}"
+      plugins: "{{ plugins_backup.cmd | default('') if plugins_backup is defined else 'N/A' }}"
+      config: "{{ config_backup.dest | default('') }}"
+      state: "{{ shared_storage_path | default('/shared/jenkins') }}/backups/{{ backup_date }}/blue-green-state.json"
+      container_info: "{{ shared_storage_path | default('/shared/jenkins') }}/backups/{{ backup_date }}/container-info.json"
+  tags: ['blue-green', 'backup', 'manifest']
+
+- name: Calculate backup size
+  command: du -sh "{{ shared_storage_path | default('/shared/jenkins') }}/backups/{{ backup_date }}"
+  register: backup_size
+  tags: ['blue-green', 'backup', 'metrics']
+
+- name: Create backup completion report
+  set_fact:
+    backup_report:
+      timestamp: "{{ ansible_date_time.iso8601 }}"
+      backup_id: "{{ backup_date }}"
+      reason: "{{ backup_reason }}"
+      environment: "{{ backup_env }}"
+      backup_path: "{{ shared_storage_path | default('/shared/jenkins') }}/backups/{{ backup_date }}"
+      backup_size: "{{ backup_size.stdout.split('\t')[0] if backup_size is succeeded else 'unknown' }}"
+      components:
+        jenkins_home: "{{ 'SUCCESS' if jenkins_home_backup is succeeded else 'FAILED' }}"
+        plugins: "{{ 'SUCCESS' if plugins_backup is succeeded else 'SKIPPED' if plugins_backup is undefined else 'FAILED' }}"
+        config: "{{ 'SUCCESS' if config_backup is succeeded else 'FAILED' }}"
+        state: "{{ 'SUCCESS' if (jenkins_home_dir + '/blue-green/state.json') is file else 'SKIPPED' }}"
+        container_info: "{{ 'SUCCESS' if container_info is succeeded else 'FAILED' }}"
+      overall_status: "{{ 'SUCCESS' if jenkins_home_backup is succeeded and config_backup is succeeded else 'PARTIAL' }}"
+  tags: ['blue-green', 'backup', 'report']
+
+- name: Save backup report
+  copy:
+    content: "{{ backup_report | to_nice_json }}"
+    dest: "{{ shared_storage_path | default('/shared/jenkins') }}/backups/{{ backup_date }}/backup-report.json"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  tags: ['blue-green', 'backup', 'report']
+
+- name: Log backup completion
+  lineinfile:
+    path: "{{ jenkins_home_dir }}/blue-green/logs/backup.log"
+    line: "{{ ansible_date_time.iso8601 }} - BACKUP {{ backup_report.overall_status }}: {{ backup_report.backup_id }} | {{ backup_report.reason }} | Size: {{ backup_report.backup_size }}"
+    create: yes
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  tags: ['blue-green', 'backup', 'logging']
+
+- name: Display backup completion report
+  debug:
+    msg: |
+      === Jenkins Blue-Green Backup Completed ===
+      
+      Backup Status: {{ backup_report.overall_status }}
+      Backup ID: {{ backup_report.backup_id }}
+      Environment: {{ backup_report.environment | upper }}
+      Reason: {{ backup_report.reason }}
+      Size: {{ backup_report.backup_size }}
+      
+      Component Status:
+        Jenkins Home: {{ backup_report.components.jenkins_home }}
+        Plugins: {{ backup_report.components.plugins }}
+        Configuration: {{ backup_report.components.config }}
+        Blue-Green State: {{ backup_report.components.state }}
+        Container Info: {{ backup_report.components.container_info }}
+      
+      Backup Location: {{ backup_report.backup_path }}
+      Manifest: {{ backup_report.backup_path }}/manifest.json
+      Report: {{ backup_report.backup_path }}/backup-report.json
+  tags: ['blue-green', 'backup', 'report']
+
+- name: Clean old backups (retention policy)
+  find:
+    paths: "{{ shared_storage_path | default('/shared/jenkins') }}/backups"
+    file_type: directory
+    age: "{{ jenkins_backup_retention_days | default(30) }}d"
+  register: old_backups
+  tags: ['blue-green', 'backup', 'cleanup']
+
+- name: Remove old backups
+  file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ old_backups.files }}"
+  when: old_backups.files | length > 0
+  tags: ['blue-green', 'backup', 'cleanup']
+
+- name: Set backup completion facts
+  set_fact:
+    jenkins_backup_completed: true
+    jenkins_backup_successful: "{{ backup_report.overall_status == 'SUCCESS' }}"
+    jenkins_backup_report: "{{ backup_report }}"
+    jenkins_backup_path: "{{ backup_report.backup_path }}"
+  tags: ['blue-green', 'backup', 'facts']

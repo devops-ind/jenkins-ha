@@ -1,0 +1,268 @@
+groups:
+  - name: jenkins-blue-green-deployment
+    interval: 30s
+    rules:
+      # Blue Environment Health
+      - alert: JenkinsBlueEnvironmentDown
+        expr: up{job="jenkins-blue"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: jenkins
+          environment: blue
+          deployment_type: blue-green
+        annotations:
+          summary: "Jenkins Blue environment is down"
+          description: "Jenkins Blue environment ({{ $labels.instance }}) has been down for more than 2 minutes."
+          runbook_url: "{{ jenkins_runbook_url }}/blue-green-troubleshooting#blue-environment-down"
+          
+      - alert: JenkinsGreenEnvironmentDown
+        expr: up{job="jenkins-green"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: jenkins
+          environment: green
+          deployment_type: blue-green
+        annotations:
+          summary: "Jenkins Green environment is down"
+          description: "Jenkins Green environment ({{ $labels.instance }}) has been down for more than 2 minutes."
+          runbook_url: "{{ jenkins_runbook_url }}/blue-green-troubleshooting#green-environment-down"
+
+      # Blue-Green Health Checks
+      - alert: JenkinsBothEnvironmentsDown
+        expr: up{job="jenkins-blue"} == 0 and up{job="jenkins-green"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: jenkins
+          deployment_type: blue-green
+        annotations:
+          summary: "Both Jenkins environments are down"
+          description: "Both Blue and Green Jenkins environments are down. This is a critical failure requiring immediate attention."
+          runbook_url: "{{ jenkins_runbook_url }}/blue-green-troubleshooting#both-environments-down"
+
+      - alert: JenkinsActiveEnvironmentUnhealthy
+        expr: |
+          (
+            (jenkins_blue_green_active_environment == 1 and up{job="jenkins-blue"} == 0) or
+            (jenkins_blue_green_active_environment == 0 and up{job="jenkins-green"} == 0)
+          )
+        for: 1m
+        labels:
+          severity: critical
+          service: jenkins
+          deployment_type: blue-green
+        annotations:
+          summary: "Active Jenkins environment is unhealthy"
+          description: "The currently active Jenkins environment is unhealthy or down."
+          runbook_url: "{{ jenkins_runbook_url }}/blue-green-troubleshooting#active-environment-unhealthy"
+
+      # Load Balancer Health
+      - alert: JenkinsLoadBalancerDown
+        expr: up{job="jenkins-load-balancer"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: jenkins
+          component: load-balancer
+          deployment_type: blue-green
+        annotations:
+          summary: "Jenkins load balancer is down"
+          description: "Jenkins load balancer is down, preventing access to Jenkins environments."
+          runbook_url: "{{ jenkins_runbook_url }}/blue-green-troubleshooting#load-balancer-down"
+
+      - alert: JenkinsLoadBalancerUnhealthyBackends
+        expr: haproxy_backend_active_servers{backend="jenkins_backend"} < 1
+        for: 2m
+        labels:
+          severity: warning
+          service: jenkins
+          component: load-balancer
+          deployment_type: blue-green
+        annotations:
+          summary: "Jenkins load balancer has no healthy backends"
+          description: "Jenkins load balancer has {{ $value }} healthy backends, expecting at least 1."
+          runbook_url: "{{ jenkins_runbook_url }}/blue-green-troubleshooting#no-healthy-backends"
+
+      # Blue-Green Deployment Metrics
+      - alert: JenkinsBlueGreenSwitchDuration
+        expr: jenkins_blue_green_last_switch_duration_seconds > 300
+        for: 0m
+        labels:
+          severity: warning
+          service: jenkins
+          deployment_type: blue-green
+          operation: switch
+        annotations:
+          summary: "Jenkins Blue-Green switch took too long"
+          description: "Last Jenkins Blue-Green environment switch took {{ $value }}s, which is longer than expected (>300s)."
+          runbook_url: "{{ jenkins_runbook_url }}/blue-green-troubleshooting#slow-switch"
+
+      - alert: JenkinsBlueGreenSwitchFailure
+        expr: increase(jenkins_blue_green_switch_failures_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: jenkins
+          deployment_type: blue-green
+          operation: switch
+        annotations:
+          summary: "Jenkins Blue-Green switch failed"
+          description: "Jenkins Blue-Green environment switch has failed {{ $value }} times in the last 5 minutes."
+          runbook_url: "{{ jenkins_runbook_url }}/blue-green-troubleshooting#switch-failure"
+
+      # Rollback Alerts
+      - alert: JenkinsBlueGreenRollbackTriggered
+        expr: increase(jenkins_blue_green_rollback_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          service: jenkins
+          deployment_type: blue-green
+          operation: rollback
+        annotations:
+          summary: "Jenkins Blue-Green rollback triggered"
+          description: "Jenkins Blue-Green deployment rollback has been triggered {{ $value }} times in the last 5 minutes."
+          runbook_url: "{{ jenkins_runbook_url }}/blue-green-troubleshooting#rollback-triggered"
+
+      - alert: JenkinsBlueGreenRollbackFailure
+        expr: increase(jenkins_blue_green_rollback_failures_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: jenkins
+          deployment_type: blue-green
+          operation: rollback
+        annotations:
+          summary: "Jenkins Blue-Green rollback failed"
+          description: "Jenkins Blue-Green deployment rollback has failed {{ $value }} times in the last 5 minutes."
+          runbook_url: "{{ jenkins_runbook_url }}/blue-green-troubleshooting#rollback-failure"
+
+      # Resource Usage Alerts
+      - alert: JenkinsHighCPUUsage
+        expr: |
+          (
+            rate(container_cpu_usage_seconds_total{name=~"jenkins-(blue|green)"}[5m]) * 100 > 80
+          )
+        for: 5m
+        labels:
+          severity: warning
+          service: jenkins
+          deployment_type: blue-green
+        annotations:
+          summary: "High CPU usage in Jenkins environment"
+          description: "Jenkins {{ $labels.name }} environment CPU usage is {{ $value }}% for more than 5 minutes."
+          runbook_url: "{{ jenkins_runbook_url }}/troubleshooting#high-cpu"
+
+      - alert: JenkinsHighMemoryUsage
+        expr: |
+          (
+            (container_memory_usage_bytes{name=~"jenkins-(blue|green)"} / container_spec_memory_limit_bytes{name=~"jenkins-(blue|green)"}) * 100 > 85
+          )
+        for: 5m
+        labels:
+          severity: warning
+          service: jenkins
+          deployment_type: blue-green
+        annotations:
+          summary: "High memory usage in Jenkins environment"
+          description: "Jenkins {{ $labels.name }} environment memory usage is {{ $value }}% for more than 5 minutes."
+          runbook_url: "{{ jenkins_runbook_url }}/troubleshooting#high-memory"
+
+      # Backup Alerts
+      - alert: JenkinsBlueGreenBackupFailure
+        expr: jenkins_blue_green_backup_last_success_timestamp < (time() - 86400 * 3)
+        for: 0m
+        labels:
+          severity: warning
+          service: jenkins
+          deployment_type: blue-green
+          operation: backup
+        annotations:
+          summary: "Jenkins Blue-Green backup is overdue"
+          description: "Jenkins Blue-Green backup hasn't succeeded for more than 3 days."
+          runbook_url: "{{ jenkins_runbook_url }}/blue-green-troubleshooting#backup-failure"
+
+      # Health Check Alerts
+      - alert: JenkinsBlueGreenHealthCheckFailure
+        expr: jenkins_blue_green_health_check_failures_total > 3
+        for: 5m
+        labels:
+          severity: warning
+          service: jenkins
+          deployment_type: blue-green
+          operation: health-check
+        annotations:
+          summary: "Jenkins Blue-Green health check failures"
+          description: "Jenkins Blue-Green health checks have failed {{ $value }} times recently."
+          runbook_url: "{{ jenkins_runbook_url }}/blue-green-troubleshooting#health-check-failure"
+
+      # Container Alerts
+      - alert: JenkinsContainerRestarts
+        expr: increase(kube_pod_container_status_restarts_total{container=~"jenkins-(blue|green)"}[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          service: jenkins
+          deployment_type: blue-green
+        annotations:
+          summary: "Jenkins container restarted"
+          description: "Jenkins {{ $labels.container }} container has restarted {{ $value }} times in the last hour."
+          runbook_url: "{{ jenkins_runbook_url }}/troubleshooting#container-restarts"
+
+      # Queue Alerts
+      - alert: JenkinsHighQueueLength
+        expr: jenkins_queue_size > 10
+        for: 10m
+        labels:
+          severity: warning
+          service: jenkins
+          deployment_type: blue-green
+        annotations:
+          summary: "Jenkins build queue is growing"
+          description: "Jenkins build queue has {{ $value }} items for more than 10 minutes."
+          runbook_url: "{{ jenkins_runbook_url }}/troubleshooting#high-queue"
+
+      # Disk Space Alerts
+      - alert: JenkinsLowDiskSpace
+        expr: |
+          (
+            (1 - (node_filesystem_avail_bytes{mountpoint="{{ shared_storage_path | default('/shared/jenkins') }}"} / node_filesystem_size_bytes{mountpoint="{{ shared_storage_path | default('/shared/jenkins') }}"})) * 100 > 85
+          )
+        for: 5m
+        labels:
+          severity: warning
+          service: jenkins
+          deployment_type: blue-green
+        annotations:
+          summary: "Low disk space for Jenkins shared storage"
+          description: "Jenkins shared storage disk usage is {{ $value }}% on {{ $labels.instance }}."
+          runbook_url: "{{ jenkins_runbook_url }}/troubleshooting#low-disk-space"
+
+  - name: jenkins-blue-green-performance
+    interval: 60s
+    rules:
+      # Performance Recording Rules
+      - record: jenkins:blue_green_switch_success_rate
+        expr: |
+          (
+            rate(jenkins_blue_green_switch_success_total[5m]) / 
+            (rate(jenkins_blue_green_switch_success_total[5m]) + rate(jenkins_blue_green_switch_failures_total[5m]))
+          ) * 100
+
+      - record: jenkins:blue_green_average_switch_duration
+        expr: rate(jenkins_blue_green_switch_duration_seconds_sum[5m]) / rate(jenkins_blue_green_switch_duration_seconds_count[5m])
+
+      - record: jenkins:environment_uptime_percentage
+        expr: |
+          (
+            avg_over_time(up{job=~"jenkins-(blue|green)"}[24h]) * 100
+          )
+
+      - record: jenkins:active_environment_response_time
+        expr: |
+          (
+            jenkins_blue_green_active_environment == 1 and jenkins_http_response_time_seconds{job="jenkins-blue"} or
+            jenkins_blue_green_active_environment == 0 and jenkins_http_response_time_seconds{job="jenkins-green"}
+          )

@@ -1,0 +1,305 @@
+---
+# Jenkins Blue-Green Rollback Tasks
+# Handles automatic and manual rollback procedures for failed deployments
+
+- name: Initialize rollback variables
+  set_fact:
+    rollback_start_time: "{{ ansible_date_time.epoch }}"
+    rollback_initiated_by: "{{ rollback_reason | default('Manual rollback requested') }}"
+    rollback_from: "{{ rollback_from_env | default(jenkins_current_environment) }}"
+    rollback_to: "{{ rollback_to_env | default('blue' if jenkins_current_environment == 'green' else 'green') }}"
+  tags: ['blue-green', 'rollback', 'init']
+
+- name: Load current blue-green deployment state
+  slurp:
+    src: "{{ jenkins_home_dir }}/blue-green/state.json"
+  register: bg_state_raw
+  failed_when: false
+  tags: ['blue-green', 'rollback', 'state']
+
+- name: Parse deployment state
+  set_fact:
+    bg_state: "{{ bg_state_raw.content | b64decode | from_json }}"
+  when: bg_state_raw is succeeded and bg_state_raw.content is defined
+  tags: ['blue-green', 'rollback', 'state']
+
+- name: Set rollback environment details
+  set_fact:
+    rollback_source_container: "{{ jenkins_blue_container_name if rollback_from == 'blue' else jenkins_green_container_name }}"
+    rollback_target_container: "{{ jenkins_blue_container_name if rollback_to == 'blue' else jenkins_green_container_name }}"
+    rollback_source_port: "{{ jenkins_blue_port if rollback_from == 'blue' else jenkins_green_port }}"
+    rollback_target_port: "{{ jenkins_blue_port if rollback_to == 'blue' else jenkins_green_port }}"
+  tags: ['blue-green', 'rollback', 'init']
+
+- name: Display rollback initiation information
+  debug:
+    msg: |
+      === Jenkins Blue-Green Rollback Initiated ===
+      
+      Rollback Reason: {{ rollback_initiated_by }}
+      Rollback FROM: {{ rollback_from | upper }} ({{ rollback_source_container }}) - Port {{ rollback_source_port }}
+      Rollback TO: {{ rollback_to | upper }} ({{ rollback_target_container }}) - Port {{ rollback_target_port }}
+      
+      Rollback initiated at: {{ ansible_date_time.iso8601 }}
+      Auto-rollback enabled: {{ jenkins_auto_rollback_enabled | default(true) | bool }}
+      Rollback timeout: {{ jenkins_rollback_timeout }}s
+  tags: ['blue-green', 'rollback', 'info']
+
+- name: Log rollback initiation
+  lineinfile:
+    path: "{{ jenkins_home_dir }}/blue-green/logs/rollback.log"
+    line: "{{ ansible_date_time.iso8601 }} - ROLLBACK INITIATED: {{ rollback_initiated_by }} | FROM: {{ rollback_from }} TO: {{ rollback_to }}"
+    create: yes
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  tags: ['blue-green', 'rollback', 'logging']
+
+- name: Create rollback backup before proceeding
+  include_tasks: blue-green-backup.yml
+  vars:
+    backup_reason: "Pre-rollback backup ({{ rollback_initiated_by }})"
+    backup_env: "{{ rollback_from }}"
+  when: jenkins_pre_rollback_backup | default(true) | bool
+  tags: ['blue-green', 'rollback', 'backup']
+
+- name: Verify target environment health before rollback
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ rollback_target_port }}{{ jenkins_context_path | default('') }}/login"
+    method: GET
+    status_code: 200
+    timeout: "{{ jenkins_health_check_timeout }}"
+  register: rollback_target_health
+  retries: "{{ jenkins_blue_green_health_check_retries }}"
+  delay: "{{ jenkins_blue_green_health_check_delay }}"
+  failed_when: false
+  tags: ['blue-green', 'rollback', 'health-check']
+
+- name: Verify target environment API accessibility
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ rollback_target_port }}{{ jenkins_context_path | default('') }}/api/json"
+    method: GET
+    status_code: 200
+    timeout: "{{ jenkins_health_check_timeout }}"
+    return_content: yes
+  register: rollback_target_api
+  retries: 3
+  delay: 5
+  failed_when: false
+  tags: ['blue-green', 'rollback', 'health-check']
+
+- name: Abort rollback if target environment is unhealthy
+  fail:
+    msg: |
+      ROLLBACK ABORTED: Target environment {{ rollback_to | upper }} is not healthy!
+      
+      Target Health Check: {{ 'FAILED' if rollback_target_health is failed else 'PASSED' }}
+      Target API Check: {{ 'FAILED' if rollback_target_api is failed else 'PASSED' }}
+      
+      Cannot rollback to an unhealthy environment. Manual intervention required.
+      
+      Target URL: http://{{ ansible_default_ipv4.address }}:{{ rollback_target_port }}{{ jenkins_context_path | default('') }}
+  when: rollback_target_health is failed or rollback_target_api is failed
+  tags: ['blue-green', 'rollback', 'health-check']
+
+- name: Create rollback load balancer configuration
+  template:
+    src: jenkins-backend.cfg.j2
+    dest: "{{ jenkins_load_balancer_backend_file }}"
+    owner: root
+    group: root
+    mode: '0644'
+    backup: yes
+  vars:
+    jenkins_active_port: "{{ rollback_target_port }}"
+    jenkins_active_environment: "{{ rollback_to }}"
+    jenkins_active_container: "{{ rollback_target_container }}"
+  notify: 
+    - reload haproxy
+  tags: ['blue-green', 'rollback', 'load-balancer']
+
+- name: Wait for load balancer configuration reload
+  wait_for:
+    timeout: 15
+  tags: ['blue-green', 'rollback', 'load-balancer']
+
+- name: Verify load balancer is routing to rollback target
+  uri:
+    url: "http://{{ jenkins_vip | default(ansible_default_ipv4.address) }}:{{ jenkins_master_port }}{{ jenkins_context_path | default('') }}/api/json"
+    method: GET
+    status_code: 200
+    timeout: "{{ jenkins_health_check_timeout }}"
+    return_content: yes
+  register: rollback_lb_verification
+  retries: 5
+  delay: 10
+  failed_when: false
+  tags: ['blue-green', 'rollback', 'verification']
+
+- name: Log rollback load balancer verification
+  lineinfile:
+    path: "{{ jenkins_home_dir }}/blue-green/logs/rollback.log"
+    line: "{{ ansible_date_time.iso8601 }} - LB VERIFICATION: {{ 'SUCCESS' if rollback_lb_verification is succeeded else 'FAILED' }} | Target: {{ rollback_to | upper }}"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  tags: ['blue-green', 'rollback', 'logging']
+
+- name: Fail rollback if load balancer verification failed
+  fail:
+    msg: |
+      ROLLBACK FAILED: Load balancer verification failed!
+      
+      Unable to verify that load balancer is routing traffic to the rollback target environment.
+      Load balancer URL: http://{{ jenkins_vip | default(ansible_default_ipv4.address) }}:{{ jenkins_master_port }}{{ jenkins_context_path | default('') }}
+      Status: {{ rollback_lb_verification.status | default('unknown') }}
+      
+      Manual verification and intervention required.
+  when: rollback_lb_verification is failed
+  tags: ['blue-green', 'rollback', 'verification']
+
+- name: Update network aliases for rollback
+  community.docker.docker_container:
+    name: "{{ rollback_target_container }}"
+    networks:
+      - name: "{{ jenkins_network_name }}"
+        aliases:
+          - "{{ jenkins_active_network_alias }}"
+          - "{{ jenkins_blue_network_alias if rollback_to == 'blue' else jenkins_green_network_alias }}"
+    networks_cli_compatible: yes
+  when: jenkins_container_runtime == 'docker'
+  tags: ['blue-green', 'rollback', 'network-alias']
+
+- name: Remove network alias from rollback source
+  community.docker.docker_container:
+    name: "{{ rollback_source_container }}"
+    networks:
+      - name: "{{ jenkins_network_name }}"
+        aliases:
+          - "{{ jenkins_blue_network_alias if rollback_from == 'blue' else jenkins_green_network_alias }}"
+    networks_cli_compatible: yes
+  when: jenkins_container_runtime == 'docker'
+  ignore_errors: yes
+  tags: ['blue-green', 'rollback', 'network-alias']
+
+- name: Update blue-green state after successful rollback
+  template:
+    src: blue-green-state.json.j2
+    dest: "{{ jenkins_home_dir }}/blue-green/state.json"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+    backup: yes
+  vars:
+    jenkins_current_environment: "{{ rollback_to }}"
+    jenkins_target_environment: "{{ rollback_from }}"
+    deployment_timestamp: "{{ ansible_date_time.iso8601 }}"
+  when: rollback_lb_verification is succeeded
+  tags: ['blue-green', 'rollback', 'state']
+
+- name: Run post-rollback verification
+  include_tasks: blue-green-verification.yml
+  vars:
+    verification_env: "{{ rollback_to }}"
+    verification_port: "{{ rollback_target_port }}"
+    verification_container: "{{ rollback_target_container }}"
+  when: 
+    - rollback_lb_verification is succeeded
+    - jenkins_post_rollback_verification | default(true) | bool
+  tags: ['blue-green', 'rollback', 'verification']
+
+- name: Calculate rollback duration
+  set_fact:
+    rollback_end_time: "{{ ansible_date_time.epoch }}"
+    rollback_duration: "{{ ansible_date_time.epoch | int - rollback_start_time | int }}"
+  tags: ['blue-green', 'rollback', 'metrics']
+
+- name: Create comprehensive rollback report
+  set_fact:
+    rollback_report:
+      timestamp: "{{ ansible_date_time.iso8601 }}"
+      reason: "{{ rollback_initiated_by }}"
+      duration_seconds: "{{ rollback_duration }}"
+      rollback_from:
+        environment: "{{ rollback_from }}"
+        container: "{{ rollback_source_container }}"
+        port: "{{ rollback_source_port }}"
+      rollback_to:
+        environment: "{{ rollback_to }}"
+        container: "{{ rollback_target_container }}"
+        port: "{{ rollback_target_port }}"
+      status: "{{ 'SUCCESS' if rollback_lb_verification is succeeded else 'FAILED' }}"
+      health_checks:
+        target_web: "{{ 'PASSED' if rollback_target_health is succeeded else 'FAILED' }}"
+        target_api: "{{ 'PASSED' if rollback_target_api is succeeded else 'FAILED' }}"
+        load_balancer: "{{ 'PASSED' if rollback_lb_verification is succeeded else 'FAILED' }}"
+      post_verification: "{{ 'COMPLETED' if jenkins_post_rollback_verification | default(true) | bool and rollback_lb_verification is succeeded else 'SKIPPED' }}"
+      current_active_environment: "{{ rollback_to if rollback_lb_verification is succeeded else 'UNKNOWN' }}"
+      load_balancer_url: "http://{{ jenkins_vip | default(ansible_default_ipv4.address) }}:{{ jenkins_master_port }}{{ jenkins_context_path | default('') }}"
+      direct_access_url: "http://{{ ansible_default_ipv4.address }}:{{ rollback_target_port }}{{ jenkins_context_path | default('') }}"
+  tags: ['blue-green', 'rollback', 'report']
+
+- name: Save rollback report to file
+  copy:
+    content: "{{ rollback_report | to_nice_json }}"
+    dest: "{{ jenkins_home_dir }}/blue-green/logs/rollback-{{ ansible_date_time.epoch }}.json"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  tags: ['blue-green', 'rollback', 'report']
+
+- name: Display rollback completion report
+  debug:
+    msg: |
+      === Jenkins Blue-Green Rollback Completed ===
+      
+      Rollback Status: {{ rollback_report.status }}
+      Duration: {{ rollback_duration }}s
+      Initiated By: {{ rollback_initiated_by }}
+      
+      Rollback Details:
+        FROM: {{ rollback_from | upper }} ({{ rollback_source_container }}) - Port {{ rollback_source_port }}
+        TO: {{ rollback_to | upper }} ({{ rollback_target_container }}) - Port {{ rollback_target_port }}
+      
+      Health Checks:
+        Target Web Interface: {{ rollback_report.health_checks.target_web }}
+        Target API: {{ rollback_report.health_checks.target_api }}
+        Load Balancer: {{ rollback_report.health_checks.load_balancer }}
+      
+      Current Active Environment: {{ rollback_report.current_active_environment | upper }}
+      
+      URLs:
+        Load Balancer: {{ rollback_report.load_balancer_url }}
+        Direct Access: {{ rollback_report.direct_access_url }}
+      
+      Post-Rollback Verification: {{ rollback_report.post_verification }}
+      
+      Rollback Report Saved: {{ jenkins_home_dir }}/blue-green/logs/rollback-{{ ansible_date_time.epoch }}.json
+  tags: ['blue-green', 'rollback', 'report']
+
+- name: Log successful rollback completion
+  lineinfile:
+    path: "{{ jenkins_home_dir }}/blue-green/logs/rollback.log"
+    line: "{{ ansible_date_time.iso8601 }} - ROLLBACK {{ rollback_report.status }}: {{ rollback_from }} -> {{ rollback_to }} ({{ rollback_duration }}s) | Active: {{ rollback_report.current_active_environment | upper }}"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  tags: ['blue-green', 'rollback', 'logging']
+
+- name: Set rollback completion facts
+  set_fact:
+    jenkins_rollback_completed: true
+    jenkins_rollback_successful: "{{ rollback_report.status == 'SUCCESS' }}"
+    jenkins_rollback_report: "{{ rollback_report }}"
+    jenkins_current_active_environment: "{{ rollback_to if rollback_lb_verification is succeeded else rollback_from }}"
+  tags: ['blue-green', 'rollback', 'facts']
+
+- name: Send rollback notification (placeholder for monitoring integration)
+  debug:
+    msg: |
+      NOTIFICATION: Jenkins Blue-Green Rollback {{ rollback_report.status }}
+      Environment: {{ rollback_from | upper }} -> {{ rollback_to | upper }}
+      Reason: {{ rollback_initiated_by }}
+      Duration: {{ rollback_duration }}s
+      Status: {{ rollback_report.status }}
+  tags: ['blue-green', 'rollback', 'notification']

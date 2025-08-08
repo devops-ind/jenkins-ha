@@ -2,8 +2,51 @@
 # Main Jenkins Infrastructure Orchestration Playbook
 # Production-grade deployment with native container management
 
-- name: Bootstrap Infrastructure
+# Dynamic host selection based on deployment_mode
+- name: Set target hosts based on deployment mode
   hosts: localhost
+  gather_facts: no
+  run_once: true
+  tasks:
+    - name: Determine target hosts for deployment
+      set_fact:
+        target_hosts: >-
+          {% if hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') == 'devcontainer' %}
+          localhost
+          {% elif hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') == 'production' %}
+          jenkins_masters:monitoring:harbor:load_balancers:shared_storage
+          {% elif hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') == 'staging' %}
+          jenkins_masters:monitoring
+          {% else %}
+          localhost
+          {% endif %}
+        jenkins_target_hosts: >-
+          {% if hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') == 'devcontainer' %}
+          localhost
+          {% elif hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') in ['production', 'staging'] %}
+          jenkins_masters
+          {% else %}
+          localhost
+          {% endif %}
+        monitoring_target_hosts: >-
+          {% if hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') == 'devcontainer' %}
+          localhost
+          {% elif hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') in ['production', 'staging'] %}
+          monitoring
+          {% else %}
+          localhost
+          {% endif %}
+    
+    - name: Display deployment configuration
+      debug:
+        msg:
+          - "Deployment Mode: {{ hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') }}"
+          - "Target Hosts: {{ target_hosts }}"
+          - "Jenkins Hosts: {{ jenkins_target_hosts }}"
+          - "Monitoring Hosts: {{ monitoring_target_hosts }}"
+
+- name: Bootstrap Infrastructure
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'all') }}"
   become: yes
   gather_facts: yes
   serial: "{{ serial_execution | default('100%') }}"
@@ -21,7 +64,7 @@
       tags: ['security', 'bootstrap']
 
 - name: Setup Harbor Registry Integration
-  hosts: localhost
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'harbor') }}"
   become: yes
   gather_facts: yes
   vars:
@@ -33,7 +76,7 @@
       when: harbor_integration_enabled | default(true)
 
 - name: Build and Manage Jenkins Images
-  hosts: localhost  # Build on primary master only
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'jenkins_masters[0]') }}"  # Build on primary master only
   become: yes
   gather_facts: yes
   vars:
@@ -45,7 +88,7 @@
       when: build_jenkins_images | default(false)
 
 - name: Deploy Jenkins Infrastructure
-  hosts: localhost
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'jenkins_masters') }}"
   become: yes
   gather_facts: yes
   serial: 1  # Deploy masters one by one for HA
@@ -68,7 +111,7 @@
       tags: ['jenkins', 'verify']
 
 - name: Configure High Availability
-  hosts: localhost
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'load_balancers:jenkins_masters') }}"
   become: yes
   gather_facts: yes
   roles:
@@ -81,7 +124,7 @@
 # Dynamic Jenkins Agents are configured via JCasC - no separate deployment needed
 
 - name: Setup Monitoring Stack
-  hosts: localhost
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'monitoring') }}"
   become: yes
   gather_facts: yes
   roles:
@@ -90,7 +133,7 @@
       when: monitoring_enabled | default(true)
 
 - name: Configure Backup System
-  hosts: localhost
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'shared_storage:jenkins_masters') }}"
   become: yes
   gather_facts: yes
   roles:
@@ -99,7 +142,7 @@
       when: backup_enabled | default(true)
 
 - name: Post-Deployment Verification
-  hosts: localhost
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'jenkins_masters:monitoring') }}"
   become: no
   gather_facts: yes
   tasks:
@@ -116,13 +159,12 @@
 
     - name: Verify monitoring endpoints
       uri:
-        url: "http://{{ hostvars[groups['monitoring'][0]]['ansible_default_ipv4']['address'] }}:9090/api/v1/query?query=up"
+        url: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('http://localhost:9090/api/v1/query?query=up', 'http://' + hostvars[groups['monitoring'][0]]['ansible_default_ipv4']['address'] + ':9090/api/v1/query?query=up') }}"
         method: GET
       register: prometheus_check
       when: 
         - monitoring_enabled | default(true)
-        - groups['monitoring'] is defined
-        - groups['monitoring'] | length > 0
+        - (deployment_mode | default('devcontainer') == 'devcontainer') or (groups['monitoring'] is defined and groups['monitoring'] | length > 0)
       ignore_errors: yes
       tags: ['verify', 'monitoring']
 
@@ -132,15 +174,24 @@
           🎉 Jenkins Infrastructure Deployment Completed!
           
           📋 Access Information:
+          {% if deployment_mode | default('devcontainer') == 'devcontainer' %}
+          Jenkins Masters: http://localhost:{{ jenkins_master_port | default(8080) }}
+          {% else %}
           {% for host in groups['jenkins_masters'] | default([]) %}
           Jenkins Master {{ loop.index }}: http://{{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ jenkins_master_port }}
           {% endfor %}
+          {% endif %}
           {% if jenkins_ha_enabled | default(false) %}
           Load Balancer VIP: http://{{ jenkins_vip }}:{{ jenkins_master_port }}
           {% endif %}
-          {% if monitoring_enabled | default(true) and groups['monitoring'] is defined and groups['monitoring'] | length > 0 %}
+          {% if monitoring_enabled | default(true) %}
+          {% if deployment_mode | default('devcontainer') == 'devcontainer' %}
+          Prometheus: http://localhost:9090
+          Grafana: http://localhost:3000
+          {% elif groups['monitoring'] is defined and groups['monitoring'] | length > 0 %}
           Prometheus: http://{{ hostvars[groups['monitoring'][0]]['ansible_default_ipv4']['address'] }}:9090
           Grafana: http://{{ hostvars[groups['monitoring'][0]]['ansible_default_ipv4']['address'] }}:3000
+          {% endif %}
           {% endif %}
           
           🔧 Default Credentials:

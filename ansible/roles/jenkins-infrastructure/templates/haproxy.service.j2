@@ -1,0 +1,59 @@
+[Unit]
+Description=HAProxy Load Balancer for Jenkins Blue-Green Multi-Team
+Documentation=http://www.haproxy.org/
+Requires=network.target
+After=network.target
+PartOf=jenkins-master.service
+
+[Service]
+Type=notify
+Restart=always
+RestartSec=10
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+# Configuration validation before start
+ExecStartPre=/usr/sbin/haproxy -f /etc/haproxy/haproxy.cfg -c -q
+
+# Start HAProxy with configuration
+ExecStart=/usr/sbin/haproxy -W -f /etc/haproxy/haproxy.cfg -p /run/haproxy.pid
+
+# Reload configuration gracefully
+ExecReload=/bin/kill -USR2 $MAINPID
+ExecReload=/bin/sleep 1
+ExecReload=/usr/sbin/haproxy -f /etc/haproxy/haproxy.cfg -c -q
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Process management
+PIDFile=/run/haproxy.pid
+RuntimeDirectory=haproxy
+RuntimeDirectoryMode=0755
+
+# Security settings
+User=haproxy
+Group=haproxy
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/run
+
+# Resource limits
+LimitNOFILE=65536
+{% if haproxy_memory_limit is defined %}
+MemoryLimit={{ haproxy_memory_limit }}
+{% endif %}
+
+# Environment variables
+Environment="CONFIG_FILE=/etc/haproxy/haproxy.cfg"
+
+# Working directory
+WorkingDirectory=/var/lib/haproxy
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=haproxy
+
+[Install]
+WantedBy=multi-user.target

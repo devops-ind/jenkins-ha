@@ -1,0 +1,442 @@
+---
+# Jenkins Blue-Green Deployment - Container Management Tasks
+# Replaces dual-master HA approach with single-master blue-green deployment
+
+- name: Create Jenkins blue-green configuration directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+  loop:
+    - "{{ jenkins_home_dir }}"
+    - "{{ jenkins_home_dir }}/blue-green"
+    - "{{ jenkins_home_dir }}/blue-green/scripts"
+    - "{{ jenkins_home_dir }}/blue-green/config"
+    - "{{ jenkins_home_dir }}/blue-green/logs"
+    - "{{ jenkins_home_dir }}/casc"
+    - "{{ jenkins_home_dir }}/scripts"
+    - "{{ shared_storage_path | default('/shared/jenkins') }}"
+    - "{{ shared_storage_path | default('/shared/jenkins') }}/shared-home"
+    - "{{ shared_storage_path | default('/shared/jenkins') }}/shared-plugins"
+  tags: ['blue-green', 'directories']
+
+- name: Create blue-green deployment state file
+  template:
+    src: blue-green-state.json.j2
+    dest: "{{ jenkins_home_dir }}/blue-green/state.json"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+    backup: yes
+  tags: ['blue-green', 'state']
+
+- name: Create Docker network for Jenkins blue-green deployment
+  community.docker.docker_network:
+    name: "{{ jenkins_network_name }}"
+    driver: "{{ jenkins_network_driver }}"
+    ipam_config:
+      - subnet: "{{ jenkins_network_subnet }}"
+        gateway: "{{ jenkins_network_gateway }}"
+    state: present
+  when: jenkins_container_runtime == 'docker'
+  tags: ['blue-green', 'network']
+
+- name: Create Podman network for Jenkins blue-green deployment
+  containers.podman.podman_network:
+    name: "{{ jenkins_network_name }}"
+    subnet: "{{ jenkins_network_subnet }}"
+    gateway: "{{ jenkins_network_gateway }}"
+    state: present
+  when: jenkins_container_runtime == 'podman'
+  tags: ['blue-green', 'network']
+
+- name: Create shared volumes for blue-green deployment
+  community.docker.docker_volume:
+    name: "{{ item.name }}"
+    state: present
+    driver: "{{ item.driver | default('local') }}"
+    driver_options: "{{ item.driver_options | default({}) }}"
+  loop:
+    - name: "{{ jenkins_shared_home_volume }}"
+      driver: local
+      driver_options:
+        type: none
+        o: bind
+        device: "{{ shared_storage_path | default('/shared/jenkins') }}/shared-home"
+    - name: "{{ jenkins_shared_plugins_volume }}"
+      driver: local
+      driver_options:
+        type: none
+        o: bind
+        device: "{{ shared_storage_path | default('/shared/jenkins') }}/shared-plugins"
+    - name: "{{ jenkins_blue_temp_volume }}"
+      driver: local
+    - name: "{{ jenkins_green_temp_volume }}"
+      driver: local
+  when: jenkins_container_runtime == 'docker'
+  tags: ['blue-green', 'volumes']
+
+- name: Create shared volumes for blue-green deployment (Podman)
+  containers.podman.podman_volume:
+    name: "{{ item.name }}"
+    state: present
+    options: "{{ item.options | default({}) }}"
+  loop:
+    - name: "{{ jenkins_shared_home_volume }}"
+      options:
+        device: "{{ shared_storage_path | default('/shared/jenkins') }}/shared-home"
+        type: bind
+        o: bind
+    - name: "{{ jenkins_shared_plugins_volume }}"
+      options:
+        device: "{{ shared_storage_path | default('/shared/jenkins') }}/shared-plugins"
+        type: bind
+        o: bind
+    - name: "{{ jenkins_blue_temp_volume }}"
+    - name: "{{ jenkins_green_temp_volume }}"
+  when: jenkins_container_runtime == 'podman'
+  tags: ['blue-green', 'volumes']
+
+- name: Stop and remove any existing Jenkins HA containers
+  community.docker.docker_container:
+    name: "{{ item }}"
+    state: absent
+    force_kill: yes
+  loop:
+    - jenkins-master-1
+    - jenkins-master-2
+    - jenkins-master-primary
+    - jenkins-master-backup
+    - "{{ jenkins_blue_container_name }}"
+    - "{{ jenkins_green_container_name }}"
+  when: jenkins_container_runtime == 'docker'
+  ignore_errors: yes
+  tags: ['blue-green', 'cleanup']
+
+- name: Stop and remove any existing Jenkins HA containers (Podman)
+  containers.podman.podman_container:
+    name: "{{ item }}"
+    state: absent
+    force: yes
+  loop:
+    - jenkins-master-1
+    - jenkins-master-2
+    - jenkins-master-primary
+    - jenkins-master-backup
+    - "{{ jenkins_blue_container_name }}"
+    - "{{ jenkins_green_container_name }}"
+  when: jenkins_container_runtime == 'podman'
+  ignore_errors: yes
+  tags: ['blue-green', 'cleanup']
+
+- name: Deploy Jenkins Blue environment container
+  community.docker.docker_container:
+    name: "{{ jenkins_blue_container_name }}"
+    image: "{{ harbor_registry_url | default('docker.io') }}/{{ harbor_project | default('jenkins') }}/jenkins:{{ jenkins_master_image_tag | default('lts') }}"
+    state: present
+    restart_policy: "{{ jenkins_restart_policy | default('unless-stopped') }}"
+    ports:
+      - "{{ jenkins_blue_port }}:8080"
+      - "{{ jenkins_blue_agent_port }}:50000"
+    volumes:
+      - "{{ jenkins_shared_home_volume }}:/var/jenkins_home"
+      - "{{ jenkins_shared_plugins_volume }}:/var/jenkins_home/plugins"
+      - "{{ jenkins_blue_temp_volume }}:/tmp/jenkins"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "{{ jenkins_home_dir }}/casc:/usr/share/jenkins/ref/casc:ro"
+    networks:
+      - name: "{{ jenkins_network_name }}"
+        aliases:
+          - "{{ jenkins_blue_network_alias }}"
+    env:
+      JAVA_OPTS: "{{ jenkins_master_java_opts }}"
+      JENKINS_OPTS: "--httpPort=8080 --prefix={{ jenkins_context_path | default('') }}"
+      CASC_JENKINS_CONFIG: "/usr/share/jenkins/ref/casc"
+      TZ: "{{ common_timezone | default('UTC') }}"
+      JENKINS_ENV: "blue"
+      JENKINS_DEPLOYMENT_MODE: "blue-green"
+    user: "{{ jenkins_uid }}:{{ jenkins_gid }}"
+    security_opts:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+    memory: "{{ jenkins_master_memory }}"
+    cpus: "{{ jenkins_master_cpu_limit }}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080{{ jenkins_context_path | default('') }}/login || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    labels:
+      service: "jenkins-master"
+      environment: "blue"
+      deployment_mode: "blue-green"
+      role: "master"
+      monitoring: "prometheus"
+  when: jenkins_container_runtime == 'docker'
+  register: jenkins_blue_container
+  tags: ['blue-green', 'deploy', 'blue']
+
+- name: Deploy Jenkins Blue environment container (Podman)
+  containers.podman.podman_container:
+    name: "{{ jenkins_blue_container_name }}"
+    image: "{{ harbor_registry_url | default('docker.io') }}/{{ harbor_project | default('jenkins') }}/jenkins:{{ jenkins_master_image_tag | default('lts') }}"
+    state: present
+    restart_policy: "{{ jenkins_restart_policy | default('unless-stopped') }}"
+    ports:
+      - "{{ jenkins_blue_port }}:8080"
+      - "{{ jenkins_blue_agent_port }}:50000"
+    volumes:
+      - "{{ jenkins_shared_home_volume }}:/var/jenkins_home:Z"
+      - "{{ jenkins_shared_plugins_volume }}:/var/jenkins_home/plugins:Z"
+      - "{{ jenkins_blue_temp_volume }}:/tmp/jenkins:Z"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "{{ jenkins_home_dir }}/casc:/usr/share/jenkins/ref/casc:ro,Z"
+    networks:
+      - "{{ jenkins_network_name }}"
+    network_aliases:
+      "{{ jenkins_network_name }}":
+        - "{{ jenkins_blue_network_alias }}"
+    env:
+      JAVA_OPTS: "{{ jenkins_master_java_opts }}"
+      JENKINS_OPTS: "--httpPort=8080 --prefix={{ jenkins_context_path | default('') }}"
+      CASC_JENKINS_CONFIG: "/usr/share/jenkins/ref/casc"
+      TZ: "{{ common_timezone | default('UTC') }}"
+      JENKINS_ENV: "blue"
+      JENKINS_DEPLOYMENT_MODE: "blue-green"
+    user: "{{ jenkins_uid }}:{{ jenkins_gid }}"
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+    memory: "{{ jenkins_master_memory }}"
+    cpus: "{{ jenkins_master_cpu_limit }}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080{{ jenkins_context_path | default('') }}/login || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    labels:
+      service: "jenkins-master"
+      environment: "blue"
+      deployment_mode: "blue-green"
+      role: "master"
+      monitoring: "prometheus"
+  when: jenkins_container_runtime == 'podman'
+  register: jenkins_blue_container_podman
+  tags: ['blue-green', 'deploy', 'blue']
+
+- name: Deploy Jenkins Green environment container
+  community.docker.docker_container:
+    name: "{{ jenkins_green_container_name }}"
+    image: "{{ harbor_registry_url | default('docker.io') }}/{{ harbor_project | default('jenkins') }}/jenkins:{{ jenkins_master_image_tag | default('lts') }}"
+    state: present
+    restart_policy: "{{ jenkins_restart_policy | default('unless-stopped') }}"
+    ports:
+      - "{{ jenkins_green_port }}:8080"
+      - "{{ jenkins_green_agent_port }}:50000"
+    volumes:
+      - "{{ jenkins_shared_home_volume }}:/var/jenkins_home"
+      - "{{ jenkins_shared_plugins_volume }}:/var/jenkins_home/plugins"
+      - "{{ jenkins_green_temp_volume }}:/tmp/jenkins"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "{{ jenkins_home_dir }}/casc:/usr/share/jenkins/ref/casc:ro"
+    networks:
+      - name: "{{ jenkins_network_name }}"
+        aliases:
+          - "{{ jenkins_green_network_alias }}"
+    env:
+      JAVA_OPTS: "{{ jenkins_master_java_opts }}"
+      JENKINS_OPTS: "--httpPort=8080 --prefix={{ jenkins_context_path | default('') }}"
+      CASC_JENKINS_CONFIG: "/usr/share/jenkins/ref/casc"
+      TZ: "{{ common_timezone | default('UTC') }}"
+      JENKINS_ENV: "green"
+      JENKINS_DEPLOYMENT_MODE: "blue-green"
+    user: "{{ jenkins_uid }}:{{ jenkins_gid }}"
+    security_opts:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+    memory: "{{ jenkins_master_memory }}"
+    cpus: "{{ jenkins_master_cpu_limit }}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080{{ jenkins_context_path | default('') }}/login || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    labels:
+      service: "jenkins-master"
+      environment: "green"
+      deployment_mode: "blue-green"
+      role: "master"
+      monitoring: "prometheus"
+  when: jenkins_container_runtime == 'docker'
+  register: jenkins_green_container
+  tags: ['blue-green', 'deploy', 'green']
+
+- name: Deploy Jenkins Green environment container (Podman)
+  containers.podman.podman_container:
+    name: "{{ jenkins_green_container_name }}"
+    image: "{{ harbor_registry_url | default('docker.io') }}/{{ harbor_project | default('jenkins') }}/jenkins:{{ jenkins_master_image_tag | default('lts') }}"
+    state: present
+    restart_policy: "{{ jenkins_restart_policy | default('unless-stopped') }}"
+    ports:
+      - "{{ jenkins_green_port }}:8080"
+      - "{{ jenkins_green_agent_port }}:50000"
+    volumes:
+      - "{{ jenkins_shared_home_volume }}:/var/jenkins_home:Z"
+      - "{{ jenkins_shared_plugins_volume }}:/var/jenkins_home/plugins:Z"
+      - "{{ jenkins_green_temp_volume }}:/tmp/jenkins:Z"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "{{ jenkins_home_dir }}/casc:/usr/share/jenkins/ref/casc:ro,Z"
+    networks:
+      - "{{ jenkins_network_name }}"
+    network_aliases:
+      "{{ jenkins_network_name }}":
+        - "{{ jenkins_green_network_alias }}"
+    env:
+      JAVA_OPTS: "{{ jenkins_master_java_opts }}"
+      JENKINS_OPTS: "--httpPort=8080 --prefix={{ jenkins_context_path | default('') }}"
+      CASC_JENKINS_CONFIG: "/usr/share/jenkins/ref/casc"
+      TZ: "{{ common_timezone | default('UTC') }}"
+      JENKINS_ENV: "green"
+      JENKINS_DEPLOYMENT_MODE: "blue-green"
+    user: "{{ jenkins_uid }}:{{ jenkins_gid }}"
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+    memory: "{{ jenkins_master_memory }}"
+    cpus: "{{ jenkins_master_cpu_limit }}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080{{ jenkins_context_path | default('') }}/login || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    labels:
+      service: "jenkins-master"
+      environment: "green"
+      deployment_mode: "blue-green"
+      role: "master"
+      monitoring: "prometheus"
+  when: jenkins_container_runtime == 'podman'
+  register: jenkins_green_container_podman
+  tags: ['blue-green', 'deploy', 'green']
+
+- name: Wait for both environments to be ready
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ item }}/login"
+    method: GET
+    status_code: 200
+    timeout: "{{ jenkins_health_check_timeout }}"
+  loop:
+    - "{{ jenkins_blue_port }}"
+    - "{{ jenkins_green_port }}"
+  retries: "{{ jenkins_blue_green_health_check_retries }}"
+  delay: "{{ jenkins_blue_green_health_check_delay }}"
+  register: jenkins_environments_health_check
+  tags: ['blue-green', 'health-check']
+
+- name: Update blue-green deployment state
+  template:
+    src: blue-green-state.json.j2
+    dest: "{{ jenkins_home_dir }}/blue-green/state.json"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+    backup: yes
+  vars:
+    blue_container_id: "{{ jenkins_blue_container.container.Id if jenkins_container_runtime == 'docker' else jenkins_blue_container_podman.container.Id }}"
+    green_container_id: "{{ jenkins_green_container.container.Id if jenkins_container_runtime == 'docker' else jenkins_green_container_podman.container.Id }}"
+    deployment_timestamp: "{{ ansible_date_time.iso8601 }}"
+  tags: ['blue-green', 'state']
+
+- name: Deploy blue-green management scripts
+  include_tasks: blue-green-scripts.yml
+  tags: ['blue-green', 'scripts']
+
+- name: Run initial health check on both environments
+  include_tasks: blue-green-health-check.yml
+  tags: ['blue-green', 'initial-health-check']
+
+- name: Generate Jenkins Blue-Green deployment report
+  debug:
+    msg: |
+      === Jenkins Blue-Green Deployment Report ===
+      
+      Deployment Status: SUCCESS
+      Container Runtime: {{ jenkins_container_runtime }}
+      Deployment Mode: {{ jenkins_deployment_mode }}
+      Current Active Environment: {{ jenkins_current_environment }}
+      
+      Blue Environment:
+        Container: {{ jenkins_blue_container_name }}
+        URL: http://{{ ansible_default_ipv4.address }}:{{ jenkins_blue_port }}
+        Agent Port: {{ jenkins_blue_agent_port }}
+        Status: {{ 'RUNNING' if jenkins_environments_health_check.results[0] is succeeded else 'UNHEALTHY' }}
+        
+      Green Environment:
+        Container: {{ jenkins_green_container_name }}
+        URL: http://{{ ansible_default_ipv4.address }}:{{ jenkins_green_port }}
+        Agent Port: {{ jenkins_green_agent_port }}
+        Status: {{ 'RUNNING' if jenkins_environments_health_check.results[1] is succeeded else 'UNHEALTHY' }}
+      
+      Active Environment URL: http://{{ ansible_default_ipv4.address }}:{{ jenkins_active_backend_port }}
+      Standby Environment URL: http://{{ ansible_default_ipv4.address }}:{{ jenkins_standby_backend_port }}
+      
+      Shared Storage:
+        Home Volume: {{ jenkins_shared_home_volume }}
+        Plugins Volume: {{ jenkins_shared_plugins_volume }}
+        Storage Path: {{ shared_storage_path | default('/shared/jenkins') }}
+      
+      Management Commands:
+        jenkins-bg status                    # Show deployment status
+        jenkins-bg switch                    # Switch environments  
+        jenkins-bg health                    # Check health
+        jenkins-bg rollback                  # Rollback to previous
+        jenkins-bg backup                    # Create backup
+        jenkins-bg interactive               # Interactive menu
+      
+      Management Scripts Location:
+        Switch Environment: {{ jenkins_home_dir }}/blue-green/scripts/switch-environment.sh
+        Health Check: {{ jenkins_home_dir }}/blue-green/scripts/health-check.sh
+        Rollback: {{ jenkins_home_dir }}/blue-green/scripts/rollback.sh
+        Backup: {{ jenkins_home_dir }}/blue-green/scripts/backup.sh
+        Manager: {{ jenkins_home_dir }}/blue-green/scripts/manager.sh
+      
+      Logs Location: {{ jenkins_home_dir }}/blue-green/logs/
+      State File: {{ jenkins_home_dir }}/blue-green/state.json
+      
+      Blue-Green Deployment Ready: {{ jenkins_deployment_ready | default('Unknown') }}
+      Health Check Result: {{ 'PASSED' if jenkins_blue_green_health_check.summary.deployment_ready | default(false) else 'NEEDS_ATTENTION' }}
+  tags: ['blue-green', 'info']

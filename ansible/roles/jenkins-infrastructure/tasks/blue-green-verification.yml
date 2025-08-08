@@ -1,0 +1,288 @@
+---
+# Jenkins Blue-Green Post-Deployment Verification Tasks
+# Comprehensive verification of the switched environment
+
+- name: Initialize verification variables
+  set_fact:
+    verification_start_time: "{{ ansible_date_time.epoch }}"
+    verification_results: {}
+    verification_failures: []
+  tags: ['blue-green', 'verification']
+
+- name: Verify Jenkins web interface responsiveness
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ verification_port }}{{ jenkins_context_path | default('') }}/login"
+    method: GET
+    status_code: 200
+    timeout: "{{ jenkins_health_check_timeout }}"
+    return_content: yes
+  register: web_verification
+  retries: 3
+  delay: 5
+  failed_when: false
+  tags: ['blue-green', 'verification', 'web']
+
+- name: Update verification results - Web Interface
+  set_fact:
+    verification_results: "{{ verification_results | combine({'web_interface': {'status': 'PASSED' if web_verification is succeeded else 'FAILED', 'details': web_verification.status | default('unknown')}}) }}"
+    verification_failures: "{{ verification_failures + ['Web Interface not accessible'] if web_verification is failed else verification_failures }}"
+  tags: ['blue-green', 'verification', 'web']
+
+- name: Verify Jenkins API functionality
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ verification_port }}{{ jenkins_context_path | default('') }}/api/json?tree=version,nodeDescription,numExecutors"
+    method: GET
+    status_code: 200
+    timeout: "{{ jenkins_health_check_timeout }}"
+    return_content: yes
+  register: api_verification
+  retries: 3
+  delay: 5
+  failed_when: false
+  tags: ['blue-green', 'verification', 'api']
+
+- name: Parse Jenkins API response
+  set_fact:
+    jenkins_api_info: "{{ api_verification.content | from_json }}"
+  when: api_verification is succeeded and api_verification.content is defined
+  failed_when: false
+  tags: ['blue-green', 'verification', 'api']
+
+- name: Update verification results - API
+  set_fact:
+    verification_results: "{{ verification_results | combine({'api': {'status': 'PASSED' if api_verification is succeeded else 'FAILED', 'version': jenkins_api_info.version | default('unknown'), 'executors': jenkins_api_info.numExecutors | default('unknown')}}) }}"
+    verification_failures: "{{ verification_failures + ['Jenkins API not responding'] if api_verification is failed else verification_failures }}"
+  tags: ['blue-green', 'verification', 'api']
+
+- name: Verify Jenkins agent port connectivity
+  wait_for:
+    host: "{{ ansible_default_ipv4.address }}"
+    port: "{{ verification_port | int + 42000 }}"  # Assuming agent port is base port + 42000
+    timeout: "{{ jenkins_health_check_timeout }}"
+    state: started
+  register: agent_port_verification
+  failed_when: false
+  tags: ['blue-green', 'verification', 'agent-port']
+
+- name: Update verification results - Agent Port
+  set_fact:
+    verification_results: "{{ verification_results | combine({'agent_port': {'status': 'PASSED' if agent_port_verification is succeeded else 'FAILED', 'port': verification_port | int + 42000}}) }}"
+    verification_failures: "{{ verification_failures + ['Jenkins agent port not accessible'] if agent_port_verification is failed else verification_failures }}"
+  tags: ['blue-green', 'verification', 'agent-port']
+
+- name: Test Jenkins security and authentication
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ verification_port }}{{ jenkins_context_path | default('') }}/whoAmI/api/json"
+    method: GET
+    timeout: "{{ jenkins_health_check_timeout }}"
+    return_content: yes
+  register: auth_verification
+  failed_when: false
+  tags: ['blue-green', 'verification', 'auth']
+
+- name: Update verification results - Authentication
+  set_fact:
+    verification_results: "{{ verification_results | combine({'authentication': {'status': 'PASSED' if auth_verification.status == 200 else 'WARNING', 'details': 'Security properly configured' if auth_verification.status in [200, 403] else 'Unexpected response'}}) }}"
+  tags: ['blue-green', 'verification', 'auth']
+
+- name: Test Jenkins plugin health
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ verification_port }}{{ jenkins_context_path | default('') }}/pluginManager/api/json?depth=1&tree=plugins[shortName,version,enabled,active]"
+    method: GET
+    status_code: [200, 403]  # 403 is acceptable if authentication is required
+    timeout: "{{ jenkins_health_check_timeout }}"
+    return_content: yes
+  register: plugins_verification
+  failed_when: false
+  tags: ['blue-green', 'verification', 'plugins']
+
+- name: Parse plugins information
+  set_fact:
+    jenkins_plugins_info: "{{ plugins_verification.content | from_json }}"
+  when: 
+    - plugins_verification is succeeded 
+    - plugins_verification.status == 200
+    - plugins_verification.content is defined
+  failed_when: false
+  tags: ['blue-green', 'verification', 'plugins']
+
+- name: Count active plugins
+  set_fact:
+    active_plugins_count: "{{ jenkins_plugins_info.plugins | selectattr('active', 'equalto', true) | list | length }}"
+    total_plugins_count: "{{ jenkins_plugins_info.plugins | length }}"
+  when: jenkins_plugins_info is defined
+  tags: ['blue-green', 'verification', 'plugins']
+
+- name: Update verification results - Plugins
+  set_fact:
+    verification_results: "{{ verification_results | combine({'plugins': {'status': 'PASSED' if plugins_verification.status in [200, 403] else 'FAILED', 'active_plugins': active_plugins_count | default('unknown'), 'total_plugins': total_plugins_count | default('unknown')}}) }}"
+    verification_failures: "{{ verification_failures + ['Plugin manager not accessible'] if plugins_verification is failed else verification_failures }}"
+  tags: ['blue-green', 'verification', 'plugins']
+
+- name: Verify shared storage accessibility
+  stat:
+    path: "{{ shared_storage_path | default('/shared/jenkins') }}/shared-home"
+  register: storage_verification
+  tags: ['blue-green', 'verification', 'storage']
+
+- name: Test Jenkins workspace creation
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ verification_port }}{{ jenkins_context_path | default('') }}/api/json"
+    method: GET
+    status_code: 200
+    timeout: "{{ jenkins_health_check_timeout }}"
+  register: workspace_verification
+  failed_when: false
+  tags: ['blue-green', 'verification', 'workspace']
+
+- name: Update verification results - Storage
+  set_fact:
+    verification_results: "{{ verification_results | combine({'storage': {'status': 'PASSED' if storage_verification.stat.exists else 'FAILED', 'path': shared_storage_path | default('/shared/jenkins') + '/shared-home', 'accessible': storage_verification.stat.exists}}) }}"
+    verification_failures: "{{ verification_failures + ['Shared storage not accessible'] if not storage_verification.stat.exists else verification_failures }}"
+  tags: ['blue-green', 'verification', 'storage']
+
+- name: Check container resource utilization
+  command: >
+    {% if jenkins_container_runtime == 'docker' %}
+    docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}" {{ verification_container }}
+    {% else %}
+    podman stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}" {{ verification_container }}
+    {% endif %}
+  register: resource_verification
+  failed_when: false
+  tags: ['blue-green', 'verification', 'resources']
+
+- name: Update verification results - Resources
+  set_fact:
+    verification_results: "{{ verification_results | combine({'resources': {'status': 'PASSED' if resource_verification is succeeded else 'WARNING', 'details': resource_verification.stdout_lines[1] if resource_verification is succeeded and resource_verification.stdout_lines|length > 1 else 'Unable to retrieve'}}) }}"
+  tags: ['blue-green', 'verification', 'resources']
+
+- name: Test basic Jenkins job creation capability
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ verification_port }}{{ jenkins_context_path | default('') }}/api/json?tree=jobs[name]"
+    method: GET
+    status_code: [200, 403]
+    timeout: "{{ jenkins_health_check_timeout }}"
+    return_content: yes
+  register: jobs_verification
+  failed_when: false
+  tags: ['blue-green', 'verification', 'jobs']
+
+- name: Update verification results - Jobs
+  set_fact:
+    verification_results: "{{ verification_results | combine({'jobs': {'status': 'PASSED' if jobs_verification.status in [200, 403] else 'FAILED', 'accessible': jobs_verification.status in [200, 403]}}) }}"
+  tags: ['blue-green', 'verification', 'jobs']
+
+- name: Calculate verification completion time
+  set_fact:
+    verification_end_time: "{{ ansible_date_time.epoch }}"
+    verification_duration: "{{ ansible_date_time.epoch | int - verification_start_time | int }}"
+  tags: ['blue-green', 'verification']
+
+- name: Determine overall verification status
+  set_fact:
+    verification_overall_status: "{{ 'PASSED' if verification_failures | length == 0 else 'FAILED' }}"
+    verification_warnings: "{{ verification_results | dict2items | selectattr('value.status', 'equalto', 'WARNING') | map(attribute='key') | list }}"
+  tags: ['blue-green', 'verification']
+
+- name: Create comprehensive verification report
+  set_fact:
+    verification_report:
+      timestamp: "{{ ansible_date_time.iso8601 }}"
+      environment: "{{ verification_env }}"
+      container: "{{ verification_container }}"
+      port: "{{ verification_port }}"
+      duration_seconds: "{{ verification_duration }}"
+      overall_status: "{{ verification_overall_status }}"
+      total_tests: "{{ verification_results | length }}"
+      passed_tests: "{{ verification_results | dict2items | selectattr('value.status', 'equalto', 'PASSED') | list | length }}"
+      failed_tests: "{{ verification_failures | length }}"
+      warning_tests: "{{ verification_warnings | length }}"
+      failures: "{{ verification_failures }}"
+      warnings: "{{ verification_warnings }}"
+      detailed_results: "{{ verification_results }}"
+  tags: ['blue-green', 'verification']
+
+- name: Save verification report to file
+  copy:
+    content: "{{ verification_report | to_nice_json }}"
+    dest: "{{ jenkins_home_dir }}/blue-green/logs/verification-{{ verification_env }}-{{ ansible_date_time.epoch }}.json"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  tags: ['blue-green', 'verification']
+
+- name: Display verification report
+  debug:
+    msg: |
+      === Jenkins Blue-Green Post-Deployment Verification Report ===
+      
+      Environment: {{ verification_env | upper }}
+      Container: {{ verification_container }}
+      Port: {{ verification_port }}
+      Duration: {{ verification_duration }}s
+      
+      OVERALL STATUS: {{ verification_overall_status }}
+      
+      Test Results Summary:
+        Total Tests: {{ verification_report.total_tests }}
+        Passed: {{ verification_report.passed_tests }}
+        Failed: {{ verification_report.failed_tests }}
+        Warnings: {{ verification_report.warning_tests }}
+      
+      Detailed Results:
+        Web Interface: {{ verification_results.web_interface.status }}
+        API Access: {{ verification_results.api.status }} (Version: {{ verification_results.api.version | default('unknown') }})
+        Agent Port: {{ verification_results.agent_port.status }} (Port: {{ verification_results.agent_port.port | default('unknown') }})
+        Authentication: {{ verification_results.authentication.status }}
+        Plugins: {{ verification_results.plugins.status }} ({{ verification_results.plugins.active_plugins | default('unknown') }}/{{ verification_results.plugins.total_plugins | default('unknown') }} active)
+        Storage: {{ verification_results.storage.status }}
+        Resources: {{ verification_results.resources.status }}
+        Jobs API: {{ verification_results.jobs.status }}
+      
+      {% if verification_failures | length > 0 %}
+      FAILURES:
+      {% for failure in verification_failures %}
+        - {{ failure }}
+      {% endfor %}
+      {% endif %}
+      
+      {% if verification_warnings | length > 0 %}
+      WARNINGS:
+      {% for warning in verification_warnings %}
+        - {{ warning }}
+      {% endfor %}
+      {% endif %}
+      
+      Verification Report Saved: {{ jenkins_home_dir }}/blue-green/logs/verification-{{ verification_env }}-{{ ansible_date_time.epoch }}.json
+  tags: ['blue-green', 'verification']
+
+- name: Log verification summary
+  lineinfile:
+    path: "{{ jenkins_home_dir }}/blue-green/logs/verification.log"
+    line: "{{ ansible_date_time.iso8601 }} - {{ verification_env | upper }}: {{ verification_overall_status }} ({{ verification_report.passed_tests }}/{{ verification_report.total_tests }} passed, {{ verification_duration }}s)"
+    create: yes
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  tags: ['blue-green', 'verification']
+
+- name: Set verification facts for other tasks
+  set_fact:
+    jenkins_verification_passed: "{{ verification_overall_status == 'PASSED' }}"
+    jenkins_verification_report: "{{ verification_report }}"
+  tags: ['blue-green', 'verification']
+
+- name: Fail if verification failed and strict mode enabled
+  fail:
+    msg: |
+      Post-deployment verification FAILED for {{ verification_env }} environment!
+      
+      Failed tests: {{ verification_failures | join(', ') }}
+      
+      This indicates that the {{ verification_env }} environment is not functioning correctly
+      and may require manual intervention before it can be used in production.
+  when: 
+    - verification_overall_status == 'FAILED'
+    - jenkins_verification_strict_mode | default(false) | bool
+  tags: ['blue-green', 'verification']

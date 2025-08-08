@@ -1,0 +1,71 @@
+{
+  "deployment_mode": "blue-green",
+  "current_environment": "{{ jenkins_current_environment }}",
+  "target_environment": "{{ jenkins_target_environment }}",
+  "last_deployment": "{{ deployment_timestamp | default(ansible_date_time.iso8601) }}",
+  "container_runtime": "{{ jenkins_container_runtime }}",
+  
+  "environments": {
+    "blue": {
+      "container_name": "{{ jenkins_blue_container_name }}",
+      "container_id": "{{ blue_container_id | default('') }}",
+      "port": {{ jenkins_blue_port }},
+      "agent_port": {{ jenkins_blue_agent_port }},
+      "status": "deployed",
+      "health_check_url": "http://{{ ansible_default_ipv4.address }}:{{ jenkins_blue_port }}{{ jenkins_context_path | default('') }}/login",
+      "network_alias": "{{ jenkins_blue_network_alias }}"
+    },
+    "green": {
+      "container_name": "{{ jenkins_green_container_name }}",
+      "container_id": "{{ green_container_id | default('') }}",
+      "port": {{ jenkins_green_port }},
+      "agent_port": {{ jenkins_green_agent_port }},
+      "status": "deployed",
+      "health_check_url": "http://{{ ansible_default_ipv4.address }}:{{ jenkins_green_port }}{{ jenkins_context_path | default('') }}/login",
+      "network_alias": "{{ jenkins_green_network_alias }}"
+    }
+  },
+  
+  "active_environment": {
+    "name": "{{ jenkins_current_environment }}",
+    "url": "http://{{ ansible_default_ipv4.address }}:{{ jenkins_active_backend_port }}",
+    "container": "{{ jenkins_blue_container_name if jenkins_current_environment == 'blue' else jenkins_green_container_name }}",
+    "port": {{ jenkins_active_backend_port }}
+  },
+  
+  "standby_environment": {
+    "name": "{{ jenkins_target_environment }}",
+    "url": "http://{{ ansible_default_ipv4.address }}:{{ jenkins_standby_backend_port }}",
+    "container": "{{ jenkins_green_container_name if jenkins_current_environment == 'blue' else jenkins_blue_container_name }}",
+    "port": {{ jenkins_standby_backend_port }}
+  },
+  
+  "shared_storage": {
+    "home_volume": "{{ jenkins_shared_home_volume }}",
+    "plugins_volume": "{{ jenkins_shared_plugins_volume }}",
+    "storage_path": "{{ shared_storage_path | default('/shared/jenkins') }}",
+    "shared_data_enabled": {{ jenkins_blue_green_shared_data | lower }}
+  },
+  
+  "network": {
+    "name": "{{ jenkins_network_name }}",
+    "subnet": "{{ jenkins_network_subnet }}",
+    "gateway": "{{ jenkins_network_gateway }}"
+  },
+  
+  "configuration": {
+    "health_check_retries": {{ jenkins_blue_green_health_check_retries }},
+    "health_check_delay": {{ jenkins_blue_green_health_check_delay }},
+    "switch_timeout": {{ jenkins_blue_green_switch_timeout }},
+    "auto_rollback_enabled": {{ jenkins_auto_rollback_enabled | lower }},
+    "rollback_timeout": {{ jenkins_rollback_timeout }},
+    "pre_deployment_backup": {{ jenkins_pre_deployment_backup | lower }},
+    "post_deployment_verification": {{ jenkins_post_deployment_verification | lower }}
+  },
+  
+  "load_balancer": {
+    "backend_file": "{{ jenkins_load_balancer_backend_file }}",
+    "active_backend_port": {{ jenkins_active_backend_port }},
+    "standby_backend_port": {{ jenkins_standby_backend_port }}
+  }
+}

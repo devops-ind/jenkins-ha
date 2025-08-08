@@ -1,0 +1,265 @@
+---
+# Jenkins Blue-Green Health Check and Validation Tasks
+# Comprehensive health checking for both blue and green environments
+
+- name: Load blue-green deployment state
+  slurp:
+    src: "{{ jenkins_home_dir }}/blue-green/state.json"
+  register: bg_state_raw
+  failed_when: false
+  tags: ['blue-green', 'health-check', 'state']
+
+- name: Parse deployment state
+  set_fact:
+    bg_state: "{{ bg_state_raw.content | b64decode | from_json }}"
+  when: bg_state_raw is succeeded and bg_state_raw.content is defined
+  tags: ['blue-green', 'health-check', 'state']
+
+- name: Set default environment configuration if state not found
+  set_fact:
+    bg_state:
+      current_environment: "{{ jenkins_current_environment }}"
+      environments:
+        blue:
+          container_name: "{{ jenkins_blue_container_name }}"
+          port: "{{ jenkins_blue_port }}"
+          agent_port: "{{ jenkins_blue_agent_port }}"
+        green:
+          container_name: "{{ jenkins_green_container_name }}"
+          port: "{{ jenkins_green_port }}"
+          agent_port: "{{ jenkins_green_agent_port }}"
+  when: bg_state is not defined
+  tags: ['blue-green', 'health-check', 'state']
+
+- name: Check container status for both environments
+  command: >
+    {% if jenkins_container_runtime == 'docker' %}
+    docker inspect --format='{{.State.Status}}' {{ item.value.container_name }}
+    {% else %}
+    podman inspect --format='{{.State.Status}}' {{ item.value.container_name }}
+    {% endif %}
+  loop: "{{ bg_state.environments | dict2items }}"
+  register: container_status_check
+  failed_when: false
+  tags: ['blue-green', 'health-check', 'container']
+
+- name: Check container health status
+  command: >
+    {% if jenkins_container_runtime == 'docker' %}
+    docker inspect --format='{{.State.Health.Status}}' {{ item.value.container_name }}
+    {% else %}
+    podman inspect --format='{{.State.Health.Status}}' {{ item.value.container_name }}
+    {% endif %}
+  loop: "{{ bg_state.environments | dict2items }}"
+  register: container_health_check
+  failed_when: false
+  tags: ['blue-green', 'health-check', 'container']
+
+- name: Check Jenkins web interface accessibility
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ item.value.port }}{{ jenkins_context_path | default('') }}/login"
+    method: GET
+    status_code: 200
+    timeout: "{{ jenkins_health_check_timeout }}"
+  loop: "{{ bg_state.environments | dict2items }}"
+  register: web_interface_check
+  retries: 3
+  delay: 5
+  failed_when: false
+  tags: ['blue-green', 'health-check', 'web']
+
+- name: Check Jenkins API accessibility
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ item.value.port }}{{ jenkins_context_path | default('') }}{{ jenkins_health_check_endpoint }}"
+    method: GET
+    status_code: "{{ jenkins_health_check_expected_status }}"
+    timeout: "{{ jenkins_health_check_timeout }}"
+    return_content: yes
+  loop: "{{ bg_state.environments | dict2items }}"
+  register: api_check
+  retries: 3
+  delay: 5
+  failed_when: false
+  tags: ['blue-green', 'health-check', 'api']
+
+- name: Check Jenkins agent port connectivity
+  wait_for:
+    host: "{{ ansible_default_ipv4.address }}"
+    port: "{{ item.value.agent_port }}"
+    timeout: "{{ jenkins_health_check_timeout }}"
+    state: started
+  loop: "{{ bg_state.environments | dict2items }}"
+  register: agent_port_check
+  failed_when: false
+  tags: ['blue-green', 'health-check', 'agent-port']
+
+- name: Check Jenkins system information
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ item.value.port }}{{ jenkins_context_path | default('') }}/api/json?tree=nodeDescription,numExecutors,mode,useSecurity,version"
+    method: GET
+    status_code: 200
+    timeout: "{{ jenkins_health_check_timeout }}"
+    return_content: yes
+  loop: "{{ bg_state.environments | dict2items }}"
+  register: system_info_check
+  failed_when: false
+  tags: ['blue-green', 'health-check', 'system-info']
+
+- name: Parse Jenkins system information
+  set_fact:
+    jenkins_system_info: "{{ jenkins_system_info | default({}) | combine({item.item.key: (item.content | from_json) if item is succeeded and item.content is defined else {}}) }}"
+  loop: "{{ system_info_check.results }}"
+  when: item is succeeded and item.content is defined
+  tags: ['blue-green', 'health-check', 'system-info']
+
+- name: Check load balancer health (if configured)
+  uri:
+    url: "http://{{ jenkins_vip | default(ansible_default_ipv4.address) }}:{{ jenkins_master_port }}{{ jenkins_context_path | default('') }}/api/json"
+    method: GET
+    status_code: 200
+    timeout: "{{ jenkins_health_check_timeout }}"
+    return_content: yes
+  register: load_balancer_check
+  when: jenkins_vip is defined
+  failed_when: false
+  tags: ['blue-green', 'health-check', 'load-balancer']
+
+- name: Check shared storage accessibility
+  stat:
+    path: "{{ shared_storage_path | default('/shared/jenkins') }}/shared-home"
+  register: shared_storage_check
+  tags: ['blue-green', 'health-check', 'storage']
+
+- name: Check volume mounts in containers
+  command: >
+    {% if jenkins_container_runtime == 'docker' %}
+    docker inspect --format='{{range .Mounts}}{{.Source}}:{{.Destination}}:{{.Mode}} {{end}}' {{ item.value.container_name }}
+    {% else %}
+    podman inspect --format='{{range .Mounts}}{{.Source}}:{{.Destination}}:{{.Mode}} {{end}}' {{ item.value.container_name }}
+    {% endif %}
+  loop: "{{ bg_state.environments | dict2items }}"
+  register: volume_mount_check
+  failed_when: false
+  tags: ['blue-green', 'health-check', 'volumes']
+
+- name: Generate comprehensive health check report
+  set_fact:
+    health_report:
+      timestamp: "{{ ansible_date_time.iso8601 }}"
+      current_environment: "{{ bg_state.current_environment }}"
+      environments:
+        blue:
+          name: "blue"
+          container_name: "{{ bg_state.environments.blue.container_name }}"
+          container_status: "{{ container_status_check.results[0].stdout if container_status_check.results[0] is succeeded else 'unknown' }}"
+          container_health: "{{ container_health_check.results[0].stdout if container_health_check.results[0] is succeeded else 'unknown' }}"
+          web_interface: "{{ 'OK' if web_interface_check.results[0] is succeeded else 'FAILED' }}"
+          api_access: "{{ 'OK' if api_check.results[0] is succeeded else 'FAILED' }}"
+          agent_port: "{{ 'OK' if agent_port_check.results[0] is succeeded else 'FAILED' }}"
+          port: "{{ bg_state.environments.blue.port }}"
+          agent_port_num: "{{ bg_state.environments.blue.agent_port | default('unknown') }}"
+          url: "http://{{ ansible_default_ipv4.address }}:{{ bg_state.environments.blue.port }}{{ jenkins_context_path | default('') }}"
+          jenkins_version: "{{ jenkins_system_info.blue.version | default('unknown') if jenkins_system_info is defined and 'blue' in jenkins_system_info else 'unknown' }}"
+          overall_status: "{{ 'HEALTHY' if (container_status_check.results[0] is succeeded and container_status_check.results[0].stdout == 'running' and web_interface_check.results[0] is succeeded and api_check.results[0] is succeeded) else 'UNHEALTHY' }}"
+        green:
+          name: "green"
+          container_name: "{{ bg_state.environments.green.container_name }}"
+          container_status: "{{ container_status_check.results[1].stdout if container_status_check.results[1] is succeeded else 'unknown' }}"
+          container_health: "{{ container_health_check.results[1].stdout if container_health_check.results[1] is succeeded else 'unknown' }}"
+          web_interface: "{{ 'OK' if web_interface_check.results[1] is succeeded else 'FAILED' }}"
+          api_access: "{{ 'OK' if api_check.results[1] is succeeded else 'FAILED' }}"
+          agent_port: "{{ 'OK' if agent_port_check.results[1] is succeeded else 'FAILED' }}"
+          port: "{{ bg_state.environments.green.port }}"
+          agent_port_num: "{{ bg_state.environments.green.agent_port | default('unknown') }}"
+          url: "http://{{ ansible_default_ipv4.address }}:{{ bg_state.environments.green.port }}{{ jenkins_context_path | default('') }}"
+          jenkins_version: "{{ jenkins_system_info.green.version | default('unknown') if jenkins_system_info is defined and 'green' in jenkins_system_info else 'unknown' }}"
+          overall_status: "{{ 'HEALTHY' if (container_status_check.results[1] is succeeded and container_status_check.results[1].stdout == 'running' and web_interface_check.results[1] is succeeded and api_check.results[1] is succeeded) else 'UNHEALTHY' }}"
+      load_balancer:
+        configured: "{{ jenkins_vip is defined }}"
+        status: "{{ 'OK' if load_balancer_check is succeeded else 'FAILED' if load_balancer_check is defined else 'N/A' }}"
+        url: "{{ 'http://' + jenkins_vip + ':' + jenkins_master_port|string + jenkins_context_path|default('') if jenkins_vip is defined else 'Not configured' }}"
+      shared_storage:
+        accessible: "{{ shared_storage_check.stat.exists and shared_storage_check.stat.isdir }}"
+        path: "{{ shared_storage_path | default('/shared/jenkins') }}/shared-home"
+      summary:
+        total_environments: 2
+        healthy_environments: "{{ (health_report.environments.blue.overall_status == 'HEALTHY') | int + (health_report.environments.green.overall_status == 'HEALTHY') | int }}"
+        active_environment_healthy: "{{ health_report.environments[bg_state.current_environment].overall_status == 'HEALTHY' }}"
+        deployment_ready: "{{ health_report.environments.blue.overall_status == 'HEALTHY' and health_report.environments.green.overall_status == 'HEALTHY' }}"
+  tags: ['blue-green', 'health-check', 'report']
+
+- name: Save health check report to file
+  copy:
+    content: "{{ health_report | to_nice_json }}"
+    dest: "{{ jenkins_home_dir }}/blue-green/logs/health-check-{{ ansible_date_time.epoch }}.json"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  tags: ['blue-green', 'health-check', 'report']
+
+- name: Display detailed health check report
+  debug:
+    msg: |
+      === Jenkins Blue-Green Health Check Report ===
+      
+      Timestamp: {{ health_report.timestamp }}
+      Current Active Environment: {{ health_report.current_environment | upper }}
+      
+      BLUE Environment:
+        Container: {{ health_report.environments.blue.container_name }}
+        Status: {{ health_report.environments.blue.overall_status }}
+        Container State: {{ health_report.environments.blue.container_status }}
+        Container Health: {{ health_report.environments.blue.container_health }}
+        Web Interface: {{ health_report.environments.blue.web_interface }}
+        API Access: {{ health_report.environments.blue.api_access }}
+        Agent Port: {{ health_report.environments.blue.agent_port }}
+        Jenkins Version: {{ health_report.environments.blue.jenkins_version }}
+        URL: {{ health_report.environments.blue.url }}
+        Agent Port: {{ health_report.environments.blue.agent_port_num }}
+        
+      GREEN Environment:
+        Container: {{ health_report.environments.green.container_name }}
+        Status: {{ health_report.environments.green.overall_status }}
+        Container State: {{ health_report.environments.green.container_status }}
+        Container Health: {{ health_report.environments.green.container_health }}
+        Web Interface: {{ health_report.environments.green.web_interface }}
+        API Access: {{ health_report.environments.green.api_access }}
+        Agent Port: {{ health_report.environments.green.agent_port }}
+        Jenkins Version: {{ health_report.environments.green.jenkins_version }}
+        URL: {{ health_report.environments.green.url }}
+        Agent Port: {{ health_report.environments.green.agent_port_num }}
+        
+      Load Balancer:
+        Configured: {{ health_report.load_balancer.configured }}
+        Status: {{ health_report.load_balancer.status }}
+        URL: {{ health_report.load_balancer.url }}
+        
+      Shared Storage:
+        Accessible: {{ health_report.shared_storage.accessible }}
+        Path: {{ health_report.shared_storage.path }}
+        
+      SUMMARY:
+        Total Environments: {{ health_report.summary.total_environments }}
+        Healthy Environments: {{ health_report.summary.healthy_environments }}
+        Active Environment Healthy: {{ health_report.summary.active_environment_healthy }}
+        Ready for Blue-Green Deployment: {{ health_report.summary.deployment_ready }}
+        
+      Health Check Report Saved: {{ jenkins_home_dir }}/blue-green/logs/health-check-{{ ansible_date_time.epoch }}.json
+  tags: ['blue-green', 'health-check', 'report']
+
+- name: Log health check summary
+  lineinfile:
+    path: "{{ jenkins_home_dir }}/blue-green/logs/health-check.log"
+    line: "{{ ansible_date_time.iso8601 }} - Active: {{ health_report.current_environment | upper }} | Blue: {{ health_report.environments.blue.overall_status }} | Green: {{ health_report.environments.green.overall_status }} | LB: {{ health_report.load_balancer.status }} | Ready: {{ health_report.summary.deployment_ready }}"
+    create: yes
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  tags: ['blue-green', 'health-check', 'logging']
+
+- name: Set health check result facts for other tasks
+  set_fact:
+    jenkins_blue_green_health_check: "{{ health_report }}"
+    jenkins_deployment_ready: "{{ health_report.summary.deployment_ready }}"
+    jenkins_active_environment_healthy: "{{ health_report.summary.active_environment_healthy }}"
+  tags: ['blue-green', 'health-check', 'facts']

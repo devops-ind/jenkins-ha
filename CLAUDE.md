@@ -54,6 +54,9 @@ ansible-playbook ansible/site.yml --syntax-check
 # Install Python dependencies
 pip install -r requirements.txt
 
+# Install Ansible collections
+ansible-galaxy collection install -r collections/requirements.yml
+
 # Setup vault passwords (interactive)
 ansible-vault create ansible/inventories/production/group_vars/all/vault.yml
 ```

@@ -4,10 +4,9 @@ ARG USER_UID=1001
 ARG USER_GID=$USER_UID
 
 ENV DEBIAN_FRONTEND=noninteractive
-
-# Install all packages in a single layer
 RUN set -eux; \
-    apt-get update && apt-get install -y \
+    apt-get update; \
+    apt-get install -y \
     python3 python3-pip python3-yaml python3-jinja2 python3-requests \
     python3-urllib3 python3-cryptography python3-venv python3-packaging \
     ansible openssh-client openssh-server sshpass git curl wget vim nano jq tree htop \

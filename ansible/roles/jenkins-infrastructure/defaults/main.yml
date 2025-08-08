@@ -14,20 +14,41 @@ jenkins_agent_port: 50000
 jenkins_context_path: ""
 
 # Jenkins Master Configuration
-jenkins_master_count: 2
 jenkins_master_memory: "2g"
 jenkins_master_cpu_limit: "1.0"
 jenkins_master_image_tag: "latest"
 jenkins_master_java_opts: "-Djenkins.install.runSetupWizard=false -Dhudson.DNSMultiCast.disabled=true"
+
+# Multi-Team Jenkins Configuration
+jenkins_teams:
+  - name: "devops"
+    port: 8080
+    agent_port: 50000
+    memory: "3g"
+    cpu_limit: "2.0"
+    active_environment: "blue"  # blue or green
+  - name: "developer"
+    port: 8081
+    agent_port: 50001
+    memory: "2g" 
+    cpu_limit: "1.5"
+    active_environment: "blue"
+  - name: "qa"
+    port: 8082
+    agent_port: 50002
+    memory: "2g"
+    cpu_limit: "1.0"
+    active_environment: "blue"
+
+# Blue-Green Deployment Configuration
+jenkins_blue_green_enabled: true
+jenkins_blue_green_switch_enabled: false  # Set to true during deployment switches
 
 # Jenkins Dynamic Agent Configuration
 jenkins_dynamic_agent_memory: "2g"
 jenkins_dynamic_agent_cpu_limit: "1.0"
 jenkins_dynamic_agent_image_tag: "latest"
 jenkins_dynamic_agent_max_instances: 10
-
-# High Availability Configuration
-jenkins_ha_enabled: true
 jenkins_ha_mode: "active-passive"
 jenkins_vip: ""
 jenkins_cluster_name: "jenkins-ha-cluster"
@@ -57,8 +78,10 @@ jenkins_volumes:
     type: "bind"
     source: "/var/run/docker.sock"
 
-# Service Configuration
-jenkins_systemd_enabled: true
+# Service Configuration (Docker Compose is now the default)
+jenkins_systemd_enabled: false
+jenkins_compose_enabled: true
+jenkins_run_validation: true
 jenkins_systemd_restart: "always"
 jenkins_systemd_restart_sec: 30
 

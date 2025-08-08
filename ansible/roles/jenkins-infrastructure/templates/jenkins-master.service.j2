@@ -1,54 +1,55 @@
 [Unit]
-Description=Jenkins Master {{ item }} Container with JCasC
-Requires={% if jenkins_container_runtime == 'docker' %}docker.service{% else %}podman.service{% endif %}
-After={% if jenkins_container_runtime == 'docker' %}docker.service{% else %}podman.service{% endif %} network.target
-Wants=network.target
+Description=Jenkins Blue-Green Multi-Team Coordinator Service
+Documentation=https://jenkins.io/doc/
+{% if jenkins_container_runtime is defined and jenkins_container_runtime != '' %}
+Requires={{ jenkins_container_runtime }}.service
+After={{ jenkins_container_runtime }}.service network-online.target
+PartOf={{ jenkins_container_runtime }}.service
+{% else %}
+After=network-online.target
+{% endif %}
+Wants=network-online.target
 
 [Service]
-Type=exec
+Type=oneshot
+RemainAfterExit=yes
+Restart=no
+TimeoutStartSec=600
+TimeoutStopSec=60
+
+# Pre-start health checks and setup
+ExecStartPre=/bin/bash -c 'mkdir -p {{ jenkins_home_dir }}/logs {{ jenkins_home_dir }}/scripts'
+ExecStartPre=/bin/bash -c 'chown -R {{ jenkins_user }}:{{ jenkins_group }} {{ jenkins_home_dir }}'
+ExecStartPre={{ jenkins_home_dir }}/bin/jenkins-prestart.sh
+
+# Verify containers are ready before declaring service active
+ExecStart=/bin/bash -c 'echo "Jenkins Blue-Green Multi-Team service started at $(date)" >> {{ jenkins_home_dir }}/logs/service.log'
+ExecStart=/bin/bash -c 'echo "Verifying Jenkins team containers..." >> {{ jenkins_home_dir }}/logs/service.log'
+
+# Health check all team environments (with retry logic)
+ExecStartPost=/bin/bash -c 'sleep 15'
+ExecStartPost=/bin/bash -c 'for i in {1..3}; do if {{ jenkins_home_dir }}/bin/jenkins-healthcheck.sh; then break; fi; echo "Health check attempt $i failed, retrying..." >> {{ jenkins_home_dir }}/logs/service.log; sleep 10; done'
+
+# Service shutdown (containers managed by Ansible)
+ExecStop=/bin/bash -c 'echo "Jenkins Blue-Green Multi-Team service stopped at $(date)" >> {{ jenkins_home_dir }}/logs/service.log'
+
+# Security settings
 User={{ jenkins_user }}
 Group={{ jenkins_group }}
-EnvironmentFile=/etc/default/jenkins-{{ item }}
-ExecStartPre=-{% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} stop jenkins-master-{{ item }}
-ExecStartPre=-{% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} rm jenkins-master-{{ item }}
-ExecStart={% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} run --name jenkins-master-{{ item }} \
-  --network {{ jenkins_network_name }} \
-  -p {{ jenkins_port + item - 1 }}:{{ jenkins_port }} \
-  -p {{ jenkins_agent_port + item - 1 }}:{{ jenkins_agent_port }} \
-  -v jenkins-home-{{ item }}:{{ jenkins_home_dir }} \
-  -v jenkins-shared:{{ shared_storage_path | default('/shared/jenkins') }} \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -e JAVA_OPTS="${JAVA_OPTS}" \
-  -e JENKINS_OPTS="--httpPort={{ jenkins_port }}" \
-  -e CASC_JENKINS_CONFIG="${CASC_JENKINS_CONFIG}" \
-  -e HARBOR_REGISTRY_URL="${HARBOR_REGISTRY_URL}" \
-  -e HARBOR_PROJECT_NAME="${HARBOR_PROJECT_NAME}" \
-  -e JENKINS_VERSION="${JENKINS_VERSION}" \
-  -e JENKINS_AGENT_VERSION="${JENKINS_AGENT_VERSION}" \
-  -e TZ="{{ common_timezone | default('UTC') }}" \
-  --memory {{ jenkins_master_memory }} \
-  --cpus {{ jenkins_master_cpu_limit }} \
-  --log-driver {{ jenkins_log_driver }} \
-  --log-opt max-size={{ jenkins_log_max_size }} \
-  --log-opt max-file={{ jenkins_log_max_files }} \
-  --restart {{ jenkins_restart_policy }} \
-  --label service=jenkins-master \
-  --label instance={{ item }} \
-  --label cluster={{ jenkins_cluster_name }} \
-  --label jcasc=enabled \
-  --health-cmd="curl -f http://localhost:{{ jenkins_port }}/login || exit 1" \
-  --health-interval=30s \
-  --health-timeout=10s \
-  --health-retries=3 \
-  --health-start-period=60s \
-  {{ harbor_registry_url | default('docker.io') }}/{{ harbor_project | default('jenkins') }}/jenkins:{{ jenkins_master_image_tag | default('lts') }}
+NoNewPrivileges=yes
 
-ExecStop={% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} stop jenkins-master-{{ item }}
-ExecStopPost={% if jenkins_container_runtime == 'docker' %}/usr/bin/docker{% else %}/usr/bin/podman{% endif %} rm jenkins-master-{{ item }}
-Restart={{ jenkins_systemd_restart }}
-RestartSec={{ jenkins_systemd_restart_sec }}
-TimeoutStartSec=300
-TimeoutStopSec=120
+# Environment
+Environment="JENKINS_HOME={{ jenkins_home_dir }}"
+Environment="JENKINS_USER={{ jenkins_user }}"
+Environment="CONTAINER_RUNTIME={{ jenkins_container_runtime }}"
+
+# Working directory
+WorkingDirectory={{ jenkins_home_dir }}
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jenkins-master
 
 [Install]
 WantedBy=multi-user.target

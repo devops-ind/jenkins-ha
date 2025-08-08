@@ -8,7 +8,7 @@ set -euo pipefail
 LOG_FILE="{{ jenkins_home_dir }}/logs/dynamic-agent-monitor.log"
 JENKINS_URL="{{ jenkins_master_url | default('http://localhost:8080') }}"
 JENKINS_USER="{{ jenkins_admin_username | default('admin') }}"
-JENKINS_TOKEN="{{ jenkins_admin_api_token }}"
+JENKINS_TOKEN="{{ jenkins_admin_api_token | default('') }}"
 MAX_LOG_SIZE=10485760  # 10MB
 
 # Logging function
@@ -28,11 +28,18 @@ rotate_log() {
 # Check Jenkins master connectivity
 check_jenkins_master() {
     local response
-    if response=$(curl -s -w "HTTPSTATUS:%{http_code}" -u "$JENKINS_USER:$JENKINS_TOKEN" "$JENKINS_URL/api/json" 2>/dev/null); then
+    local curl_auth=""
+    
+    # Use authentication only if token is provided
+    if [[ -n "$JENKINS_TOKEN" ]]; then
+        curl_auth="-u $JENKINS_USER:$JENKINS_TOKEN"
+    fi
+    
+    if response=$(curl -s -w "HTTPSTATUS:%{http_code}" $curl_auth "$JENKINS_URL/api/json" 2>/dev/null); then
         local http_code
         http_code=$(echo "$response" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
-        if [[ "$http_code" -eq 200 ]]; then
-            log "Jenkins master is accessible"
+        if [[ "$http_code" -eq 200 || "$http_code" -eq 403 ]]; then
+            log "Jenkins master is accessible (HTTP $http_code)"
             return 0
         else
             log "ERROR: Jenkins master returned HTTP $http_code"
@@ -48,7 +55,7 @@ check_jenkins_master() {
 monitor_dynamic_agents() {
 {% if jenkins_container_runtime == 'docker' %}
     local agent_containers
-    agent_containers=$(docker ps --filter "label=service=jenkins-agent" --filter "label=type=dynamic" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" 2>/dev/null || echo "")
+    agent_containers=$(docker ps --filter "label=service=jenkins-agent" --filter "label=type=dynamic" --format "table {{ '{{.Names}}' }}\t{{ '{{.Status}}' }}\t{{ '{{.Image}}' }}" 2>/dev/null || echo "")
     
     if [[ -n "$agent_containers" ]]; then
         log "Active dynamic agent containers:"
@@ -60,7 +67,7 @@ monitor_dynamic_agents() {
     fi
 {% elif jenkins_container_runtime == 'podman' %}
     local agent_containers
-    agent_containers=$(podman ps --filter "label=service=jenkins-agent" --filter "label=type=dynamic" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" 2>/dev/null || echo "")
+    agent_containers=$(podman ps --filter "label=service=jenkins-agent" --filter "label=type=dynamic" --format "table {{ '{{.Names}}' }}\t{{ '{{.Status}}' }}\t{{ '{{.Image}}' }}" 2>/dev/null || echo "")
     
     if [[ -n "$agent_containers" ]]; then
         log "Active dynamic agent containers:"

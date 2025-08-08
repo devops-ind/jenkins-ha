@@ -15,39 +15,22 @@
   listen: "restart jenkins"
 
 - name: restart jenkins master containers
-  systemd:
-    name: "jenkins-master-{{ item }}"
-    state: restarted
-    enabled: yes
-  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
-  when: jenkins_systemd_enabled | default(false) | bool
-  listen: "restart jenkins master containers"
-
-- name: restart jenkins master containers (docker direct)
   community.docker.docker_container:
-    name: "jenkins-master-{{ item }}"
+    name: "jenkins-{{ item.name }}-{{ item.active_environment }}"
     state: started
     restart: yes
-  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
-  when: not (jenkins_systemd_enabled | default(false) | bool) and jenkins_container_runtime == 'docker'
+  loop: "{{ jenkins_teams | default([]) }}"
+  when: jenkins_container_runtime == 'docker'
   listen: "restart jenkins master containers"
 
-- name: restart jenkins master containers (podman direct)
+- name: restart jenkins master containers (podman)
   containers.podman.podman_container:
-    name: "jenkins-master-{{ item }}"
+    name: "jenkins-{{ item.name }}-{{ item.active_environment }}"
     state: started
     restart: yes
-  loop: "{{ range(1, jenkins_master_count + 1) | list }}"
-  when: not (jenkins_systemd_enabled | default(false) | bool) and jenkins_container_runtime == 'podman'
+  loop: "{{ jenkins_teams | default([]) }}"
+  when: jenkins_container_runtime == 'podman'  
   listen: "restart jenkins master containers"
-
-- name: restart jenkins agents
-  docker_container:
-    name: "{{ item }}"
-    state: started
-    restart: yes
-  with_items: "{{ jenkins_agents | default([]) }}"
-  listen: "restart jenkins agents"
 
 - name: restart firewalld
   systemd:
@@ -60,3 +43,40 @@
   systemd:
     daemon_reload: yes
   listen: "reload systemd"
+
+- name: reload haproxy
+  systemd:
+    name: haproxy
+    state: reloaded
+    enabled: yes
+  listen: "reload haproxy"
+
+- name: restart haproxy
+  systemd:
+    name: haproxy
+    state: restarted
+    enabled: yes
+  listen: "restart haproxy"
+
+- name: restart jenkins-master
+  systemd:
+    name: jenkins-master
+    state: restarted
+    enabled: yes
+    daemon_reload: yes
+  listen: "restart jenkins-master"
+  become: yes
+
+- name: restart jenkins-haproxy
+  systemd:
+    name: jenkins-haproxy
+    state: restarted
+    enabled: yes
+  listen: "restart jenkins-haproxy"
+
+- name: reload jenkins-haproxy
+  systemd:
+    name: jenkins-haproxy
+    state: reloaded
+    enabled: yes
+  listen: "reload jenkins-haproxy"
