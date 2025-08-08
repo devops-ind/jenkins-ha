@@ -10,470 +10,25 @@ jobs:
         description('Jobs for managing Jenkins infrastructure, deployments, and maintenance')
       }
 
-  # Image Builder Pipeline Job
+  # NOTE: Pipeline jobs are defined in their respective Jenkinsfile.* scripts in pipelines/ directory
+  # The Job DSL Seed job below will create these jobs from the jenkins-dsl/ scripts directory
+
+  # Job DSL Seed Job - Single Unified Job for All DSL Operations
   - script: |
-      pipelineJob('Infrastructure/Image-Builder') {
-        displayName('Jenkins Image Builder Pipeline')
+      pipelineJob('Infrastructure/Job-DSL-Seed') {
+        displayName('Job DSL Seed Pipeline')
         description('''
-          Infrastructure Pipeline: Build and Push Jenkins Images to Harbor Registry
-
-          This pipeline builds all Jenkins infrastructure images including:
-          - Jenkins Master with pre-configured plugins and JCasC
-          - DIND Agent for Docker operations
-          - Maven Agent for Java builds
-          - Python Agent for Python builds  
-          - Node.js Agent for frontend builds
-
-          Images are pushed to Harbor registry: {{ harbor_registry_url }}/{{ harbor_project }}
-        ''')
-        
-        properties {
-          buildDiscarder {
-            strategy {
-              logRotator {
-                daysToKeepStr('30')
-                numToKeepStr('20')
-                artifactDaysToKeepStr('-1')
-                artifactNumToKeepStr('-1')
-              }
-            }
-          }
-          
-          pipelineTriggers {
-            triggers {
-              cron {
-                spec('H 1 * * 0')  // Weekly on Sunday at 1 AM
-              }
-            }
-          }
-          
-          parameters {
-            booleanParam {
-              name('FORCE_REBUILD')
-              description('Force rebuild all images without cache')
-              defaultValue(false)
-            }
-            booleanParam {
-              name('PUSH_TO_HARBOR')
-              description('Push built images to Harbor registry')
-              defaultValue(true)
-            }
-            stringParam {
-              name('IMAGE_TAG')
-              description('Tag for built images (default: latest)')
-              defaultValue('latest')
-              trim(true)
-            }
-            choiceParam {
-              name('IMAGES_TO_BUILD')
-              description('Select which images to build')
-              choices(['all', 'master', 'dind-agent', 'maven-agent', 'python-agent', 'nodejs-agent'])
-            }
-          }
-        }
-        
-        definition {
-          cpsScm {
-            scm {
-              git {
-                remote {
-                  url('{{ jenkins_infrastructure_repo_url }}')
-                  credentials('{{ git_credentials_id }}')
-                }
-                branch('*/main')
-              }
-            }
-            scriptPath('pipelines/Jenkinsfile.image-builder')
-            lightweight(true)
-          }
-        }
-      }
-
-  # Backup Pipeline Job
-  - script: |
-      pipelineJob('Infrastructure/Backup-Pipeline') {
-        displayName('Jenkins Backup Pipeline')
-        description('''
-          Infrastructure Pipeline: Automated Backup and Recovery System
-
-          This pipeline manages comprehensive backup operations for:
-          - Jenkins home directory and job configurations
-          - Docker volumes (jenkins_data, shared_workspace, maven-cache, pip-cache)
-          - Configuration files (JCasC, systemd services, SSL certificates)
-          - Monitoring data (Prometheus metrics, Grafana dashboards)
-          - System configurations and secrets
-
-          Backups are stored on shared NFS/CIFS storage: {{ backup_mount_point }}
-          Retention policy: {{ backup_daily_retention | default(30) }} daily, {{ backup_weekly_retention | default(12) }} weekly, {{ backup_monthly_retention | default(12) }} monthly
-        ''')
-        
-        properties {
-          buildDiscarder {
-            strategy {
-              logRotator {
-                daysToKeepStr('90')
-                numToKeepStr('50')
-                artifactDaysToKeepStr('-1')
-                artifactNumToKeepStr('-1')
-              }
-            }
-          }
-          
-          pipelineTriggers {
-            triggers {
-              cron {
-                spec('{{ backup_incremental_schedule | default("0 2 * * 1-6") }}')
-              }
-            }
-          }
-          
-          parameters {
-            choiceParam {
-              name('BACKUP_TYPE')
-              description('Type of backup to perform')
-              choices(['incremental', 'full', 'configuration-only', 'volumes-only'])
-            }
-            booleanParam {
-              name('VERIFY_BACKUP')
-              description('Verify backup integrity after creation')
-              defaultValue(true)
-            }
-            booleanParam {
-              name('CLEANUP_OLD_BACKUPS')
-              description('Clean up old backups according to retention policy')
-              defaultValue(true)
-            }
-            stringParam {
-              name('CUSTOM_TAG')
-              description('Custom tag for backup (optional)')
-              defaultValue('')
-              trim(true)
-            }
-            booleanParam {
-              name('SEND_NOTIFICATIONS')
-              description('Send backup status notifications')
-              defaultValue(true)
-            }
-          }
-        }
-        
-        definition {
-          cpsScm {
-            scm {
-              git {
-                remote {
-                  url('{{ jenkins_infrastructure_repo_url }}')
-                  credentials('{{ git_credentials_id }}')
-                }
-                branch('*/main')
-              }
-            }
-            scriptPath('pipelines/Jenkinsfile.backup')
-            lightweight(true)
-          }
-        }
-      }
-
-  # Infrastructure Update Pipeline Job
-  - script: |
-      pipelineJob('Infrastructure/Infrastructure-Update') {
-        displayName('Infrastructure Update Pipeline')
-        description('''
-          Infrastructure Pipeline: Update and Maintenance Operations
-
-          This pipeline handles:
-          - Rolling updates of Jenkins masters and agents
-          - Configuration updates and deployments
-          - System maintenance and health checks
-          - Service restarts and health validation
-          - Plugin updates and compatibility checks
-        ''')
-        
-        properties {
-          buildDiscarder {
-            strategy {
-              logRotator {
-                daysToKeepStr('60')
-                numToKeepStr('30')
-                artifactDaysToKeepStr('-1')
-                artifactNumToKeepStr('-1')
-              }
-            }
-          }
-          
-          parameters {
-            stringParam {
-              name('IMAGE_TAG')
-              description('Image tag to deploy (default: latest)')
-              defaultValue('latest')
-              trim(true)
-            }
-            booleanParam {
-              name('RESTART_SERVICES')
-              description('Restart Jenkins services after update')
-              defaultValue(false)
-            }
-            stringParam {
-              name('UPDATE_REASON')
-              description('Reason for the update')
-              defaultValue('Manual update')
-              trim(true)
-            }
-            choiceParam {
-              name('UPDATE_SCOPE')
-              description('Scope of the update')
-              choices(['all', 'masters-only', 'configuration-only'])
-            }
-            booleanParam {
-              name('SKIP_HEALTH_CHECKS')
-              description('Skip post-update health checks')
-              defaultValue(false)
-            }
-          }
-        }
-        
-        definition {
-          cpsScm {
-            scm {
-              git {
-                remote {
-                  url('{{ jenkins_infrastructure_repo_url }}')
-                  credentials('{{ git_credentials_id }}')
-                }
-                branch('*/main')
-              }
-            }
-            scriptPath('pipelines/Jenkinsfile.infrastructure-update')
-            lightweight(true)
-          }
-        }
-      }
-
-  # Monitoring Pipeline Job
-  - script: |
-      pipelineJob('Infrastructure/Monitoring-Setup') {
-        displayName('Monitoring Stack Setup')
-        description('''
-          Infrastructure Pipeline: Setup and Configure Monitoring Stack
-
-          This pipeline manages:
-          - Prometheus metrics collection setup
-          - Grafana dashboards deployment
-          - Alerting rules configuration
-          - Monitoring stack health checks
-          - Performance metrics validation
-        ''')
-        
-        properties {
-          buildDiscarder {
-            strategy {
-              logRotator {
-                daysToKeepStr('30')
-                numToKeepStr('20')
-                artifactDaysToKeepStr('-1')
-                artifactNumToKeepStr('-1')
-              }
-            }
-          }
-          
-          parameters {
-            choiceParam {
-              name('MONITORING_ACTION')
-              description('Monitoring operation to perform')
-              choices(['setup', 'update-dashboards', 'update-rules', 'health-check', 'reset'])
-            }
-            booleanParam {
-              name('RESTART_SERVICES')
-              description('Restart monitoring services after changes')
-              defaultValue(true)
-            }
-            booleanParam {
-              name('VALIDATE_METRICS')
-              description('Validate metrics collection after setup')
-              defaultValue(true)
-            }
-          }
-        }
-        
-        definition {
-          cpsScm {
-            scm {
-              git {
-                remote {
-                  url('{{ jenkins_infrastructure_repo_url }}')
-                  credentials('{{ git_credentials_id }}')
-                }
-                branch('*/main')
-              }
-            }
-            scriptPath('pipelines/Jenkinsfile.monitoring')
-            lightweight(true)
-          }
-        }
-      }
-
-  # Security Scan Pipeline Job
-  - script: |
-      pipelineJob('Infrastructure/Security-Scan') {
-        displayName('Security Scan Pipeline')
-        description('''
-          Infrastructure Pipeline: Security Scanning and Compliance
-
-          This pipeline performs:
-          - Container image vulnerability scanning
-          - Security compliance checks
-          - Configuration security validation
-          - Access control auditing
-          - Security report generation
-        ''')
-        
-        properties {
-          buildDiscarder {
-            strategy {
-              logRotator {
-                daysToKeepStr('90')
-                numToKeepStr('40')
-                artifactDaysToKeepStr('30')
-                artifactNumToKeepStr('10')
-              }
-            }
-          }
-          
-          pipelineTriggers {
-            triggers {
-              cron {
-                spec('H 3 * * 1')  // Weekly on Monday at 3 AM
-              }
-            }
-          }
-          
-          parameters {
-            choiceParam {
-              name('SCAN_TYPE')
-              description('Type of security scan to perform')
-              choices(['full', 'images-only', 'configs-only', 'compliance-only'])
-            }
-            booleanParam {
-              name('FAIL_ON_HIGH_SEVERITY')
-              description('Fail pipeline on high severity vulnerabilities')
-              defaultValue(true)
-            }
-            booleanParam {
-              name('GENERATE_REPORTS')
-              description('Generate detailed security reports')
-              defaultValue(true)
-            }
-            booleanParam {
-              name('SEND_NOTIFICATIONS')
-              description('Send security scan notifications')
-              defaultValue(true)
-            }
-          }
-        }
-        
-        definition {
-          cpsScm {
-            scm {
-              git {
-                remote {
-                  url('{{ jenkins_infrastructure_repo_url }}')
-                  credentials('{{ git_credentials_id }}')
-                }
-                branch('*/main')
-              }
-            }
-            scriptPath('pipelines/Jenkinsfile.security-scan')
-            lightweight(true)
-          }
-        }
-      }
-
-  # Health Check Pipeline Job
-  - script: |
-      pipelineJob('Infrastructure/Health-Check') {
-        displayName('Health Check Pipeline')
-        description('''
-          Infrastructure Pipeline: Comprehensive Health Monitoring
-
-          This pipeline performs:
-          - Jenkins master and agent health checks
-          - Service availability monitoring
-          - Resource utilization checks
-          - Network connectivity validation
-          - Performance metrics collection
-        ''')
-        
-        properties {
-          buildDiscarder {
-            strategy {
-              logRotator {
-                daysToKeepStr('30')
-                numToKeepStr('50')
-                artifactDaysToKeepStr('-1')
-                artifactNumToKeepStr('-1')
-              }
-            }
-          }
-          
-          pipelineTriggers {
-            triggers {
-              cron {
-                spec('H/15 * * * *')  // Every 15 minutes
-              }
-            }
-          }
-          
-          parameters {
-            choiceParam {
-              name('CHECK_SCOPE')
-              description('Scope of health checks')
-              choices(['all', 'masters-only', 'services-only', 'network-only'])
-            }
-            booleanParam {
-              name('DETAILED_REPORTING')
-              description('Generate detailed health reports')
-              defaultValue(false)
-            }
-            booleanParam {
-              name('SEND_ALERTS')
-              description('Send alerts for failed health checks')
-              defaultValue(true)
-            }
-          }
-        }
-        
-        definition {
-          cpsScm {
-            scm {
-              git {
-                remote {
-                  url('{{ jenkins_infrastructure_repo_url }}')
-                  credentials('{{ git_credentials_id }}')
-                }
-                branch('*/main')
-              }
-            }
-            scriptPath('pipelines/Jenkinsfile.health-check')
-            lightweight(true)
-          }
-        }
-      }
-
-  # Seed Job Pipeline Job - Runs on Dynamic Python Agent
-  - script: |
-      pipelineJob('Infrastructure/Seed-Job-Pipeline') {
-        displayName('Seed Job Pipeline')
-        description('''
-          Seed Job Pipeline: Dynamic Job Generation and Management
+          Job DSL Seed Pipeline: Unified Job Generation and Management
           
           This pipeline runs on dynamic python-agent and performs:
-          - Job DSL script execution for job generation
+          - Job DSL script execution for all job generation
           - Pipeline configuration management
           - Automated job updates and maintenance
           - Repository-based job definitions processing
           
           Agent: Runs on python dynamic agents with Job DSL capabilities
           Labels: python, python-build
+          DSL Scripts Location: jenkins-dsl/**/*.groovy
         ''')
         
         properties {
@@ -521,7 +76,7 @@ jobs:
             stringParam {
               name('DSL_SCRIPTS_PATH')
               description('Path to Job DSL scripts in repository')
-              defaultValue('job-dsl-scripts/**/*.groovy')
+              defaultValue('jenkins-dsl/**/*.groovy')
               trim(true)
             }
           }
@@ -574,7 +129,7 @@ jobs:
                       script {
                         def dslFiles = findFiles(glob: params.DSL_SCRIPTS_PATH)
                         if (dslFiles.length == 0) {
-                          error "No Job DSL scripts found at: ${params.DSL_SCRIPTS_PATH}"
+                          error "No Job DSL scripts found with pattern: ${params.DSL_SCRIPTS_PATH}"
                         }
                         echo "Found ${dslFiles.length} Job DSL scripts to process"
                         
@@ -677,167 +232,12 @@ jobs:
         }
       }
 
-  # Job DSL Seed Job - Alternative Freestyle Implementation
-  - script: |
-      freeStyleProject('Infrastructure/Job-DSL-Seed') {
-        displayName('Job DSL Seed (Freestyle)')
-        description('''
-          Job DSL Seed Job: Freestyle implementation for job generation
-          
-          This job runs on dynamic python-agent and uses Job DSL plugin to:
-          - Generate Jenkins jobs from DSL scripts
-          - Update existing job configurations  
-          - Manage job lifecycle and cleanup
-          
-          Agent: python-agent (dynamic scaling)
-          Labels: python, python-build
-        ''')
-        
-        label('python')  // Runs on python-agent
-        
-        properties {
-          buildDiscarder {
-            strategy {
-              logRotator {
-                daysToKeepStr('30')
-                numToKeepStr('50')
-                artifactDaysToKeepStr('14')
-                artifactNumToKeepStr('10')
-              }
-            }
-          }
-          
-          pipelineTriggers {
-            triggers {
-              scm {
-                scmpoll_spec('H/30 * * * *')  // Poll SCM every 30 minutes
-              }
-            }
-          }
-          
-          parameters {
-            choiceParam {
-              name('OPERATION')
-              description('DSL operation to perform')  
-              choices(['GENERATE', 'UPDATE', 'VALIDATE', 'CLEANUP'])
-            }
-            textParam {
-              name('DSL_SCRIPTS')
-              description('Job DSL scripts to execute (one per line)')
-              defaultValue('job-definitions/*.groovy\\njobs/**/*.groovy')
-            }
-            booleanParam {
-              name('DELETE_REMOVED')
-              description('Delete jobs/views removed from DSL scripts')
-              defaultValue(false)
-            }
-          }
-        }
-        
-        scm {
-          git {
-            remote {
-              url('{{ jenkins_infrastructure_repo_url }}')
-              credentials('{{ git_credentials_id }}')
-            }
-            branch('*/main')
-            extensions {
-              cleanBeforeCheckout()
-              cloneOptions {
-                shallow(true)
-                depth(1)
-              }
-            }
-          }
-        }
-        
-        steps {
-          shell('''
-            echo "=== Job DSL Seed Execution ==="
-            echo "Running on: $(hostname)"
-            echo "Agent: $NODE_NAME"
-            echo "Labels: $NODE_LABELS" 
-            echo "Operation: $OPERATION"
-            echo "Python version: $(python3 --version)"
-            echo "Workspace: $WORKSPACE"
-            echo ""
-            
-            # List available DSL scripts
-            echo "Available DSL scripts:"
-            find . -name "*.groovy" -type f | head -20
-            echo ""
-          ''')
-          
-          conditionalSteps {
-            condition {
-              stringsMatch('$OPERATION', 'VALIDATE', false)
-            }
-            runner {
-              fail()
-            }
-            steps {
-              shell('''
-                echo "=== Validating DSL Scripts ==="
-                find . -name "*.groovy" -exec groovy -cp /opt/jenkins/lib/job-dsl-core.jar {} \\;
-              ''')
-            }
-          }
-          
-          dsl {
-            external('$DSL_SCRIPTS')
-            removeAction('$DELETE_REMOVED' == 'true' ? 'DELETE' : 'IGNORE')
-            removeViewAction('DELETE')
-            lookupStrategy('SEED_JOB')
-            additionalClasspath('')
-          }
-          
-          shell('''
-            echo "=== Post-DSL Execution ==="
-            echo "Job DSL execution completed at: $(date)"
-            echo "Operation: $OPERATION completed successfully"
-          ''')
-        }
-        
-        publishers {
-          buildDescription('', 'DSL Operation: $OPERATION - Generated jobs from build $BUILD_NUMBER')
-          
-          archiveArtifacts {
-            pattern('**/*.log, **/dsl-*.xml')
-            allowEmpty(true)
-            fingerprint(false)
-            onlyIfSuccessful(false)
-          }
-          
-          wsCleanup {
-            cleanWhenAborted(true)
-            cleanWhenFailure(true) 
-            cleanWhenNotBuilt(true)
-            cleanWhenSuccess(true)
-            cleanWhenUnstable(true)
-            deleteDirs(true)
-          }
-        }
-        
-        wrappers {
-          timeout {
-            absolute(20)
-            abortBuild()
-            writeDescription('Build timed out after 20 minutes')
-          }
-          
-          timestamps()
-          
-          colorizeOutput()
-        }
-      }
-
   # Views Configuration - Infrastructure Folder Views
   - script: |
       listView('Infrastructure/Python Jobs') {
         displayName('Python Jobs View')
         description('View showing all Python-related jobs and seed jobs')
         jobs {
-          name('Infrastructure/Seed-Job-Pipeline')
           name('Infrastructure/Job-DSL-Seed')
           regex('.*[Pp]ython.*')
         }
@@ -860,7 +260,6 @@ jobs:
         displayName('Seed Jobs View')
         description('View for all seed and job generation jobs')
         jobs {
-          name('Infrastructure/Seed-Job-Pipeline')
           name('Infrastructure/Job-DSL-Seed')
           regex('.*[Ss]eed.*')
           regex('.*[Gg]enerat.*')
@@ -889,7 +288,7 @@ jobs:
           name('Infrastructure/Monitoring-Setup')
           name('Infrastructure/Security-Scan')
           name('Infrastructure/Health-Check')
-          name('Infrastructure/Seed-Job-Pipeline')
+          name('Infrastructure/Job-DSL-Seed')
         }
         columns {
           status()
@@ -908,7 +307,7 @@ jobs:
       buildPipelineView('Infrastructure/Build Pipeline View') {
         displayName('Build Pipeline Flow')
         description('Pipeline view showing job dependencies and flow')
-        selectedJob('Infrastructure/Image-Builder')
+        selectedJob('Infrastructure/Job-DSL-Seed')
         numberOfBuilds(5)
         showPipelineParameters(true)
         showPipelineParametersInHeaders(true)
