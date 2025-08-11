@@ -1,0 +1,15 @@
+---
+# Jenkins Master - Universal Container Management
+
+- name: Create Jenkins volumes for blue-green environments
+  include_tasks: "volumes/{{ jenkins_master_container_runtime }}.yml"
+  tags: ['container', 'volumes']
+
+- name: Deploy Jenkins containers for blue-green environments
+  include_tasks: "containers/{{ jenkins_master_container_runtime }}.yml"
+  tags: ['container', 'deploy']
+
+- name: Wait for containers to be operational
+  pause:
+    seconds: "{{ jenkins_master_startup_wait_time }}"
+  tags: ['container', 'wait']

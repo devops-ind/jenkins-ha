@@ -1,0 +1,252 @@
+---
+# Jenkins Infrastructure with Reusable Jenkins Master Role
+# This demonstrates the new jenkins-master role usage
+
+# Dynamic host selection based on deployment_mode
+- name: Set target hosts based on deployment mode
+  hosts: localhost
+  gather_facts: no
+  run_once: true
+  tasks:
+    - name: Determine target hosts for deployment
+      set_fact:
+        target_hosts: >-
+          {% if hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') == 'devcontainer' %}
+          localhost
+          {% elif hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') == 'production' %}
+          jenkins_masters:monitoring:harbor:load_balancers:shared_storage
+          {% elif hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') == 'staging' %}
+          jenkins_masters:monitoring
+          {% else %}
+          localhost
+          {% endif %}
+    
+    - name: Display deployment configuration
+      debug:
+        msg:
+          - "Deployment Mode: {{ hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') }}"
+          - "Target Hosts: {{ target_hosts }}"
+
+- name: Bootstrap Infrastructure
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'all') }}"
+  become: yes
+  gather_facts: yes
+  serial: "{{ serial_execution | default('100%') }}"
+  vars:
+    deployment_environment: "{{ lookup('env', 'DEPLOYMENT_ENV') | default('local') }}"
+  roles:
+    - role: common
+      tags: ['common', 'bootstrap']
+    - role: docker
+      tags: ['docker', 'bootstrap']
+    - role: shared-storage
+      tags: ['storage', 'bootstrap']
+      when: shared_storage_enabled | default(true)
+    - role: security
+      tags: ['security', 'bootstrap']
+
+- name: Setup Harbor Registry Integration
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'harbor') }}"
+  become: yes
+  gather_facts: yes
+  vars:
+    harbor_registry_url: "{{ harbor_registry_url }}"
+    harbor_project: "{{ harbor_project }}"
+  roles:
+    - role: harbor
+      tags: ['harbor', 'registry']
+      when: harbor_integration_enabled | default(true)
+
+# NEW: Deploy Jenkins Masters using the reusable jenkins-master role
+- name: Deploy DevOps Team Jenkins Master
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'jenkins_masters') }}"
+  become: yes
+  gather_facts: yes
+  vars:
+    jenkins_master_container_runtime: "{{ jenkins_container_runtime | default('podman') }}"
+    jenkins_master_config:
+      team_name: "devops"
+      active_environment: "blue"
+      ports:
+        web: 8080
+        agent: 50000
+      resources:
+        memory: "3g"
+        cpu: "2.0"
+      env_vars:
+        JENKINS_TEAM: "devops"
+        JENKINS_ADMIN_PASSWORD: "{{ devops_jenkins_admin_password }}"
+      labels:
+        team: "devops"
+        tier: "production"
+        environment: "{{ deployment_mode | default('local') }}"
+      credentials:
+        - type: "usernamePassword"
+          id: "devops-git-credentials"
+          username: "{{ devops_git_username }}"
+          password: "{{ devops_git_password }}"
+          description: "DevOps Team Git Credentials"
+  roles:
+    - role: jenkins-master
+      tags: ['jenkins', 'devops', 'deploy']
+
+- name: Deploy Developer Team Jenkins Master
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'jenkins_masters') }}"
+  become: yes
+  gather_facts: yes
+  vars:
+    jenkins_master_container_runtime: "{{ jenkins_container_runtime | default('podman') }}"
+    jenkins_master_config:
+      team_name: "developer"
+      active_environment: "blue"
+      ports:
+        web: 8081
+        agent: 50001
+      resources:
+        memory: "2g"
+        cpu: "1.5"
+      env_vars:
+        JENKINS_TEAM: "developer"
+        JENKINS_ADMIN_PASSWORD: "{{ developer_jenkins_admin_password }}"
+      labels:
+        team: "developer"
+        tier: "production"
+        environment: "{{ deployment_mode | default('local') }}"
+      credentials:
+        - type: "usernamePassword"
+          id: "developer-git-credentials"
+          username: "{{ developer_git_username }}"
+          password: "{{ developer_git_password }}"
+          description: "Developer Team Git Credentials"
+  roles:
+    - role: jenkins-master
+      tags: ['jenkins', 'developer', 'deploy']
+
+- name: Deploy QA Team Jenkins Master
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'jenkins_masters') }}"
+  become: yes
+  gather_facts: yes
+  vars:
+    jenkins_master_container_runtime: "{{ jenkins_container_runtime | default('podman') }}"
+    jenkins_master_config:
+      team_name: "qa"
+      active_environment: "blue"
+      ports:
+        web: 8082
+        agent: 50002
+      resources:
+        memory: "2g"
+        cpu: "1.0"
+      env_vars:
+        JENKINS_TEAM: "qa"
+        JENKINS_ADMIN_PASSWORD: "{{ qa_jenkins_admin_password }}"
+      labels:
+        team: "qa"
+        tier: "production"
+        environment: "{{ deployment_mode | default('local') }}"
+      credentials:
+        - type: "usernamePassword"
+          id: "qa-git-credentials"
+          username: "{{ qa_git_username }}"
+          password: "{{ qa_git_password }}"
+          description: "QA Team Git Credentials"
+  roles:
+    - role: jenkins-master
+      tags: ['jenkins', 'qa', 'deploy']
+
+- name: Configure High Availability
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'load_balancers:jenkins_masters') }}"
+  become: yes
+  gather_facts: yes
+  roles:
+    - role: high-availability
+      tags: ['ha', 'cluster']
+      when: 
+        - jenkins_ha_enabled | default(false)
+        - groups['jenkins_masters'] | default([]) | length > 1
+
+- name: Setup Monitoring Stack
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'monitoring') }}"
+  become: yes
+  gather_facts: yes
+  roles:
+    - role: monitoring
+      tags: ['monitoring', 'prometheus', 'grafana']
+      when: monitoring_enabled | default(true)
+
+- name: Configure Backup System
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'shared_storage:jenkins_masters') }}"
+  become: yes
+  gather_facts: yes
+  roles:
+    - role: backup
+      tags: ['backup', 'storage']
+      when: backup_enabled | default(true)
+
+- name: Post-Deployment Verification
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'jenkins_masters:monitoring') }}"
+  become: no
+  gather_facts: yes
+  tasks:
+    - name: Verify Jenkins teams accessibility
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ item.port }}/api/json"
+        method: GET
+        status_code: [200, 403]
+      register: jenkins_team_checks
+      loop:
+        - { team: "devops", port: 8080 }
+        - { team: "developer", port: 8081 }  
+        - { team: "qa", port: 8082 }
+      ignore_errors: yes
+      tags: ['verify', 'teams']
+
+    - name: Verify monitoring endpoints
+      uri:
+        url: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('http://localhost:9090/api/v1/query?query=up', 'http://' + hostvars[groups['monitoring'][0]]['ansible_default_ipv4']['address'] + ':9090/api/v1/query?query=up') }}"
+        method: GET
+      register: prometheus_check
+      when: 
+        - monitoring_enabled | default(true)
+        - (deployment_mode | default('devcontainer') == 'devcontainer') or (groups['monitoring'] is defined and groups['monitoring'] | length > 0)
+      ignore_errors: yes
+      tags: ['verify', 'monitoring']
+
+    - name: Display deployment summary
+      debug:
+        msg: |
+          🎉 Jenkins Multi-Team Infrastructure Deployment Completed!
+          
+          📋 Team Access Information:
+          {% if deployment_mode | default('devcontainer') == 'devcontainer' %}
+          DevOps Team:    http://localhost:8080
+          Developer Team: http://localhost:8081
+          QA Team:        http://localhost:8082
+          {% else %}
+          {% for host in groups['jenkins_masters'] | default([]) %}
+          DevOps Team:    http://{{ hostvars[host]['ansible_default_ipv4']['address'] }}:8080
+          Developer Team: http://{{ hostvars[host]['ansible_default_ipv4']['address'] }}:8081
+          QA Team:        http://{{ hostvars[host]['ansible_default_ipv4']['address'] }}:8082
+          {% endfor %}
+          {% endif %}
+          
+          🔧 Management Scripts (per team):
+          • Blue-Green Switch: /var/jenkins/scripts/blue-green-switch-{team}.sh
+          • Health Check: /var/jenkins/scripts/blue-green-healthcheck-{team}.sh
+          • Monitoring: /var/jenkins/scripts/health-monitor-{team}.sh
+          
+          📊 Blue-Green Status:
+          • All teams start with BLUE environment active
+          • Use switch scripts for zero-downtime deployments
+          • HAProxy provides load balancing and health checks
+          
+          🏷️ Available Agent Labels (per team):
+          • {team}-maven (Java/Maven builds)
+          • {team}-python (Python builds) 
+          • {team}-nodejs (Node.js/Frontend builds)
+          • dind (Docker-in-Docker for container builds)
+          
+          📊 Monitoring: {{ monitoring_enabled | default(true) and 'Enabled' or 'Disabled' }}
+          💾 Backup: {{ backup_enabled | default(true) and 'Enabled' or 'Disabled' }}
+          🏔️ HA: {{ jenkins_ha_enabled | default(false) and 'Active' or 'Single Node' }}
+      tags: ['verify', 'summary']

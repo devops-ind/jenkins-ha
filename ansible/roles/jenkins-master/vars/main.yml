@@ -1,0 +1,85 @@
+---
+# Jenkins Master Role - Internal Variables
+# These variables are used internally by the role and should not be overridden
+
+# Internal container states mapping
+_jenkins_container_states:
+  blue:
+    active_when: "{{ jenkins_master_config.active_environment == 'blue' }}"
+    state: "{{ 'started' if jenkins_master_config.active_environment == 'blue' else 'stopped' }}"
+  green:
+    active_when: "{{ jenkins_master_config.active_environment == 'green' }}"
+    state: "{{ 'started' if jenkins_master_config.active_environment == 'green' else 'stopped' }}"
+
+# Internal port configurations
+_jenkins_port_configs:
+  active_ports:
+    web: "{{ jenkins_master_config.ports.web }}:{{ jenkins_master_port }}"
+    agent: "{{ jenkins_master_config.ports.agent }}:{{ jenkins_master_agent_port }}"
+  inactive_ports: []
+
+# Internal volume mappings
+_jenkins_volume_mappings:
+  home: "{{ jenkins_master_container_home }}"
+  shared: "{{ jenkins_master_shared_path }}"
+  docker_sock: "/var/run/docker.sock"
+
+# Container runtime specific configurations
+_container_runtime_configs:
+  docker:
+    module: "community.docker"
+    container_module: "docker_container"
+    volume_module: "docker_volume"
+    network_module: "docker_network"
+  podman:
+    module: "containers.podman"
+    container_module: "podman_container"
+    volume_module: "podman_volume"
+    network_module: "podman_network"
+
+# Health check configurations per runtime
+_health_check_configs:
+  docker:
+    test_format: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_master_port }}/login"]
+    interval: "30s"
+    timeout: "10s"
+    retries: 3
+    start_period: "60s"
+  podman:
+    test_format: "curl -f http://localhost:{{ jenkins_master_port }}/login || exit 1"
+    interval: "30s"
+    timeout: "10s"
+    retries: 3
+    start_period: "60s"
+
+# Script templates mapping
+_script_templates:
+  blue_green_switch: "blue-green-switch.sh.j2"
+  blue_green_healthcheck: "blue-green-healthcheck.sh.j2"
+  blue_green_monitor: "blue-green-monitor.sh.j2"
+  health_monitor: "health-monitor.sh.j2"
+
+# Configuration paths
+_config_paths:
+  haproxy_conf_dir: "/etc/haproxy/conf.d"
+  jenkins_scripts_dir: "{{ jenkins_master_home_dir }}/scripts"
+  jenkins_casc_dir: "{{ jenkins_master_home_dir }}/{{ jenkins_master_config.team_name }}/{{ jenkins_master_config.active_environment }}/casc_configs"
+
+# Internal validation rules
+_validation_rules:
+  required_fields:
+    - "jenkins_master_config.team_name"
+    - "jenkins_master_config.active_environment"
+    - "jenkins_master_config.ports.web"
+    - "jenkins_master_config.ports.agent"
+    - "jenkins_master_config.resources.memory"
+    - "jenkins_master_config.resources.cpu"
+  valid_environments:
+    - "blue"
+    - "green"
+  valid_runtimes:
+    - "docker"
+    - "podman"
+  port_range:
+    min: 1024
+    max: 65535

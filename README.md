@@ -2,7 +2,7 @@
 
 ![Jenkins HA](https://img.shields.io/badge/Jenkins-HA%20Ready-green) ![Ansible](https://img.shields.io/badge/Ansible-2.14+-blue) ![Docker](https://img.shields.io/badge/Docker-24.x-blue) ![Production Ready](https://img.shields.io/badge/Production-Ready-brightgreen)
 
-A production-grade, containerized Jenkins High Availability infrastructure managed through Ansible automation. This repository provides complete infrastructure-as-code for deploying and managing a highly available Jenkins environment with comprehensive security, monitoring, and disaster recovery capabilities.
+A production-grade, containerized Jenkins infrastructure with **Blue-Green Deployment** and **Multi-Team Support** managed through Ansible automation. This repository provides complete infrastructure-as-code for deploying and managing a scalable Jenkins environment with blue-green deployment strategy, comprehensive security, monitoring, and disaster recovery capabilities.
 
 ## Table of Contents
 
@@ -21,19 +21,23 @@ A production-grade, containerized Jenkins High Availability infrastructure manag
 
 This infrastructure provides:
 
-- **High Availability**: Active-passive Jenkins masters with automatic failover
-- **Containerized Deployment**: Docker/Podman containers managed by systemd
+- **Blue-Green Deployment**: Zero-downtime deployments with automated environment switching
+- **Multi-Team Support**: Isolated Jenkins masters for multiple teams (devops, developer, qa)
+- **Containerized Architecture**: Docker/Podman containers with native Ansible orchestration
+- **Dynamic Agent Scaling**: Container-based agents provisioned on-demand via Docker Cloud Plugin
+- **HAProxy Load Balancing**: Advanced traffic routing with health checks and failover
 - **Security Hardening**: Comprehensive security controls and compliance measures
 - **Monitoring Stack**: Prometheus/Grafana with custom dashboards and alerting
 - **Automated Backups**: Multi-tier backup strategy with disaster recovery procedures
-- **Dynamic Agents**: Container-based agents provisioned on-demand via Docker Cloud Plugin
 - **Private Registry**: Harbor integration for secure image management
+- **Job DSL Integration**: Automated job creation and management through code
 
 ### Key Components
 
-- **Jenkins Masters**: HA cluster with shared storage and load balancing
+- **Blue-Green Jenkins Masters**: Multiple team environments with zero-downtime switching
+- **HAProxy Load Balancer**: Traffic routing with health checks and API management
 - **Dynamic Agent Templates**: On-demand containerized agents (DIND, Maven, Python, Node.js)
-- **Load Balancer**: HAProxy with Keepalived for VIP management
+- **Job DSL Automation**: Code-driven job creation and management
 - **Registry**: Harbor private Docker registry with vulnerability scanning
 - **Monitoring**: Prometheus metrics collection and Grafana visualization
 - **Storage**: NFS/GlusterFS shared storage for persistence
@@ -88,54 +92,73 @@ ansible-playbook ansible/site.yml --tags security --check
 
 ## Architecture
 
-### High-Level Architecture
+### Blue-Green Multi-Team Architecture
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     Load Balancer                         │
-│                  (HAProxy + Keepalived)                   │
-│                     VIP: 10.0.1.10                        │
-└─────────────────┬───────────────────────────────────────────┘
-                  │
-┌─────────────────▼───────────────┐ ┌─────────────────────────┐
-│      Jenkins Master 1           │ │      Jenkins Master 2   │
-│       (Active - 8080)           │ │      (Standby - 8081)   │
-│  ┌─────────────────────────────┐ │ │ ┌─────────────────────┐ │
-│  │ jenkins-master-1 Container  │ │ │ │ jenkins-master-2    │ │
-│  │ - Custom Image              │ │ │ │ - Custom Image      │ │
-│  │ - Systemd Service           │ │ │ │ - Systemd Service   │ │
-│  │ - Health Monitoring         │ │ │ │ - Health Monitoring │ │
-│  │ - JCasC Configuration       │ │ │ │ - JCasC Config      │ │
-│  └─────────────────────────────┘ │ │ └─────────────────────┘ │
-└─────────────────┬───────────────┘ └─────────┬───────────────┘
-                  │                           │
-                  └──────────┬────────────────┘
-                             │
-                    ┌────────▼─────────┐
-                    │  Shared Storage  │
-                    │   (NFS/GlusterFS)│
-                    │ - Jenkins Home   │
-                    │ - Build Artifacts│
-                    │ - Configurations │
-                    └──────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          HAProxy Load Balancer                             │
+│                      Statistics: 8404 | API: 8405                          │
+└─────────────────────────────────┬───────────────────────────────────────────┘
+                                  │
+        ┌─────────────────────────┼─────────────────────────┐
+        │                         │                         │
+┌───────▼─────────┐    ┌─────────▼──────────┐    ┌─────────▼─────────┐
+│   DevOps Team   │    │  Developer Team    │    │     QA Team       │
+│   Port: 8080    │    │   Port: 8090       │    │   Port: 8100      │
+└─────────────────┘    └────────────────────┘    └───────────────────┘
+│                      │                        │
+│ ┌─────────────────┐  │ ┌─────────────────┐    │ ┌─────────────────┐
+│ │ Blue Environment│  │ │ Blue Environment│    │ │ Blue Environment│
+│ │ jenkins-devops- │  │ │ jenkins-dev-    │    │ │ jenkins-qa-     │
+│ │ blue (Active)   │  │ │ blue (Active)   │    │ │ blue (Active)   │
+│ └─────────────────┘  │ └─────────────────┘    │ └─────────────────┘
+│                      │                        │
+│ ┌─────────────────┐  │ ┌─────────────────┐    │ ┌─────────────────┐
+│ │Green Environment│  │ │Green Environment│    │ │Green Environment│
+│ │ jenkins-devops- │  │ │ jenkins-dev-    │    │ │ jenkins-qa-     │
+│ │ green (Standby) │  │ │ green (Standby) │    │ │ green (Standby) │
+│ └─────────────────┘  │ └─────────────────┘    │ └─────────────────┘
+└──────────────────────┴────────────────────────┴───────────────────┘
+                                  │
+                         ┌────────▼─────────┐
+                         │  Shared Storage  │
+                         │   (NFS/GlusterFS)│
+                         │ - Jenkins Homes  │
+                         │ - Build Artifacts│
+                         │ - Team Configs   │
+                         └──────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        Dynamic Agent Pool                                   │
+│  ┌───────────────┐ ┌───────────────┐ ┌───────────────┐ ┌───────────────┐  │
+│  │ DIND Agent    │ │ Maven Agent   │ │ Python Agent  │ │ Node.js Agent │  │
+│  │ (Docker-in-   │ │ (Java Builds) │ │ (Python Apps) │ │ (Frontend)    │  │
+│  │  Docker)      │ │               │ │               │ │               │  │
+│  └───────────────┘ └───────────────┘ └───────────────┘ └───────────────┘  │
+│                     Auto-scaling: 0-10 agents per team                     │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Container Architecture
-- **Runtime Support**: Docker 24.x and Podman 4.x
+- **Runtime Support**: Docker 24.x and Podman 4.x with native Ansible orchestration
+- **Blue-Green Deployment**: Automated environment switching with health checks
 - **Image Management**: Custom-built images with security hardening
-- **Orchestration**: Systemd service management (no Docker Compose dependency)
+- **Orchestration**: Direct container management (no Docker Compose dependency)
 - **Networking**: Custom bridge networks with DNS resolution
 - **Storage**: Named volumes and bind mounts for persistence
+- **Multi-Team Isolation**: Separate container environments per team
 
 For detailed architecture information, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Features
 
 ### Production-Ready Infrastructure
-- ✅ **High Availability**: Active-passive masters with automatic failover
-- ✅ **Container Orchestration**: Docker/Podman with systemd management
-- ✅ **Load Balancing**: HAProxy with health checks and session persistence
-- ✅ **Shared Storage**: NFS/GlusterFS for shared Jenkins home
+- ✅ **Blue-Green Deployment**: Zero-downtime deployments with automated switching
+- ✅ **Multi-Team Support**: Isolated Jenkins environments for different teams
+- ✅ **Container Orchestration**: Docker/Podman with native Ansible management
+- ✅ **HAProxy Load Balancing**: Advanced traffic routing with health checks and API
+- ✅ **Shared Storage**: NFS/GlusterFS for persistent Jenkins data
 - ✅ **SSL/TLS**: Certificate management and encryption
+- ✅ **Job DSL Automation**: Code-driven job creation and pipeline management
 
 ### Security & Compliance
 - ✅ **System Hardening**: CIS benchmark compliance and security controls
@@ -159,11 +182,13 @@ For detailed architecture information, see [docs/ARCHITECTURE.md](docs/ARCHITECT
 - ✅ **Backup Verification**: Automated backup testing and validation
 
 ### DevOps Integration
-- ✅ **CI/CD Pipelines**: Pre-configured Jenkins pipelines
+- ✅ **Infrastructure Pipelines**: Complete infrastructure management pipelines
 - ✅ **Dynamic Agent Templates**: DIND, Maven, Python, Node.js container agents
-- ✅ **Harbor Registry**: Private Docker registry with RBAC
-- ✅ **Infrastructure as Code**: Complete Ansible automation
-- ✅ **Environment Management**: Staging, production, and local environments
+- ✅ **Job DSL Scripts**: Organized job definitions in `jenkins-dsl/` directory
+- ✅ **Harbor Registry**: Private Docker registry with RBAC and vulnerability scanning
+- ✅ **Infrastructure as Code**: Complete Ansible automation with blue-green deployment
+- ✅ **Environment Management**: Production, staging, and devcontainer support
+- ✅ **Multi-Team Workflows**: Isolated CI/CD environments per development team
 
 ## Prerequisites
 
@@ -374,9 +399,11 @@ ansible-playbook ansible/site.yml --tags ssl-certificates
 
 ### Core Documentation
 - **[Architecture](docs/ARCHITECTURE.md)**: System design and component overview
+- **[Blue-Green Deployment](docs/BLUE-GREEN-DEPLOYMENT.md)**: Zero-downtime deployment strategy
+- **[Job DSL Management](docs/JOB-DSL-MANAGEMENT.md)**: Automated job creation and pipeline management
+- **[Playbook Organization](docs/PLAYBOOK-ORGANIZATION.md)**: Ansible playbook structure and usage
 - **[Deployment](docs/DEPLOYMENT.md)**: Complete deployment procedures
 - **[Security](docs/SECURITY.md)**: Security hardening and compliance
-- **[High Availability](docs/HIGH-AVAILABILITY.md)**: HA configuration and failover
 - **[Backup & Recovery](docs/BACKUP-RECOVERY.md)**: Backup strategies and disaster recovery
 - **[Monitoring](docs/MONITORING.md)**: Observability and alerting setup
 - **[Troubleshooting](docs/TROUBLESHOOTING.md)**: Common issues and solutions

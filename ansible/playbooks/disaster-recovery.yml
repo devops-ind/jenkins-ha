@@ -1,8 +1,356 @@
 ---
-- name: disaster-recovery playbook
-  hosts: all
+# Disaster Recovery Playbook
+# This playbook handles comprehensive disaster recovery operations for Jenkins infrastructure
+
+- name: Jenkins Infrastructure Disaster Recovery
+  hosts: "{{ target_hosts | default('all') }}"
   become: yes
-  tasks:
-    - name: Execute disaster-recovery
+  gather_facts: yes
+  vars:
+    recovery_operation: "{{ dr_operation | default('assess') }}"
+    recovery_timestamp: "{{ backup_timestamp | default('latest') }}"
+    recovery_scope: "{{ dr_scope | default('full') }}"
+    recovery_validation: "{{ validate_recovery | default(true) }}"
+    dry_run: "{{ dr_dry_run | default(true) }}"
+    
+  pre_tasks:
+    - name: Validate disaster recovery parameters
+      assert:
+        that:
+          - recovery_operation in ['assess', 'restore', 'failover', 'test-recovery']
+          - recovery_scope in ['full', 'jenkins-only', 'config-only', 'data-only']
+        fail_msg: |
+          Invalid parameters:
+          - recovery_operation must be: assess, restore, failover, or test-recovery
+          - recovery_scope must be: full, jenkins-only, config-only, or data-only
+    
+    - name: Display disaster recovery information
       debug:
-        msg: "Running disaster-recovery tasks"
+        msg: |
+          🚨 DISASTER RECOVERY OPERATION 🚨
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          Operation: {{ recovery_operation | upper }}
+          Scope: {{ recovery_scope | upper }}
+          Timestamp: {{ recovery_timestamp }}
+          Validation: {{ recovery_validation }}
+          Dry Run: {{ dry_run }}
+          Target Hosts: {{ ansible_play_hosts | join(', ') }}
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          
+          ⚠️  WARNING: This operation will affect production services!
+
+  tasks:
+    # Infrastructure Assessment
+    - name: Assess current infrastructure state
+      block:
+        - name: Check Docker service status
+          systemd:
+            name: docker
+          register: docker_service_status
+          ignore_errors: yes
+          
+        - name: Check running containers
+          shell: docker ps --format 'table {{ "{{.Names}}" }}\t{{ "{{.Status}}" }}\t{{ "{{.Image}}" }}'
+          register: running_containers
+          ignore_errors: yes
+          changed_when: false
+          
+        - name: Check Jenkins data directories
+          stat:
+            path: "{{ item }}"
+          register: data_directory_status
+          loop:
+            - "{{ jenkins_home_dir }}"
+            - "{{ backup_local_path | default('/opt/backups') }}"
+            - "{{ shared_storage_path | default('/shared') }}"
+          ignore_errors: yes
+          
+        - name: Check available backups
+          find:
+            paths: "{{ backup_local_path | default('/opt/backups') }}"
+            patterns: "jenkins-backup-*.tar.gz"
+            age: "-30d"
+          register: available_backups
+          ignore_errors: yes
+          
+        - name: Generate infrastructure assessment
+          debug:
+            msg: |
+              📊 Infrastructure Assessment:
+              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+              Docker Service: {{ 'Running' if docker_service_status.status.ActiveState == 'active' else 'Stopped/Failed' }}
+              
+              Running Containers:
+              {{ running_containers.stdout if running_containers is succeeded else 'Unable to check containers' }}
+              
+              Data Directories:
+              {% for dir_stat in data_directory_status.results %}
+              {{ dir_stat.item }}: {{ 'Exists' if dir_stat.stat.exists else 'Missing' }}
+              {% endfor %}
+              
+              Available Backups: {{ available_backups.matched | default(0) }} files found
+              Latest Backup: {{ available_backups.files | sort(attribute='mtime') | last | default({'path': 'None'}) | json_query('path') | basename if available_backups.matched > 0 else 'None' }}
+              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      when: recovery_operation == 'assess'
+      tags: ['assess']
+
+    # Service Restoration
+    - name: Restore Jenkins infrastructure from backup
+      block:
+        - name: Stop all Jenkins services
+          systemd:
+            name: "{{ item }}"
+            state: stopped
+          loop:
+            - jenkins-master
+            - jenkins-haproxy
+          ignore_errors: yes
+          when: not dry_run
+          
+        - name: Stop all Jenkins containers
+          shell: docker stop $(docker ps -q --filter "name=jenkins-*") || true
+          when: not dry_run
+          ignore_errors: yes
+          
+        - name: Identify backup file to restore
+          set_fact:
+            backup_file: >-
+              {%- if recovery_timestamp == 'latest' -%}
+              {{ available_backups.files | sort(attribute='mtime') | last | json_query('path') if available_backups.matched > 0 else '' }}
+              {%- else -%}
+              {{ backup_local_path }}/jenkins-backup-{{ recovery_timestamp }}.tar.gz
+              {%- endif -%}
+              
+        - name: Validate backup file exists
+          stat:
+            path: "{{ backup_file }}"
+          register: backup_file_stat
+          failed_when: not backup_file_stat.stat.exists
+          when: backup_file != ''
+          
+        - name: Create restore directory
+          file:
+            path: /tmp/jenkins-restore
+            state: directory
+            mode: '0755'
+          when: not dry_run
+          
+        - name: Extract backup archive
+          unarchive:
+            src: "{{ backup_file }}"
+            dest: /tmp/jenkins-restore
+            remote_src: yes
+            owner: jenkins
+            group: jenkins
+          when: not dry_run and backup_file != ''
+          register: backup_extraction
+          
+        - name: Restore Jenkins home directory
+          synchronize:
+            src: /tmp/jenkins-restore/jenkins_home/
+            dest: "{{ jenkins_home_dir }}/"
+            delete: yes
+            owner: no
+            group: no
+          delegate_to: "{{ inventory_hostname }}"
+          when: 
+            - not dry_run 
+            - backup_extraction is succeeded
+            - recovery_scope in ['full', 'jenkins-only', 'data-only']
+            
+        - name: Restore configuration files
+          synchronize:
+            src: /tmp/jenkins-restore/config/
+            dest: /etc/jenkins/
+            delete: no
+            owner: no
+            group: no
+          delegate_to: "{{ inventory_hostname }}"
+          when: 
+            - not dry_run 
+            - backup_extraction is succeeded
+            - recovery_scope in ['full', 'jenkins-only', 'config-only']
+            
+        - name: Set correct permissions
+          file:
+            path: "{{ jenkins_home_dir }}"
+            owner: jenkins
+            group: jenkins
+            recurse: yes
+          when: not dry_run
+          
+        - name: Display restoration preview (dry run)
+          debug:
+            msg: |
+              🔍 DRY RUN - Would restore:
+              Backup File: {{ backup_file }}
+              Target: {{ jenkins_home_dir }}
+              Scope: {{ recovery_scope }}
+              
+              Restoration would include:
+              {% if recovery_scope in ['full', 'jenkins-only', 'data-only'] %}
+              ✅ Jenkins home directory and job data
+              {% endif %}
+              {% if recovery_scope in ['full', 'jenkins-only', 'config-only'] %}
+              ✅ Configuration files and JCasC
+              {% endif %}
+              {% if recovery_scope in ['full'] %}
+              ✅ System configuration and SSL certificates
+              {% endif %}
+          when: dry_run
+          
+      when: recovery_operation == 'restore'
+      tags: ['restore']
+
+    # Service Failover
+    - name: Execute service failover
+      block:
+        - name: Switch to backup environment
+          include_tasks: blue-green-operations.yml
+          vars:
+            operation: switch
+            target_environment: "{{ failover_environment | default('green') }}"
+            target_team: all
+            skip_health_checks: false
+            
+        - name: Verify failover success
+          uri:
+            url: "http://{{ ansible_default_ipv4.address }}:8080/api/json"
+            method: GET
+            timeout: 30
+          register: failover_health_check
+          retries: 10
+          delay: 30
+          
+        - name: Display failover results
+          debug:
+            msg: |
+              🔄 Failover Results:
+              Target Environment: {{ failover_environment | default('green') }}
+              Status: {{ 'Success' if failover_health_check is succeeded else 'Failed' }}
+              Jenkins Accessible: {{ 'Yes' if failover_health_check is succeeded else 'No' }}
+      when: recovery_operation == 'failover'
+      tags: ['failover']
+
+    # Test Recovery
+    - name: Test disaster recovery procedures
+      block:
+        - name: Create test backup
+          shell: "{{ jenkins_home_dir }}/bin/backup.sh test-backup"
+          register: test_backup_creation
+          
+        - name: Simulate service failure
+          systemd:
+            name: jenkins-master
+            state: stopped
+          when: not dry_run
+          
+        - name: Test backup restoration
+          include_tasks: disaster-recovery.yml
+          vars:
+            recovery_operation: restore
+            recovery_timestamp: test-backup
+            dry_run: "{{ dr_dry_run | default(true) }}"
+            
+        - name: Restart services
+          systemd:
+            name: jenkins-master
+            state: started
+          when: not dry_run
+          
+        - name: Verify recovery test
+          uri:
+            url: "http://{{ ansible_default_ipv4.address }}:8080/login"
+            method: GET
+          register: recovery_test_result
+          when: not dry_run
+          
+        - name: Display test results
+          debug:
+            msg: |
+              🧪 Disaster Recovery Test Results:
+              Backup Creation: {{ 'Success' if test_backup_creation is succeeded else 'Failed' }}
+              Service Stop: {{ 'Simulated' if not dry_run else 'Skipped (dry run)' }}
+              Recovery Process: {{ 'Tested' if not dry_run else 'Simulated' }}
+              Service Restart: {{ 'Success' if not dry_run and recovery_test_result is succeeded else 'Skipped/Failed' }}
+              
+              Test Status: {{ 'PASSED' if (dry_run or recovery_test_result is succeeded) else 'FAILED' }}
+      when: recovery_operation == 'test-recovery'
+      tags: ['test-recovery']
+
+  post_tasks:
+    - name: Restart Jenkins services
+      systemd:
+        name: "{{ item }}"
+        state: restarted
+        enabled: yes
+        daemon_reload: yes
+      loop:
+        - jenkins-master
+        - jenkins-haproxy
+      when: 
+        - recovery_operation in ['restore', 'failover']
+        - not dry_run
+        - ansible_service_mgr == 'systemd'
+      ignore_errors: yes
+      
+    - name: Final validation
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:8080/api/json"
+        method: GET
+        timeout: 30
+      register: final_validation
+      retries: 15
+      delay: 20
+      when: 
+        - recovery_validation
+        - recovery_operation in ['restore', 'failover']
+        - not dry_run
+      ignore_errors: yes
+      
+    - name: Cleanup temporary files
+      file:
+        path: /tmp/jenkins-restore
+        state: absent
+      when: recovery_operation == 'restore'
+      ignore_errors: yes
+      
+    - name: Generate disaster recovery report
+      debug:
+        msg: |
+          📋 DISASTER RECOVERY REPORT
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          Operation: {{ recovery_operation | upper }}
+          Timestamp: {{ ansible_date_time.iso8601 }}
+          Status: {{ 'COMPLETED' if ansible_failed_task is not defined else 'FAILED' }}
+          Dry Run: {{ dry_run }}
+          
+          {% if recovery_operation == 'restore' %}
+          Restored From: {{ backup_file | basename if backup_file is defined else 'N/A' }}
+          Scope: {{ recovery_scope }}
+          {% endif %}
+          
+          {% if recovery_operation == 'failover' %}
+          Failover Environment: {{ failover_environment | default('green') }}
+          Health Check: {{ 'Passed' if final_validation is succeeded else 'Failed' }}
+          {% endif %}
+          
+          Final Service Status: {{ 'Running' if final_validation is succeeded else 'Needs Attention' }}
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          
+          💡 Next Steps:
+          {% if ansible_failed_task is defined %}
+          1. Review failed tasks and error logs
+          2. Check service status: systemctl status jenkins-master
+          3. Verify container status: docker ps
+          4. Check application logs: docker logs jenkins-master
+          {% else %}
+          1. Verify all services are operational
+          2. Test Jenkins functionality through web interface
+          3. Validate backup schedules are working
+          4. Update monitoring dashboards
+          {% endif %}
+          
+          🆘 Emergency Contacts:
+          - Infrastructure Team: infra@company.com
+          - 24/7 Support: +1-555-0123

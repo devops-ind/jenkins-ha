@@ -1,0 +1,27 @@
+---
+# Jenkins Master Role - Event Handlers
+
+- name: reload haproxy
+  systemd:
+    name: haproxy
+    state: reloaded
+  become: yes
+  listen: "reload haproxy"
+
+- name: restart jenkins container
+  include_tasks: "handlers/restart-{{ jenkins_master_container_runtime }}.yml"
+  listen: "restart jenkins"
+
+- name: update haproxy backend
+  template:
+    src: haproxy-team-config.cfg.j2
+    dest: "/etc/haproxy/conf.d/jenkins-{{ jenkins_master_config.team_name }}.cfg"
+    owner: root
+    group: root
+    mode: '0644'
+  notify: reload haproxy
+  listen: "update haproxy backend"
+
+- name: switch blue green environment
+  include_tasks: "handlers/blue-green-switch.yml"
+  listen: "switch blue green"

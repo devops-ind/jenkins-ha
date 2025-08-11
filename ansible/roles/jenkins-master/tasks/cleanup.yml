@@ -1,0 +1,53 @@
+---
+# Jenkins Master - Cleanup and Maintenance Tasks
+
+- name: Stop and remove old Jenkins containers
+  include_tasks: "cleanup/{{ jenkins_master_container_runtime }}.yml"
+  when: jenkins_master_cleanup_containers | default(false)
+  tags: ['cleanup', 'containers']
+
+- name: Clean up unused volumes
+  include_tasks: "cleanup/volumes-{{ jenkins_master_container_runtime }}.yml"
+  when: jenkins_master_cleanup_volumes | default(false)
+  tags: ['cleanup', 'volumes']
+
+- name: Remove old Jenkins images
+  command: "{{ jenkins_master_container_runtime }} image prune -f"
+  when: jenkins_master_cleanup_images | default(false)
+  register: image_cleanup
+  changed_when: "'Total reclaimed space' in image_cleanup.stdout"
+  tags: ['cleanup', 'images']
+
+- name: Clean up old log files
+  find:
+    paths: "{{ jenkins_master_home_dir }}/{{ jenkins_master_config.team_name }}"
+    patterns: "*.log*"
+    age: "{{ jenkins_master_log_retention_days }}d"
+    recurse: yes
+  register: old_logs
+  when: jenkins_master_cleanup_logs | default(false)
+  tags: ['cleanup', 'logs']
+
+- name: Remove old log files
+  file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ old_logs.files | default([]) }}"
+  when: jenkins_master_cleanup_logs | default(false)
+  tags: ['cleanup', 'logs']
+
+- name: Display cleanup summary
+  debug:
+    msg: |
+      Cleanup Summary for {{ jenkins_master_config.team_name }}:
+      
+      Images Cleaned: {{ 'Yes' if jenkins_master_cleanup_images else 'Skipped' }}
+      Containers Cleaned: {{ 'Yes' if jenkins_master_cleanup_containers else 'Skipped' }}
+      Volumes Cleaned: {{ 'Yes' if jenkins_master_cleanup_volumes else 'Skipped' }}
+      Logs Cleaned: {{ old_logs.matched | default(0) }} files removed
+      
+      {% if image_cleanup.stdout is defined %}
+      {{ image_cleanup.stdout }}
+      {% endif %}
+  when: jenkins_master_cleanup_enabled | default(false)
+  tags: ['cleanup', 'summary']

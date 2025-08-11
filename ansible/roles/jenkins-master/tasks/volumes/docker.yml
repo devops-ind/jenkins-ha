@@ -1,0 +1,17 @@
+---
+# Jenkins Master - Docker Volume Management
+
+- name: Create Jenkins volumes for blue-green environments (Docker)
+  community.docker.docker_volume:
+    name: "jenkins-{{ jenkins_master_config.team_name }}-{{ item }}-home"
+    driver: "local"
+    state: present
+  loop: ['blue', 'green']
+  tags: ['volumes', 'docker', 'blue-green']
+
+- name: Create Jenkins shared volume for team (Docker)
+  community.docker.docker_volume:
+    name: "jenkins-{{ jenkins_master_config.team_name }}-shared"
+    driver: "local"
+    state: present
+  tags: ['volumes', 'docker', 'shared']

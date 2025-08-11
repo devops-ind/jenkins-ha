@@ -1,0 +1,19 @@
+{
+    "team_name": "{{ jenkins_master_config.team_name }}",
+    "active_environment": "{{ jenkins_master_config.active_environment }}",
+    "previous_environment": "{{ 'green' if jenkins_master_config.active_environment == 'blue' else 'blue' }}",
+    "deployment_timestamp": "{{ ansible_date_time.iso8601 }}",
+    "deployment_method": "ansible",
+    "container_runtime": "{{ jenkins_master_container_runtime }}",
+    "ports": {
+        "web": {{ jenkins_master_config.ports.web }},
+        "agent": {{ jenkins_master_config.ports.agent }}
+    },
+    "resources": {
+        "memory": "{{ jenkins_master_config.resources.memory }}",
+        "cpu": "{{ jenkins_master_config.resources.cpu }}"
+    },
+    "image": "{{ jenkins_master_image_registry }}/{{ jenkins_master_image_name }}:{{ jenkins_master_image_tag }}",
+    "network": "{{ jenkins_master_network_name }}",
+    "managed_by": "ansible-jenkins-master-role"
+}

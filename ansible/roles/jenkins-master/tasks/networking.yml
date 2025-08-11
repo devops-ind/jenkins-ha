@@ -1,0 +1,43 @@
+---
+# Jenkins Master - Network Configuration
+
+- name: Create Jenkins network (Docker)
+  community.docker.docker_network:
+    name: "{{ jenkins_master_network_name }}"
+    driver: "{{ jenkins_master_network_driver }}"
+    ipam_config:
+      - subnet: "{{ jenkins_master_network_subnet }}"
+        gateway: "{{ jenkins_master_network_gateway }}"
+    state: present
+  when: jenkins_master_container_runtime == 'docker'
+  tags: ['network', 'docker']
+
+- name: Create Jenkins network (Podman)
+  containers.podman.podman_network:
+    name: "{{ jenkins_master_network_name }}"
+    driver: "{{ jenkins_master_network_driver }}"
+    subnet: "{{ jenkins_master_network_subnet }}"
+    gateway: "{{ jenkins_master_network_gateway }}"
+    state: present
+  when: jenkins_master_container_runtime == 'podman'
+  tags: ['network', 'podman']
+
+- name: Check if ports are available
+  wait_for:
+    port: "{{ item }}"
+    host: "{{ ansible_default_ipv4.address }}"
+    state: stopped
+    timeout: 5
+  loop:
+    - "{{ jenkins_master_config.ports.web }}"
+    - "{{ jenkins_master_config.ports.agent }}"
+  failed_when: false
+  register: port_check
+  tags: ['network', 'validation']
+
+- name: Warn about port conflicts
+  debug:
+    msg: "Warning: Port {{ item.item }} appears to be in use. This may cause conflicts."
+  loop: "{{ port_check.results }}"
+  when: item.failed is defined and item.failed
+  tags: ['network', 'validation']

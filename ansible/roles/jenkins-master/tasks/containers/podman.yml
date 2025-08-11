@@ -1,0 +1,68 @@
+---
+# Jenkins Master - Podman Container Deployment
+
+- name: Deploy Jenkins Blue Environment (Podman)
+  containers.podman.podman_container:
+    name: "jenkins-{{ jenkins_master_config.team_name }}-blue"
+    image: "{{ jenkins_master_image_registry }}/{{ jenkins_master_image_name }}:{{ jenkins_master_image_tag }}"
+    state: "{{ 'started' if jenkins_master_config.active_environment == 'blue' else 'stopped' }}"
+    restart_policy: "{{ jenkins_master_restart_policy }}"
+    network: "{{ jenkins_master_network_name }}"
+    ports: "{{ jenkins_master_config.active_environment == 'blue' | ternary(_blue_ports, []) }}"
+    volumes:
+      - "jenkins-{{ jenkins_master_config.team_name }}-blue-home:{{ jenkins_master_container_home }}"
+      - "jenkins-{{ jenkins_master_config.team_name }}-shared:{{ jenkins_master_shared_path }}"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    env: "{{ _jenkins_env_vars | combine({'JENKINS_ENVIRONMENT': 'blue'}) }}"
+    memory: "{{ jenkins_master_config.resources.memory }}"
+    cpus: "{{ jenkins_master_config.resources.cpu }}"
+    log_driver: "{{ jenkins_master_log_driver }}"
+    log_options:
+      max_size: "{{ jenkins_master_log_max_size }}"
+    labels: "{{ _jenkins_labels | combine({'environment': 'blue', 'active': jenkins_master_config.active_environment == 'blue' | string}) }}"
+    healthcheck: "curl -f http://localhost:{{ jenkins_master_port }}/login || exit 1"
+    healthcheck_interval: 30s
+    healthcheck_timeout: 10s
+    healthcheck_retries: 3
+    healthcheck_start_period: 60s
+  vars:
+    _blue_ports:
+      - "{{ jenkins_master_config.ports.web }}:{{ jenkins_master_port }}"
+      - "{{ jenkins_master_config.ports.agent }}:{{ jenkins_master_agent_port }}"
+    _jenkins_env_vars: "{{ jenkins_master_env_vars | combine(jenkins_master_config.env_vars | default({})) }}"
+    _jenkins_labels: "{{ jenkins_master_labels | combine(jenkins_master_config.labels | default({})) }}"
+  register: jenkins_blue_podman
+  tags: ['containers', 'podman', 'blue']
+
+- name: Deploy Jenkins Green Environment (Podman)  
+  containers.podman.podman_container:
+    name: "jenkins-{{ jenkins_master_config.team_name }}-green"
+    image: "{{ jenkins_master_image_registry }}/{{ jenkins_master_image_name }}:{{ jenkins_master_image_tag }}"
+    state: "{{ 'started' if jenkins_master_config.active_environment == 'green' else 'stopped' }}"
+    restart_policy: "{{ jenkins_master_restart_policy }}"
+    network: "{{ jenkins_master_network_name }}"
+    ports: "{{ jenkins_master_config.active_environment == 'green' | ternary(_green_ports, []) }}"
+    volumes:
+      - "jenkins-{{ jenkins_master_config.team_name }}-green-home:{{ jenkins_master_container_home }}"
+      - "jenkins-{{ jenkins_master_config.team_name }}-shared:{{ jenkins_master_shared_path }}"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    env: "{{ _jenkins_env_vars | combine({'JENKINS_ENVIRONMENT': 'green'}) }}"
+    memory: "{{ jenkins_master_config.resources.memory }}"
+    cpus: "{{ jenkins_master_config.resources.cpu }}"
+    log_driver: "{{ jenkins_master_log_driver }}"
+    log_options:
+      max_size: "{{ jenkins_master_log_max_size }}"
+    labels: "{{ _jenkins_labels | combine({'environment': 'green', 'active': jenkins_master_config.active_environment == 'green' | string}) }}"
+    healthcheck: "curl -f http://localhost:{{ jenkins_master_port }}/login || exit 1"
+    healthcheck_interval: 30s
+    healthcheck_timeout: 10s
+    healthcheck_retries: 3
+    healthcheck_start_period: 60s
+  vars:
+    _green_ports:
+      - "{{ jenkins_master_config.ports.web }}:{{ jenkins_master_port }}"
+      - "{{ jenkins_master_config.ports.agent }}:{{ jenkins_master_agent_port }}"
+    _jenkins_env_vars: "{{ jenkins_master_env_vars | combine(jenkins_master_config.env_vars | default({})) }}"
+    _jenkins_labels: "{{ jenkins_master_labels | combine(jenkins_master_config.labels | default({})) }}"
+  register: jenkins_green_podman
+  tags: ['containers', 'podman', 'green']

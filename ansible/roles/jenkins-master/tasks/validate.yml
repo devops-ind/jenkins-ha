@@ -1,0 +1,68 @@
+---
+# Jenkins Master - Input Validation and Prerequisites
+
+- name: Validate jenkins_master_config is defined
+  assert:
+    that:
+      - jenkins_master_config is defined
+      - jenkins_master_config is mapping
+    fail_msg: "jenkins_master_config must be defined as a dictionary"
+    success_msg: "jenkins_master_config validation passed"
+  tags: ['validate']
+
+- name: Validate team configuration
+  assert:
+    that:
+      - jenkins_master_config.team_name is defined
+      - jenkins_master_config.team_name | length > 0
+      - jenkins_master_config.active_environment is defined  
+      - jenkins_master_config.active_environment in ['blue', 'green']
+    fail_msg: "Team configuration must include team_name and valid active_environment (blue/green)"
+    success_msg: "Team configuration validation passed"
+  tags: ['validate']
+
+- name: Validate port configuration
+  assert:
+    that:
+      - jenkins_master_config.ports.web is defined
+      - jenkins_master_config.ports.web | int > 1024
+      - jenkins_master_config.ports.agent is defined  
+      - jenkins_master_config.ports.agent | int > 1024
+      - jenkins_master_config.ports.web != jenkins_master_config.ports.agent
+    fail_msg: "Port configuration must include unique web and agent ports > 1024"
+    success_msg: "Port configuration validation passed"
+  tags: ['validate']
+
+- name: Validate container runtime
+  assert:
+    that:
+      - jenkins_master_container_runtime in ['docker', 'podman']
+    fail_msg: "Container runtime must be 'docker' or 'podman'"
+    success_msg: "Container runtime validation passed"
+  tags: ['validate']
+
+- name: Validate resource configuration
+  assert:
+    that:
+      - jenkins_master_config.resources.memory is defined
+      - jenkins_master_config.resources.cpu is defined
+      - jenkins_master_config.resources.memory | regex_search('[0-9]+[gm]')
+      - jenkins_master_config.resources.cpu | string | float > 0
+    fail_msg: "Resource configuration must include valid memory (e.g., '2g') and CPU (e.g., '1.0')"
+    success_msg: "Resource configuration validation passed"
+  tags: ['validate']
+
+- name: Check container runtime availability
+  command: "{{ jenkins_master_container_runtime }} --version"
+  register: container_runtime_check
+  failed_when: false
+  changed_when: false
+  tags: ['validate']
+
+- name: Validate container runtime is available
+  assert:
+    that:
+      - container_runtime_check.rc == 0
+    fail_msg: "Container runtime {{ jenkins_master_container_runtime }} is not available"
+    success_msg: "Container runtime {{ jenkins_master_container_runtime }} is available"
+  tags: ['validate']

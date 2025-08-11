@@ -1,0 +1,32 @@
+---
+# Jenkins Master Role - Reusable Blue-Green Multi-Team Configuration
+# Entry point with conditional includes for modular task organization
+
+- name: Import validation tasks
+  import_tasks: validate.yml
+  tags: ['always', 'validate']
+
+- name: Import configuration tasks  
+  import_tasks: configuration.yml
+  tags: ['config', 'setup']
+
+- name: Import networking tasks
+  import_tasks: networking.yml
+  tags: ['network', 'setup']
+
+- name: Import container management tasks
+  import_tasks: container.yml
+  tags: ['container', 'deploy']
+
+- name: Import blue-green deployment tasks
+  import_tasks: blue-green.yml
+  tags: ['blue-green', 'deploy']
+
+- name: Import health check tasks
+  import_tasks: health-check.yml
+  tags: ['health', 'verify']
+
+- name: Import cleanup tasks
+  import_tasks: cleanup.yml
+  when: jenkins_master_cleanup_enabled | default(false)
+  tags: ['cleanup', 'maintenance']

@@ -1,0 +1,59 @@
+---
+# Jenkins Master - Health Check and Validation
+
+- name: Wait for active Jenkins environment to be ready
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_config.ports.web }}/login"
+    method: GET
+    status_code: [200, 403]
+  retries: "{{ jenkins_master_health_check_retries }}"
+  delay: "{{ jenkins_master_health_check_delay }}"
+  register: jenkins_health_check
+  tags: ['health', 'verify']
+
+- name: Check Jenkins agent port connectivity
+  wait_for:
+    port: "{{ jenkins_master_config.ports.agent }}"
+    host: "{{ ansible_default_ipv4.address }}"
+    timeout: "{{ jenkins_master_health_check_timeout }}"
+  tags: ['health', 'agent']
+
+- name: Verify Jenkins API accessibility
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_config.ports.web }}/api/json"
+    method: GET
+    status_code: [200, 403]
+  register: jenkins_api_check
+  tags: ['health', 'api']
+
+- name: Check container health status
+  command: "{{ jenkins_master_container_runtime }} inspect jenkins-{{ jenkins_master_config.team_name }}-{{ jenkins_master_config.active_environment }} --format='{{.State.Health.Status}}'"
+  register: container_health
+  failed_when: false
+  changed_when: false
+  tags: ['health', 'container']
+
+- name: Display health check results
+  debug:
+    msg: |
+      Jenkins Health Check Results for {{ jenkins_master_config.team_name }}:
+      
+      Web Interface: {{ 'HEALTHY' if jenkins_health_check.status == 200 or jenkins_health_check.status == 403 else 'UNHEALTHY' }}
+      API Endpoint: {{ 'HEALTHY' if jenkins_api_check.status == 200 or jenkins_api_check.status == 403 else 'UNHEALTHY' }}
+      Agent Port: ACCESSIBLE
+      Container Health: {{ container_health.stdout | default('UNKNOWN') }}
+      Active Environment: {{ jenkins_master_config.active_environment | upper }}
+      
+      {% if jenkins_health_check.status == 403 or jenkins_api_check.status == 403 %}
+      Note: HTTP 403 responses are expected during initial Jenkins setup before authentication is configured.
+      {% endif %}
+  tags: ['health', 'summary']
+
+- name: Create health check monitoring script
+  template:
+    src: health-monitor.sh.j2
+    dest: "{{ jenkins_master_home_dir }}/scripts/health-monitor-{{ jenkins_master_config.team_name }}.sh"
+    owner: "{{ jenkins_master_user }}"
+    group: "{{ jenkins_master_user }}"
+    mode: '0755'
+  tags: ['health', 'monitoring']

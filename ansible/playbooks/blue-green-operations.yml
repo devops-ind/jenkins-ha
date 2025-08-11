@@ -1,0 +1,218 @@
+---
+# Blue-Green Operations Playbook
+# This playbook handles blue-green environment switching and related operations
+
+- name: Blue-Green Environment Operations
+  hosts: "{{ target_hosts | default('jenkins_masters') }}"
+  become: yes
+  gather_facts: yes
+  vars:
+    operation: "{{ blue_green_operation | default('status') }}"
+    target_team: "{{ team_filter | default('all') }}"
+    target_environment: "{{ environment | default('green') }}"
+    skip_health_checks: "{{ skip_health | default(false) }}"
+    
+  pre_tasks:
+    - name: Validate operation parameters
+      assert:
+        that:
+          - operation in ['switch', 'status', 'health-check', 'rollback']
+          - target_environment in ['blue', 'green']
+          - target_team in ['all', 'devops', 'developer', 'qa'] or target_team in jenkins_teams|map(attribute='name')|list
+        fail_msg: |
+          Invalid parameters:
+          - operation must be: switch, status, health-check, or rollback
+          - target_environment must be: blue or green
+          - target_team must be: all, devops, developer, qa, or valid team name
+    
+    - name: Display operation information
+      debug:
+        msg: |
+          🔄 Blue-Green Operation: {{ operation }}
+          🎯 Target Environment: {{ target_environment }}
+          👥 Target Team: {{ target_team }}
+          🏠 Target Hosts: {{ ansible_play_hosts | join(', ') }}
+          ⚡ Skip Health Checks: {{ skip_health_checks }}
+
+  tasks:
+    # Environment Status Check
+    - name: Check current environment status
+      block:
+        - name: Get current active environments
+          shell: |
+            {% for team in jenkins_teams %}
+            echo "{{ team.name }}:$(docker ps --format 'table {{ '{{.Names}}' }}\t{{ '{{.Status}}' }}' | grep jenkins-{{ team.name }} | grep -v Exited || echo 'none')"
+            {% endfor %}
+          register: environment_status
+          changed_when: false
+          
+        - name: Display current environment status
+          debug:
+            msg: |
+              📊 Current Environment Status:
+              {{ environment_status.stdout_lines | join('\n') }}
+      when: operation in ['status', 'switch', 'rollback']
+      tags: ['status']
+
+    # Health Check Operation
+    - name: Perform comprehensive health checks
+      block:
+        - name: Run health checks for target environment
+          script: "{{ jenkins_home_dir }}/bin/jenkins-blue-green-healthcheck.sh {{ target_environment }} {{ target_team }}"
+          register: health_check_results
+          failed_when: health_check_results.rc != 0
+          
+        - name: Display health check results
+          debug:
+            var: health_check_results.stdout_lines
+      when: operation == 'health-check' or (operation == 'switch' and not skip_health_checks)
+      tags: ['health-check']
+
+    # Environment Switching Operation
+    - name: Switch blue-green environments
+      block:
+        - name: Pre-switch backup
+          shell: "{{ jenkins_home_dir }}/bin/jenkins-blue-green-switch.sh backup {{ target_team }}"
+          register: pre_switch_backup
+          when: operation == 'switch'
+          
+        - name: Execute environment switch
+          shell: "{{ jenkins_home_dir }}/bin/jenkins-blue-green-switch.sh {{ target_environment }} {{ target_team }}"
+          register: switch_results
+          
+        - name: Verify switch success
+          shell: "{{ jenkins_home_dir }}/bin/jenkins-blue-green-healthcheck.sh {{ target_environment }} {{ target_team }}"
+          register: post_switch_health
+          retries: 3
+          delay: 30
+          
+        - name: Display switch results
+          debug:
+            msg: |
+              🔄 Environment Switch Results:
+              {{ switch_results.stdout_lines | join('\n') }}
+              
+              ✅ Post-Switch Health Check:
+              {{ post_switch_health.stdout_lines | join('\n') }}
+      when: operation == 'switch'
+      tags: ['switch']
+
+    # Rollback Operation
+    - name: Rollback to previous environment
+      block:
+        - name: Determine previous environment
+          set_fact:
+            previous_environment: "{{ 'blue' if target_environment == 'green' else 'green' }}"
+            
+        - name: Execute rollback
+          shell: "{{ jenkins_home_dir }}/bin/jenkins-blue-green-switch.sh {{ previous_environment }} {{ target_team }}"
+          register: rollback_results
+          
+        - name: Verify rollback success
+          shell: "{{ jenkins_home_dir }}/bin/jenkins-blue-green-healthcheck.sh {{ previous_environment }} {{ target_team }}"
+          register: post_rollback_health
+          
+        - name: Display rollback results
+          debug:
+            msg: |
+              ↩️  Rollback Results:
+              Switched from {{ target_environment }} to {{ previous_environment }}
+              {{ rollback_results.stdout_lines | join('\n') }}
+              
+              ✅ Post-Rollback Health Check:
+              {{ post_rollback_health.stdout_lines | join('\n') }}
+      when: operation == 'rollback'
+      tags: ['rollback']
+
+    # HAProxy Configuration Update
+    - name: Update HAProxy configuration
+      block:
+        - name: Reload HAProxy configuration
+          systemd:
+            name: haproxy
+            state: reloaded
+          when: ansible_service_mgr == 'systemd'
+          
+        - name: Verify HAProxy status
+          uri:
+            url: "http://{{ ansible_default_ipv4.address }}:8404/stats"
+            method: GET
+          register: haproxy_status
+          ignore_errors: yes
+          
+        - name: Display HAProxy status
+          debug:
+            msg: "HAProxy Status: {{ 'OK' if haproxy_status is succeeded else 'Failed' }}"
+      when: operation in ['switch', 'rollback'] and update_haproxy | default(true)
+      tags: ['haproxy']
+
+  post_tasks:
+    - name: Generate operation summary
+      debug:
+        msg: |
+          📋 Blue-Green Operation Summary:
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          Operation: {{ operation | upper }}
+          Target Environment: {{ target_environment | upper }}
+          Target Team: {{ target_team | upper }}
+          Status: {{ 'COMPLETED' if ansible_failed_task is not defined else 'FAILED' }}
+          Timestamp: {{ ansible_date_time.iso8601 }}
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          
+          💡 Quick Commands:
+          # Check status: 
+          ansible-playbook playbooks/blue-green-operations.yml -e blue_green_operation=status
+          
+          # Switch to green:
+          ansible-playbook playbooks/blue-green-operations.yml -e blue_green_operation=switch -e environment=green -e team_filter=devops
+          
+          # Rollback:
+          ansible-playbook playbooks/blue-green-operations.yml -e blue_green_operation=rollback -e team_filter=devops
+          
+          # Health check:
+          ansible-playbook playbooks/blue-green-operations.yml -e blue_green_operation=health-check -e team_filter=all
+
+# Utility play for batch operations across multiple teams
+- name: Batch Blue-Green Operations
+  hosts: "{{ target_hosts | default('jenkins_masters') }}"
+  become: yes
+  gather_facts: no
+  vars:
+    batch_operation: "{{ batch_blue_green_operation | default('none') }}"
+    
+  tasks:
+    - name: Execute batch environment switch
+      include_tasks: 
+        file: "{{ playbook_dir }}/blue-green-operations.yml"
+        apply:
+          vars:
+            operation: switch
+            target_team: "{{ item.name }}"
+            target_environment: "{{ batch_target_environment | default('green') }}"
+      loop: "{{ jenkins_teams }}"
+      when: 
+        - batch_operation == 'switch-all'
+        - item.name != 'skip'  # Allow skipping specific teams
+      tags: ['batch-switch']
+      
+    - name: Execute batch health check
+      include_tasks:
+        file: "{{ playbook_dir }}/blue-green-operations.yml"
+        apply:
+          vars:
+            operation: health-check
+            target_team: "{{ item.name }}"
+            target_environment: "{{ batch_target_environment | default('blue') }}"
+      loop: "{{ jenkins_teams }}"
+      when: batch_operation == 'health-check-all'
+      tags: ['batch-health']
+
+    - name: Batch operation summary
+      debug:
+        msg: |
+          📊 Batch Operation Summary:
+          Operation: {{ batch_operation }}
+          Teams Processed: {{ jenkins_teams | map(attribute='name') | join(', ') }}
+          Target Environment: {{ batch_target_environment | default('current') }}
+          Completed: {{ ansible_date_time.iso8601 }}
+      when: batch_operation != 'none'
