@@ -57,6 +57,7 @@ esac
 # Load environment variables
 if [ -f "environments/$ENVIRONMENT.env" ]; then
     log "Loading environment variables from environments/$ENVIRONMENT.env"
+    # shellcheck source=environments/production.env
     source "environments/$ENVIRONMENT.env"
 fi
 
@@ -72,7 +73,7 @@ ansible-playbook "$PLAYBOOK" --syntax-check || error "Playbook syntax check fail
 
 # Inventory validation
 log "Validating inventory..."
-python3 tests/inventory-test.py "$INVENTORY" || error "Inventory validation failed"
+python3 tests/inventory_test.py "$INVENTORY" || error "Inventory validation failed"
 
 # Ping all hosts
 log "Testing connectivity to all hosts..."

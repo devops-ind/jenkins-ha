@@ -49,9 +49,87 @@ pipeline {
             defaultValue: 'Manual update',
             description: 'Reason for the update'
         )
+        
+        // Rollback and Safety Parameters
+        booleanParam(
+            name: 'ENABLE_AUTO_ROLLBACK',
+            defaultValue: true,
+            description: 'Enable automatic rollback on failure'
+        )
+        string(
+            name: 'SLI_ERROR_RATE_THRESHOLD',
+            defaultValue: '5.0',
+            description: 'Error rate threshold % for auto-rollback'
+        )
+        string(
+            name: 'SLI_RESPONSE_TIME_THRESHOLD',
+            defaultValue: '2000',
+            description: 'Response time threshold (ms) for auto-rollback'
+        )
+        booleanParam(
+            name: 'APPROVED_FOR_PRODUCTION',
+            defaultValue: false,
+            description: '⚠️ Required: Production deployment approval'
+        )
+        string(
+            name: 'APPROVER_EMAIL',
+            defaultValue: '',
+            description: '📧 Required: Email of person approving this deployment'
+        )
     }
     
     stages {
+        stage('Security and Approval Validation') {
+            steps {
+                script {
+                    echo "🔐 Security and approval validation..."
+                    
+                    // Production approval validation
+                    if (params.ENVIRONMENT == 'production') {
+                        if (!params.APPROVED_FOR_PRODUCTION) {
+                            error "❌ Production deployment must be approved via APPROVED_FOR_PRODUCTION parameter"
+                        }
+                        
+                        if (!params.APPROVER_EMAIL?.trim()) {
+                            error "❌ APPROVER_EMAIL is required for production deployments"
+                        }
+                        
+                        // Validate email format
+                        if (!params.APPROVER_EMAIL.matches(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
+                            error "❌ Invalid email format for APPROVER_EMAIL"
+                        }
+                        
+                        echo "✅ Production deployment approved by: ${params.APPROVER_EMAIL}"
+                    }
+                    
+                    // Validate SLI thresholds
+                    def errorRateThreshold = params.SLI_ERROR_RATE_THRESHOLD as Float
+                    def responseTimeThreshold = params.SLI_RESPONSE_TIME_THRESHOLD as Integer
+                    
+                    if (errorRateThreshold < 1.0 || errorRateThreshold > 20.0) {
+                        error "❌ Error rate threshold must be between 1.0% and 20.0%"
+                    }
+                    
+                    if (responseTimeThreshold < 100 || responseTimeThreshold > 10000) {
+                        error "❌ Response time threshold must be between 100ms and 10000ms"
+                    }
+                    
+                    // Create audit log
+                    writeJSON file: 'deployment-audit.json', json: [
+                        timestamp: new Date().toString(),
+                        environment: params.ENVIRONMENT,
+                        approver: params.APPROVER_EMAIL,
+                        image_tag: params.IMAGE_TAG,
+                        update_scope: params.UPDATE_SCOPE,
+                        auto_rollback_enabled: params.ENABLE_AUTO_ROLLBACK,
+                        build_number: env.BUILD_NUMBER
+                    ]
+                    
+                    echo "✅ Security validation completed"
+                }
+            }
+        }
+        
         stage('Environment Setup') {
             steps {
                 script {
@@ -61,6 +139,8 @@ pipeline {
                     echo "🎯 Update Scope: ${params.UPDATE_SCOPE}"
                     echo "🔄 Restart Services: ${params.RESTART_SERVICES}"
                     echo "ℹ️ Update Reason: ${params.UPDATE_REASON}"
+                    echo "🔄 Auto Rollback: ${params.ENABLE_AUTO_ROLLBACK}"
+                    echo "📧 Approver: ${params.APPROVER_EMAIL ?: 'N/A (staging)'}"
                     echo "🐍 Running on Python Agent: ${env.NODE_NAME}"
                     
                     // Validate environment
@@ -147,7 +227,7 @@ pipeline {
             }
             steps {
                 script {
-                    echo "🐈 Running post-update health checks..."
+                    echo "🔍 Running post-update health checks..."
                     
                     // Wait for services to stabilize
                     sleep(time: 30, unit: 'SECONDS')
@@ -160,6 +240,111 @@ pipeline {
                               booleanParam(name: 'SEND_ALERTS', value: true)
                           ],
                           wait: true
+                }
+            }
+        }
+        
+        stage('Automated Rollback Assessment') {
+            when {
+                expression { params.ENABLE_AUTO_ROLLBACK && !params.SKIP_HEALTH_CHECKS }
+            }
+            steps {
+                script {
+                    echo "🤖 Automated rollback assessment..."
+                    
+                    def shouldRollback = false
+                    def rollbackReasons = []
+                    
+                    try {
+                        // Check SLI metrics from Prometheus
+                        echo "📊 Checking deployment SLI metrics..."
+                        
+                        // Check error rate
+                        def errorRateQuery = "jenkins:error_rate_5m"
+                        def errorRateResult = sh(
+                            script: """
+                                curl -s "http://prometheus:9090/api/v1/query?query=${errorRateQuery}" | \\
+                                jq -r '.data.result[0].value[1] // "0"'
+                            """,
+                            returnStdout: true
+                        ).trim()
+                        
+                        def currentErrorRate = errorRateResult as Float
+                        def errorRateThreshold = params.SLI_ERROR_RATE_THRESHOLD as Float
+                        
+                        echo "Current error rate: ${currentErrorRate}% (threshold: ${errorRateThreshold}%)"
+                        
+                        if (currentErrorRate > errorRateThreshold) {
+                            shouldRollback = true
+                            rollbackReasons.add("Error rate ${currentErrorRate}% exceeds threshold ${errorRateThreshold}%")
+                        }
+                        
+                        // Check response time
+                        def responseTimeQuery = "jenkins:response_time_p95"
+                        def responseTimeResult = sh(
+                            script: """
+                                curl -s "http://prometheus:9090/api/v1/query?query=${responseTimeQuery}" | \\
+                                jq -r '.data.result[0].value[1] // "0"'
+                            """,
+                            returnStdout: true
+                        ).trim()
+                        
+                        def currentResponseTime = responseTimeResult as Float
+                        def responseTimeThreshold = params.SLI_RESPONSE_TIME_THRESHOLD as Float
+                        
+                        echo "Current response time P95: ${currentResponseTime}ms (threshold: ${responseTimeThreshold}ms)"
+                        
+                        if (currentResponseTime > responseTimeThreshold) {
+                            shouldRollback = true
+                            rollbackReasons.add("Response time P95 ${currentResponseTime}ms exceeds threshold ${responseTimeThreshold}ms")
+                        }
+                        
+                        // Check service availability
+                        def availabilityQuery = "jenkins:service_availability"
+                        def availabilityResult = sh(
+                            script: """
+                                curl -s "http://prometheus:9090/api/v1/query?query=${availabilityQuery}" | \\
+                                jq -r '.data.result[0].value[1] // "1"'
+                            """,
+                            returnStdout: true
+                        ).trim()
+                        
+                        def currentAvailability = availabilityResult as Float
+                        
+                        echo "Current service availability: ${currentAvailability * 100}%"
+                        
+                        if (currentAvailability < 0.995) { // 99.5% availability threshold
+                            shouldRollback = true
+                            rollbackReasons.add("Service availability ${currentAvailability * 100}% below 99.5% threshold")
+                        }
+                        
+                    } catch (Exception e) {
+                        echo "⚠️ Failed to retrieve metrics for rollback assessment: ${e.message}"
+                        echo "Proceeding without automated rollback assessment"
+                    }
+                    
+                    // Store rollback assessment results
+                    writeJSON file: 'rollback-assessment.json', json: [
+                        should_rollback: shouldRollback,
+                        rollback_reasons: rollbackReasons,
+                        assessment_time: new Date().toString(),
+                        error_rate: currentErrorRate,
+                        response_time: currentResponseTime,
+                        availability: currentAvailability
+                    ]
+                    
+                    if (shouldRollback) {
+                        echo "🚨 SLI breach detected! Triggering automated rollback..."
+                        echo "Rollback reasons:"
+                        rollbackReasons.each { reason ->
+                            echo "  - ${reason}"
+                        }
+                        
+                        currentBuild.result = 'UNSTABLE'
+                        error "Automated rollback triggered due to SLI breach: ${rollbackReasons.join(', ')}"
+                    } else {
+                        echo "✅ All SLI metrics within acceptable thresholds"
+                    }
                 }
             }
         }
@@ -200,7 +385,145 @@ pipeline {
         failure {
             script {
                 echo "❌ Infrastructure Update Failed!"
-                echo "📦 Consider restoring from pre-update backup if needed"
+                
+                if (params.ENABLE_AUTO_ROLLBACK) {
+                    echo "🔄 Triggering automated rollback..."
+                    
+                    try {
+                        // Trigger rollback pipeline
+                        build job: 'Infrastructure/Rollback-Pipeline',
+                              parameters: [
+                                  choice(name: 'ENVIRONMENT', value: params.ENVIRONMENT),
+                                  string(name: 'BACKUP_TAG', value: "pre-update-${UPDATE_TIMESTAMP}"),
+                                  string(name: 'ROLLBACK_REASON', value: "Automated rollback due to deployment failure"),
+                                  booleanParam(name: 'URGENT_ROLLBACK', value: true)
+                              ],
+                              wait: true
+                        
+                        echo "✅ Automated rollback completed successfully"
+                        
+                        // Send rollback notification
+                        if (params.APPROVER_EMAIL) {
+                            emailext (
+                                subject: "🔄 Automated Rollback Executed - Jenkins Infrastructure",
+                                body: """
+Automated rollback has been executed due to deployment failure.
+
+Deployment Details:
+- Environment: ${params.ENVIRONMENT}
+- Image Tag: ${params.IMAGE_TAG}
+- Update Scope: ${params.UPDATE_SCOPE}
+- Build Number: ${BUILD_NUMBER}
+- Approver: ${params.APPROVER_EMAIL}
+
+Rollback Details:
+- Backup Restored: pre-update-${UPDATE_TIMESTAMP}
+- Rollback Reason: Deployment failure
+- Rollback Time: ${new Date()}
+
+Build URL: ${BUILD_URL}
+
+Please investigate the deployment failure and address any issues before attempting another deployment.
+""",
+                                to: params.APPROVER_EMAIL
+                            )
+                        }
+                        
+                    } catch (Exception rollbackError) {
+                        echo "❌ Automated rollback failed: ${rollbackError.message}"
+                        echo "📞 MANUAL INTERVENTION REQUIRED"
+                        echo "📦 Restore from backup: pre-update-${UPDATE_TIMESTAMP}"
+                        
+                        // Send urgent manual intervention alert
+                        if (params.APPROVER_EMAIL) {
+                            emailext (
+                                subject: "🚨 URGENT: Manual Rollback Required - Jenkins Infrastructure",
+                                body: """
+URGENT: Automated rollback failed after deployment failure.
+
+MANUAL INTERVENTION REQUIRED IMMEDIATELY!
+
+Deployment Details:
+- Environment: ${params.ENVIRONMENT}
+- Image Tag: ${params.IMAGE_TAG}
+- Failed Build: ${BUILD_NUMBER}
+
+Action Required:
+1. Immediately restore from backup: pre-update-${UPDATE_TIMESTAMP}
+2. Verify system functionality
+3. Investigate both deployment and rollback failures
+
+Rollback Error: ${rollbackError.message}
+
+Build URL: ${BUILD_URL}
+""",
+                                to: params.APPROVER_EMAIL
+                            )
+                        }
+                    }
+                } else {
+                    echo "🔄 Auto-rollback disabled. Manual rollback may be required."
+                    echo "📦 Backup available: pre-update-${UPDATE_TIMESTAMP}"
+                }
+            }
+        }
+        
+        unstable {
+            script {
+                echo "⚠️ Infrastructure Update completed with warnings!"
+                
+                // Check if this was caused by automated rollback
+                if (fileExists('rollback-assessment.json')) {
+                    def rollbackAssessment = readJSON file: 'rollback-assessment.json'
+                    
+                    if (rollbackAssessment.should_rollback) {
+                        echo "🔄 Executing automated rollback due to SLI breach..."
+                        
+                        try {
+                            // Trigger rollback pipeline
+                            build job: 'Infrastructure/Rollback-Pipeline',
+                                  parameters: [
+                                      choice(name: 'ENVIRONMENT', value: params.ENVIRONMENT),
+                                      string(name: 'BACKUP_TAG', value: "pre-update-${UPDATE_TIMESTAMP}"),
+                                      string(name: 'ROLLBACK_REASON', value: "SLI breach: ${rollbackAssessment.rollback_reasons.join(', ')}"),
+                                      booleanParam(name: 'URGENT_ROLLBACK', value: true)
+                                  ],
+                                  wait: true
+                            
+                            echo "✅ Automated rollback completed due to SLI breach"
+                            
+                            // Send SLI breach notification
+                            if (params.APPROVER_EMAIL) {
+                                emailext (
+                                    subject: "🚨 SLI Breach Rollback - Jenkins Infrastructure",
+                                    body: """
+Automated rollback executed due to SLI breach after deployment.
+
+SLI Breach Details:
+${rollbackAssessment.rollback_reasons.collect { "- ${it}" }.join('\n')}
+
+Deployment Details:
+- Environment: ${params.ENVIRONMENT}
+- Image Tag: ${params.IMAGE_TAG}
+- Build Number: ${BUILD_NUMBER}
+
+Metrics at Rollback:
+- Error Rate: ${rollbackAssessment.error_rate}%
+- Response Time P95: ${rollbackAssessment.response_time}ms
+- Availability: ${rollbackAssessment.availability * 100}%
+
+Build URL: ${BUILD_URL}
+""",
+                                    to: params.APPROVER_EMAIL
+                                )
+                            }
+                            
+                        } catch (Exception rollbackError) {
+                            echo "❌ SLI-triggered rollback failed: ${rollbackError.message}"
+                            echo "📞 URGENT MANUAL INTERVENTION REQUIRED"
+                        }
+                    }
+                }
             }
         }
     }

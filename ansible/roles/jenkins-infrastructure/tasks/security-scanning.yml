@@ -1,0 +1,287 @@
+---
+# Container Security Scanning and Validation Tasks
+# This file implements comprehensive security scanning for Jenkins containers
+
+- name: Container security scanning and validation
+  block:
+    - name: Ensure security scanning directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_group }}"
+      loop:
+        - "/var/log/jenkins/security"
+        - "/etc/jenkins/security-policies"
+        - "{{ jenkins_home_dir }}/security-scan-results"
+        
+    - name: Install Trivy scanner
+      block:
+        - name: Download Trivy binary
+          get_url:
+            url: "https://github.com/aquasecurity/trivy/releases/download/v0.48.3/trivy_0.48.3_Linux-64bit.tar.gz"
+            dest: "/tmp/trivy.tar.gz"
+            mode: '0644'
+            timeout: 300
+            
+        - name: Extract Trivy binary
+          unarchive:
+            src: "/tmp/trivy.tar.gz"
+            dest: "/usr/local/bin/"
+            remote_src: yes
+            owner: root
+            group: root
+            mode: '0755'
+            creates: "/usr/local/bin/trivy"
+            
+        - name: Update Trivy vulnerability database
+          command: trivy image --download-db-only
+          changed_when: false
+          timeout: 600
+          
+        - name: Verify Trivy installation
+          command: trivy --version
+          register: trivy_version
+          changed_when: false
+          
+        - name: Display Trivy version
+          debug:
+            msg: "Trivy installed: {{ trivy_version.stdout }}"
+      when: jenkins_image_scanning.enabled and jenkins_image_scanning.scanner == "trivy"
+      tags: ['trivy-install']
+
+    - name: Create security scan script
+      template:
+        src: security-scan.sh.j2
+        dest: "/usr/local/bin/jenkins-security-scan.sh"
+        mode: '0755'
+        owner: root
+        group: root
+      tags: ['security-scripts']
+
+    - name: Create container security policy
+      template:
+        src: container-security-policy.json.j2
+        dest: "/etc/jenkins/security-policies/container-security-policy.json"
+        mode: '0644'
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_group }}"
+      tags: ['security-policies']
+
+    - name: Scan Jenkins base images
+      block:
+        - name: Get list of Jenkins images to scan
+          shell: |
+            case "{{ jenkins_container_runtime }}" in
+              "docker")
+                docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "(jenkins|openjdk)" | head -10
+                ;;
+              "podman")
+                podman images --format "{{.Repository}}:{{.Tag}}" | grep -E "(jenkins|openjdk)" | head -10
+                ;;
+            esac
+          register: jenkins_images_list
+          changed_when: false
+          failed_when: false
+          
+        - name: Scan images for vulnerabilities
+          shell: |
+            /usr/local/bin/jenkins-security-scan.sh "{{ item }}"
+          loop: "{{ jenkins_images_list.stdout_lines | default([]) }}"
+          register: security_scan_results
+          failed_when: false
+          changed_when: false
+          when: jenkins_images_list.stdout_lines | length > 0
+          
+        - name: Generate security scan summary
+          template:
+            src: security-scan-summary.html.j2
+            dest: "{{ jenkins_home_dir }}/security-scan-results/scan-summary-{{ ansible_date_time.epoch }}.html"
+            mode: '0644'
+            owner: "{{ jenkins_user }}"
+            group: "{{ jenkins_group }}"
+          vars:
+            scan_results: "{{ security_scan_results.results | default([]) }}"
+      when: 
+        - jenkins_image_scanning.enabled
+        - jenkins_image_scanning.trivy.scan_on_deploy
+      tags: ['security-scan']
+
+    - name: Apply container security constraints
+      block:
+        - name: Create secure container execution script
+          template:
+            src: secure-container-run.sh.j2
+            dest: "/usr/local/bin/jenkins-secure-run.sh"
+            mode: '0755'
+            owner: root
+            group: root
+            backup: yes
+          vars:
+            security_config: "{{ jenkins_container_security }}"
+            
+        - name: Create team directories with proper permissions
+          file:
+            path: "{{ jenkins_home_dir }}/teams/{{ team_env[0].name }}/{{ team_env[1] }}"
+            state: directory
+            mode: '0755'
+            owner: "{{ jenkins_user }}"
+            group: "{{ jenkins_group }}"
+          with_nested:
+            - "{{ jenkins_teams }}"
+            - ["blue", "green"]
+          loop_control:
+            loop_var: team_env
+            
+        - name: Validate container security script
+          shell: |
+            # Test script syntax
+            bash -n /usr/local/bin/jenkins-secure-run.sh
+          register: script_validation
+          failed_when: script_validation.rc != 0
+          changed_when: false
+          
+        - name: Create security monitoring script
+          template:
+            src: security-monitor.sh.j2
+            dest: "/usr/local/bin/jenkins-security-monitor.sh"
+            mode: '0755'
+            owner: root
+            group: root
+      tags: ['security-constraints']
+
+    - name: Setup security monitoring
+      block:
+        - name: Create security monitoring systemd service
+          template:
+            src: jenkins-security-monitor.service.j2
+            dest: /etc/systemd/system/jenkins-security-monitor.service
+            mode: '0644'
+            owner: root
+            group: root
+          notify: reload systemd
+          
+        - name: Create security monitoring timer
+          template:
+            src: jenkins-security-monitor.timer.j2
+            dest: /etc/systemd/system/jenkins-security-monitor.timer
+            mode: '0644'
+            owner: root
+            group: root
+          notify: reload systemd
+          
+        - name: Enable and start security monitoring
+          systemd:
+            name: jenkins-security-monitor.timer
+            enabled: yes
+            state: started
+            daemon_reload: yes
+      when: jenkins_runtime_security.security_monitoring
+      tags: ['security-monitoring']
+
+    - name: Create vulnerability scanning cron job
+      cron:
+        name: "Jenkins daily vulnerability scan"
+        job: "/usr/local/bin/jenkins-security-scan.sh --scheduled > /var/log/jenkins/security/daily-scan.log 2>&1"
+        minute: "0"
+        hour: "2"
+        user: "{{ jenkins_user }}"
+      when: 
+        - jenkins_image_scanning.enabled
+        - jenkins_image_scanning.vuln_db_update_frequency == "daily"
+      tags: ['vulnerability-cron']
+
+    - name: Set up security audit logging
+      block:
+        - name: Configure rsyslog for Jenkins security logs
+          blockinfile:
+            path: /etc/rsyslog.d/50-jenkins-security.conf
+            create: yes
+            block: |
+              # Jenkins Security Audit Logs
+              :programname, isequal, "jenkins-security" /var/log/jenkins/security/audit.log
+              :programname, isequal, "jenkins-security" stop
+              
+              # Jenkins Container Security Logs
+              :syslogtag, contains, "jenkins-container" /var/log/jenkins/security/container.log
+              :syslogtag, contains, "jenkins-container" stop
+            mode: '0644'
+          notify: restart rsyslog
+          
+        - name: Create logrotate configuration for security logs
+          copy:
+            content: |
+              /var/log/jenkins/security/*.log {
+                  daily
+                  missingok
+                  rotate {{ jenkins_runtime_security.audit_logs.max_log_files }}
+                  compress
+                  delaycompress
+                  copytruncate
+                  maxsize {{ jenkins_runtime_security.audit_logs.max_log_size }}
+                  create 644 {{ jenkins_user }} {{ jenkins_group }}
+              }
+            dest: /etc/logrotate.d/jenkins-security
+            mode: '0644'
+      when: jenkins_runtime_security.audit_logs.enabled
+      tags: ['security-logging']
+
+    - name: Create security compliance report
+      block:
+        - name: Generate security compliance checklist
+          template:
+            src: security-compliance-report.json.j2
+            dest: "{{ jenkins_home_dir }}/security-scan-results/compliance-report-{{ ansible_date_time.epoch }}.json"
+            mode: '0644'
+            owner: "{{ jenkins_user }}"
+            group: "{{ jenkins_group }}"
+            
+        - name: Validate security compliance
+          script: validate-security-compliance.py
+          args:
+            executable: python3
+          environment:
+            JENKINS_HOME: "{{ jenkins_home_dir }}"
+            SECURITY_CONFIG: "{{ jenkins_container_security | to_json }}"
+          register: compliance_validation
+          failed_when: compliance_validation.rc > 1  # Allow warnings (rc=1) but fail on errors (rc>1)
+          
+        - name: Display security compliance status
+          debug:
+            msg: |
+              🔒 Security Compliance Status:
+              {{ compliance_validation.stdout_lines | join('\n') }}
+              {% if compliance_validation.rc == 1 %}
+              ⚠️ Warnings found - review compliance report
+              {% elif compliance_validation.rc == 0 %}
+              ✅ Full compliance achieved
+              {% else %}
+              ❌ Compliance issues found - immediate action required
+              {% endif %}
+      tags: ['security-compliance']
+
+  rescue:
+    - name: Handle security scanning failures
+      debug:
+        msg: |
+          ❌ Security scanning failed: {{ ansible_failed_result.msg | default('Unknown error') }}
+          
+          This may indicate:
+          1. Network connectivity issues downloading security tools
+          2. Insufficient permissions for security operations
+          3. Container runtime not available
+          4. Invalid security configuration
+          
+          Security scanning is critical for production deployments.
+          Please resolve these issues before proceeding.
+          
+    - name: Fail deployment on critical security issues
+      fail:
+        msg: "Security scanning failed - deployment blocked for security reasons"
+      when: 
+        - jenkins_image_scanning.scanning_policies.block_critical
+        - deployment_mode is defined
+        - deployment_mode == "production"
+
+  tags: ['security', 'container-security', 'vulnerability-scanning']

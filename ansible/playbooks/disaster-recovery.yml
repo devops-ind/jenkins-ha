@@ -50,7 +50,7 @@
           ignore_errors: yes
           
         - name: Check running containers
-          shell: docker ps --format 'table {{ "{{.Names}}" }}\t{{ "{{.Status}}" }}\t{{ "{{.Image}}" }}'
+          command: docker ps --format 'table {{ "{{.Names}}" }}	{{ "{{.Status}}" }}	{{ "{{.Image}}" }}'
           register: running_containers
           ignore_errors: yes
           changed_when: false
@@ -105,7 +105,9 @@
             - jenkins-master
             - jenkins-haproxy
           ignore_errors: yes
-          when: not dry_run
+          when:
+            - not dry_run
+            - ansible_service_mgr == 'systemd'
           
         - name: Stop all Jenkins containers
           shell: docker stop $(docker ps -q --filter "name=jenkins-*") || true

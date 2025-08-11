@@ -45,6 +45,293 @@
           - "Jenkins Hosts: {{ jenkins_target_hosts }}"
           - "Monitoring Hosts: {{ monitoring_target_hosts }}"
 
+- name: Pre-Deployment Validation Suite
+  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'all') }}"
+  become: yes
+  gather_facts: yes
+  serial: "100%"  # Run validation on all hosts in parallel
+  vars:
+    deployment_environment: "{{ lookup('env', 'DEPLOYMENT_ENV') | default('local') }}"
+    validation_mode: "{{ validation_mode | default('strict') }}"  # strict, warn, skip
+  tasks:
+    - name: 🔍 Pre-deployment validation framework
+      block:
+        - name: Validate deployment prerequisites
+          assert:
+            that:
+              - ansible_memtotal_mb >= 4096
+              - ansible_processor_vcpus >= 2
+              - (ansible_mounts | selectattr('mount', 'equalto', '/') | first).size_available > 10000000000
+              - ansible_distribution in ['Ubuntu', 'Debian', 'CentOS', 'RedHat', 'Rocky', 'AlmaLinux']
+            fail_msg: |
+              ❌ System requirements not met:
+              - Memory: {{ ansible_memtotal_mb }}MB (minimum: 4GB)
+              - CPU cores: {{ ansible_processor_vcpus }} (minimum: 2)
+              - Disk space: {{ (ansible_mounts | selectattr('mount', 'equalto', '/') | first).size_available // 1000000000 }}GB (minimum: 10GB)
+              - OS: {{ ansible_distribution }} (supported: Ubuntu, Debian, CentOS, RedHat, Rocky, AlmaLinux)
+            success_msg: "✅ System requirements validated"
+
+        - name: Check network connectivity to dependencies
+          uri:
+            url: "{{ item.url }}"
+            method: "{{ item.method | default('HEAD') }}"
+            timeout: 10
+            status_code: [200, 301, 302, 403]  # Some services may return 403 for HEAD requests
+          loop:
+            - { url: "https://registry-1.docker.io", name: "Docker Hub" }
+            - { url: "https://github.com", name: "GitHub" }
+            - { url: "https://repo1.maven.org/maven2/", name: "Maven Central" }
+            - { url: "https://registry.npmjs.org/", name: "NPM Registry" }
+          loop_control:
+            label: "{{ item.name }}"
+          register: connectivity_check
+          failed_when: false
+          
+        - name: Report connectivity issues
+          debug:
+            msg: |
+              ⚠️ Network connectivity issues detected:
+              {% for result in connectivity_check.results %}
+              {% if result.status != 200 %}
+              - {{ result.item.name }}: {{ result.status | default('Failed') }} ({{ result.msg | default('Unknown error') }})
+              {% endif %}
+              {% endfor %}
+          when: connectivity_check.results | selectattr('status', 'undefined') | list | length > 0 or
+                connectivity_check.results | selectattr('status', 'ne', 200) | list | length > 0
+
+        - name: Validate container runtime availability
+          block:
+            - name: Check Docker availability
+              shell: docker --version
+              register: docker_check
+              failed_when: false
+              changed_when: false
+              when: jenkins_container_runtime | default('docker') == 'docker'
+              
+            - name: Check Podman availability  
+              shell: podman --version
+              register: podman_check
+              failed_when: false
+              changed_when: false
+              when: jenkins_container_runtime | default('docker') == 'podman'
+              
+            - name: Validate container runtime is functional
+              shell: |
+                {% if jenkins_container_runtime | default('docker') == 'docker' %}
+                docker info >/dev/null 2>&1
+                {% else %}
+                podman info >/dev/null 2>&1
+                {% endif %}
+              register: runtime_functional
+              failed_when: runtime_functional.rc != 0
+              changed_when: false
+
+        - name: Check for conflicting services
+          block:
+            - name: Check if ports are already in use
+              wait_for:
+                port: "{{ item }}"
+                host: "{{ ansible_default_ipv4.address }}"
+                timeout: 1
+                state: started
+              register: port_check
+              failed_when: false
+              loop:
+                - 8080  # Jenkins default
+                - 9090  # Prometheus
+                - 3000  # Grafana
+                - 5432  # PostgreSQL
+                - 6379  # Redis
+              
+            - name: Report port conflicts
+              debug:
+                msg: |
+                  ⚠️ Port conflicts detected:
+                  {% for result in port_check.results %}
+                  {% if result.failed is not defined or not result.failed %}
+                  - Port {{ result.item }} is already in use
+                  {% endif %}
+                  {% endfor %}
+              when: port_check.results | selectattr('failed', 'undefined') | list | length > 0 or
+                    port_check.results | selectattr('failed', 'equalto', false) | list | length > 0
+
+        - name: Validate SSH connectivity between hosts
+          block:
+            - name: Test SSH connectivity to other Jenkins masters
+              wait_for:
+                port: 22
+                host: "{{ hostvars[item]['ansible_default_ipv4']['address'] | default(item) }}"
+                timeout: 10
+              loop: "{{ groups['jenkins_masters'] | default([]) }}"
+              when: 
+                - groups['jenkins_masters'] | default([]) | length > 1
+                - item != inventory_hostname
+              register: ssh_connectivity
+              failed_when: false
+              
+            - name: Report SSH connectivity issues
+              debug:
+                msg: |
+                  ⚠️ SSH connectivity issues to Jenkins masters:
+                  {% for result in ssh_connectivity.results | default([]) %}
+                  {% if result.failed %}
+                  - {{ result.item }}: Connection failed
+                  {% endif %}
+                  {% endfor %}
+              when: 
+                - ssh_connectivity is defined
+                - ssh_connectivity.results | selectattr('failed', 'equalto', true) | list | length > 0
+
+        - name: Check available disk space for Jenkins data
+          block:
+            - name: Create Jenkins directories for space check
+              file:
+                path: "{{ item }}"
+                state: directory
+                mode: '0755'
+              loop:
+                - "{{ jenkins_home_dir | default('/var/jenkins') }}"
+                - "{{ jenkins_shared_workspace | default('/shared/jenkins/workspace') }}"
+              register: dir_creation
+              
+            - name: Check disk space requirements
+              shell: |
+                # Check available space in Jenkins home
+                jenkins_avail=$(df {{ jenkins_home_dir | default('/var/jenkins') }} | tail -1 | awk '{print $4}')
+                jenkins_avail_gb=$((jenkins_avail / 1024 / 1024))
+                
+                # Check available space in shared workspace
+                workspace_avail=$(df {{ jenkins_shared_workspace | default('/shared/jenkins/workspace') }} | tail -1 | awk '{print $4}')
+                workspace_avail_gb=$((workspace_avail / 1024 / 1024))
+                
+                echo "jenkins_home:${jenkins_avail_gb}GB,workspace:${workspace_avail_gb}GB"
+                
+                # Validate minimum space requirements (20GB for Jenkins home, 50GB for workspace)
+                if [[ $jenkins_avail_gb -lt 20 ]]; then
+                  echo "ERROR: Insufficient disk space for Jenkins home: ${jenkins_avail_gb}GB < 20GB" >&2
+                  exit 1
+                fi
+                
+                if [[ $workspace_avail_gb -lt 50 ]]; then
+                  echo "WARNING: Low disk space for workspace: ${workspace_avail_gb}GB < 50GB recommended" >&2
+                  exit 2
+                fi
+              register: disk_space_check
+              failed_when: disk_space_check.rc == 1
+              changed_when: false
+
+        - name: Validate system security configuration
+          block:
+            - name: Check if SELinux/AppArmor is properly configured
+              shell: |
+                if command -v getenforce >/dev/null 2>&1; then
+                  selinux_status=$(getenforce)
+                  echo "SELinux: $selinux_status"
+                  if [[ "$selinux_status" == "Disabled" ]]; then
+                    echo "WARNING: SELinux is disabled"
+                    exit 1
+                  fi
+                elif command -v aa-status >/dev/null 2>&1; then
+                  apparmor_status=$(aa-status --enabled && echo "enabled" || echo "disabled")
+                  echo "AppArmor: $apparmor_status"
+                else
+                  echo "No mandatory access control system found"
+                  exit 2
+                fi
+              register: mac_check
+              failed_when: false
+              changed_when: false
+              
+            - name: Check for critical security updates
+              package_facts:
+                manager: auto
+              register: package_facts_result
+              
+            - name: Validate firewall configuration
+              shell: |
+                if systemctl is-active --quiet firewalld; then
+                  echo "firewalld: active"
+                elif systemctl is-active --quiet ufw; then
+                  echo "ufw: active"  
+                elif systemctl is-active --quiet iptables; then
+                  echo "iptables: active"
+                else
+                  echo "No active firewall detected"
+                  exit 1
+                fi
+              register: firewall_check
+              failed_when: false
+              changed_when: false
+
+        - name: Generate validation report
+          template:
+            src: validation-report.json.j2
+            dest: "/tmp/jenkins-validation-{{ ansible_date_time.epoch }}.json"
+            mode: '0644'
+          vars:
+            system_info:
+              hostname: "{{ inventory_hostname }}"
+              memory_mb: "{{ ansible_memtotal_mb }}"
+              cpu_cores: "{{ ansible_processor_vcpus }}"
+              disk_space: "{{ disk_space_check.stdout | default('unknown') }}"
+              os: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
+              runtime: "{{ jenkins_container_runtime | default('docker') }}"
+            connectivity: "{{ connectivity_check.results | default([]) }}"
+            ports: "{{ port_check.results | default([]) }}"
+            security: 
+              mac_system: "{{ mac_check.stdout | default('unknown') }}"
+              firewall: "{{ firewall_check.stdout | default('unknown') }}"
+            validation_timestamp: "{{ ansible_date_time.iso8601 }}"
+            validation_mode: "{{ validation_mode }}"
+          delegate_to: localhost
+          run_once: true
+
+        - name: Display validation summary
+          debug:
+            msg: |
+              🔍 Pre-deployment Validation Summary for {{ inventory_hostname }}:
+              ✅ System Requirements: PASSED
+              ✅ Container Runtime: {{ jenkins_container_runtime | default('docker') | upper }} available
+              ✅ Disk Space: Jenkins={{ disk_space_check.stdout.split(',')[0] | default('unknown') }}, Workspace={{ disk_space_check.stdout.split(',')[1] | default('unknown') }}
+              ✅ Security: MAC={{ mac_check.stdout.split(':')[1] | default('unknown') | trim }}, Firewall={{ firewall_check.stdout.split(':')[1] | default('unknown') | trim }}
+              
+              {% if connectivity_check.results | selectattr('status', 'ne', 200) | list | length > 0 %}
+              ⚠️  Network Issues: {{ connectivity_check.results | selectattr('status', 'ne', 200) | list | length }} connectivity problems
+              {% endif %}
+              
+              Validation Mode: {{ validation_mode | upper }}
+              Report: /tmp/jenkins-validation-{{ ansible_date_time.epoch }}.json
+
+      rescue:
+        - name: Handle validation failures
+          debug:
+            msg: |
+              ❌ Pre-deployment validation failed: {{ ansible_failed_result.msg | default('Unknown validation error') }}
+              
+              Validation can proceed in different modes:
+              - strict: Deployment blocked on any validation failure (current)
+              - warn: Deployment continues with warnings
+              - skip: Validation bypassed (not recommended for production)
+              
+              To change mode: ansible-playbook site.yml -e validation_mode=warn
+              
+        - name: Fail on strict validation mode
+          fail:
+            msg: |
+              Deployment blocked due to validation failures in strict mode.
+              Review the validation report and resolve issues before proceeding.
+              
+              To bypass (not recommended): ansible-playbook site.yml -e validation_mode=skip
+          when: validation_mode == 'strict'
+          
+        - name: Continue with warnings in warn mode
+          debug:
+            msg: "⚠️ Continuing deployment despite validation warnings (warn mode)"
+          when: validation_mode == 'warn'
+
+      when: validation_mode != 'skip'
+      tags: ['validation', 'pre-deployment']
+
 - name: Bootstrap Infrastructure
   hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'all') }}"
   become: yes

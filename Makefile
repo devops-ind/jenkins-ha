@@ -198,11 +198,11 @@ urls: ## Show service URLs
 	@echo "$(GREEN)Harbor:     http://localhost:8082$(RESET)"
 
 .PHONY: credentials
-credentials: ## Show default credentials
-	@echo "$(BLUE)🔐 Default Credentials:$(RESET)"
-	@echo "$(YELLOW)Jenkins:    admin / admin123$(RESET)"
-	@echo "$(YELLOW)Grafana:    admin / admin$(RESET)"
-	@echo "$(YELLOW)Harbor:     admin / Harbor12345$(RESET)"
+credentials: ## Show credential locations
+	@echo "$(BLUE)🔐 Credentials Information:$(RESET)"
+	@echo "$(YELLOW)Jenkins credentials are stored in encrypted vault files$(RESET)"
+	@echo "$(YELLOW)Use 'make vault-edit' to manage credentials securely$(RESET)"
+	@echo "$(YELLOW)Vault location: $(ANSIBLE_DIR)/inventories/*/group_vars/all/vault.yml$(RESET)"
 
 ##@ Help
 

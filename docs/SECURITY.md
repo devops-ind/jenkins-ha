@@ -1,23 +1,74 @@
-# SECURITY
+# Jenkins HA Security Guide
 
 ## Overview
 
-This document describes the comprehensive security implementation for the Jenkins High Availability infrastructure. The security framework includes system hardening, network security, access controls, intrusion detection, file integrity monitoring, and compliance with security best practices.
+This document provides comprehensive security guidance for the Jenkins High Availability infrastructure. The system implements enterprise-grade security controls including container security, vulnerability scanning, compliance validation, and automated security monitoring.
+
+**Security Enhancements Implemented:**
+- **Container Security**: Trivy vulnerability scanning, security constraints, runtime monitoring
+- **Automated Rollback**: SLI-based rollback triggers with security validation
+- **Enhanced Monitoring**: Real-time security monitoring with compliance reporting
+- **Job DSL Security**: Secure execution replacing vulnerable dynamic-ansible-executor.groovy
+- **Credential Management**: Automated secure credential generation and vault integration
 
 ## Table of Contents
 
+- [Current Security Implementation](#current-security-implementation)
 - [Security Architecture](#security-architecture)
-- [System Hardening](#system-hardening)
-- [Network Security](#network-security)
-- [Access Control and Authentication](#access-control-and-authentication)
 - [Container Security](#container-security)
-- [Intrusion Detection and Prevention](#intrusion-detection-and-prevention)
-- [File Integrity Monitoring](#file-integrity-monitoring)
-- [Security Monitoring and Alerting](#security-monitoring-and-alerting)
-- [Vulnerability Management](#vulnerability-management)
-- [Compliance and Auditing](#compliance-and-auditing)
+- [Job DSL Security](#job-dsl-security)
+- [Credential Management](#credential-management)
+- [Network Security](#network-security)
+- [Compliance & Auditing](#compliance--auditing)
 - [Incident Response](#incident-response)
+- [Security Testing](#security-testing)
 - [Security Maintenance](#security-maintenance)
+
+## Current Security Implementation
+
+### Implemented Security Controls
+
+#### Container Security Framework
+- **Trivy Scanner Integration**: Automated vulnerability scanning (v0.48.3)
+- **Security Constraints**: Non-root execution, non-privileged, read-only filesystem
+- **Runtime Monitoring**: Real-time security monitoring with `/usr/local/bin/jenkins-security-monitor.sh`
+- **Compliance Validation**: Automated security compliance checking
+
+#### Secure Job DSL Execution
+- **Removed Vulnerable Code**: Eliminated `dynamic-ansible-executor.groovy` (critical security vulnerability)
+- **Secure Replacement**: Implemented `secure-ansible-executor.groovy` with sandboxing
+- **Approval Workflows**: Required security team approval for production execution
+- **Audit Logging**: Complete audit trail of all Job DSL changes
+
+#### Enhanced Credential Management
+- **Automated Generation**: Secure credential generation with `scripts/generate-credentials.sh`
+- **Vault Integration**: All credentials stored in encrypted Ansible Vault
+- **Rotation Support**: Automated credential rotation capabilities
+- **Access Controls**: Role-based access to credential stores
+
+#### Security Monitoring & Alerting
+- **Real-time Monitoring**: Continuous security monitoring and alerting
+- **SLI Integration**: Security metrics integrated with SLI monitoring
+- **Automated Response**: Automated containment on security violations
+- **Compliance Reporting**: Automated security compliance validation and reporting
+
+### Security File Locations
+
+```bash
+# Security Scripts
+/usr/local/bin/jenkins-security-scan.sh          # Trivy vulnerability scanning
+/usr/local/bin/jenkins-security-monitor.sh       # Runtime security monitoring
+/usr/local/bin/jenkins-secure-run.sh            # Secure container execution
+
+# Security Configuration
+/etc/jenkins/security-policies/                  # Security policy configurations
+/var/log/jenkins/security/                       # Security audit logs
+ansible/roles/jenkins-infrastructure/tasks/security-scanning.yml  # Security tasks
+
+# Credential Management
+scripts/generate-credentials.sh                  # Secure credential generation
+ansible/inventories/*/group_vars/all/vault.yml  # Encrypted credential storage
+```
 
 ## Security Architecture
 

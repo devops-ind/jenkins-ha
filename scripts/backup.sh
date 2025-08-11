@@ -64,6 +64,7 @@ esac
 
 # Load environment variables
 if [ -f "environments/$ENVIRONMENT.env" ]; then
+    # shellcheck source=environments/production.env
     source "environments/$ENVIRONMENT.env"
 fi
 
@@ -112,18 +113,18 @@ if [ -f "$BACKUP_FILE" ]; then
     # Test archive integrity
     if tar -tzf "$BACKUP_FILE" > /dev/null 2>&1; then
         success "Backup archive integrity verified"
-        
+
         # Get backup size
         BACKUP_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
         log "Backup size: $BACKUP_SIZE"
-        
+
         # List backup contents
         log "Backup contents summary:"
-        tar -tzf "$BACKUP_FILE" | head -20 | while read line; do
+        tar -tzf "$BACKUP_FILE" | head -20 | while read -r line; do
             log "  $line"
         done
-        
-        if [ $(tar -tzf "$BACKUP_FILE" | wc -l) -gt 20 ]; then
+
+        if [ "$(tar -tzf "$BACKUP_FILE" | wc -l)" -gt 20 ]; then
             log "  ... and $(( $(tar -tzf "$BACKUP_FILE" | wc -l) - 20 )) more files"
         fi
     else

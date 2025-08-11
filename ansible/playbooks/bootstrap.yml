@@ -43,15 +43,13 @@
         - /etc/jenkins
         
     - name: Configure system limits for jenkins
-      lineinfile:
+      blockinfile:
         path: /etc/security/limits.conf
-        line: "{{ item }}"
-        backup: yes
-      loop:
-        - "jenkins soft nofile 65536"
-        - "jenkins hard nofile 65536"
-        - "jenkins soft nproc 4096"
-        - "jenkins hard nproc 4096"
+        block: |
+          jenkins soft nofile 65536
+          jenkins hard nofile 65536
+          jenkins soft nproc 4096
+          jenkins hard nproc 4096
         
     - name: Verify bootstrap completion
       debug:

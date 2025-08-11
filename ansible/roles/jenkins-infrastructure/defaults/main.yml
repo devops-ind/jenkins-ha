@@ -106,6 +106,146 @@ jenkins_security_enabled: true
 jenkins_csrf_protection: true
 jenkins_agent_protocols: ["JNLP4-connect", "Ping"]
 
+# Container Security Configuration
+jenkins_container_security:
+  # Security constraints
+  no_new_privileges: true
+  read_only_root_filesystem: true
+  run_as_non_root: true
+  run_as_user: "{{ jenkins_uid }}"
+  run_as_group: "{{ jenkins_gid }}"
+  
+  # Security options
+  security_opt:
+    - "no-new-privileges:true"
+    - "apparmor=docker-default"
+  
+  # Capability drops (remove all capabilities by default)
+  cap_drop:
+    - "ALL"
+  
+  # Only add required capabilities back
+  cap_add:
+    - "SETGID"
+    - "SETUID"
+    - "CHOWN"
+    - "DAC_OVERRIDE"
+    - "NET_BIND_SERVICE"
+  
+  # Resource limits
+  memory_limit: "{{ jenkins_master_memory }}"
+  memory_reservation: "{{ (jenkins_master_memory | regex_replace('g', '') | int * 0.8) | int }}g"
+  cpu_limit: "{{ jenkins_master_cpu_limit }}"
+  cpu_reservation: "{{ jenkins_master_cpu_limit | float * 0.5 }}"
+  
+  # Network security
+  network_mode: "bridge"  # Avoid host networking
+  publish_ports: true     # Explicitly publish required ports only
+  
+  # File system security
+  tmpfs:
+    - "/tmp:noexec,nosuid,size=100m"
+    - "/var/tmp:noexec,nosuid,size=50m"
+  
+  # Mount security
+  mount_propagation: "private"
+  read_only_paths:
+    - "/sys"
+    - "/proc/sys"
+    - "/proc/sysrq-trigger"
+    - "/proc/latency_stats"
+    - "/proc/acpi"
+    - "/proc/timer_stats"
+    - "/proc/scsi"
+  
+  # Environment variable filtering (prevent sensitive data leakage)
+  env_whitelist:
+    - "JAVA_OPTS"
+    - "JENKINS_OPTS"
+    - "TZ"
+    - "PATH"
+    - "HOME"
+    - "USER"
+
+# Container Image Scanning Configuration
+jenkins_image_scanning:
+  enabled: true
+  scanner: "trivy"  # trivy, clair, or anchore
+  
+  # Trivy configuration
+  trivy:
+    severity_levels: ["HIGH", "CRITICAL"]
+    fail_on_severity: "HIGH"
+    ignore_unfixed: false
+    scan_timeout: "5m"
+    scan_on_build: true
+    scan_on_deploy: true
+    
+  # Vulnerability database update frequency
+  vuln_db_update_frequency: "daily"
+  
+  # Image scanning policies
+  scanning_policies:
+    # Block deployment if critical vulnerabilities found
+    block_critical: true
+    # Maximum allowed high severity vulnerabilities
+    max_high_vulns: 5
+    # Maximum allowed medium severity vulnerabilities  
+    max_medium_vulns: 20
+    # Age threshold for vulnerability data (days)
+    vuln_data_max_age: 7
+    
+  # Scanning exclusions (use carefully)
+  scan_exclusions: []
+  
+  # SBOM (Software Bill of Materials) generation
+  sbom:
+    enabled: true
+    format: "spdx-json"
+    include_dependencies: true
+
+# Container Runtime Security
+jenkins_runtime_security:
+  # Enable security monitoring
+  security_monitoring: true
+  
+  # Audit logging
+  audit_logs:
+    enabled: true
+    log_level: "INFO"
+    log_format: "json"
+    max_log_size: "100MB"
+    max_log_files: 10
+    
+  # Resource monitoring thresholds
+  resource_monitoring:
+    cpu_threshold: 80  # Alert if CPU usage > 80%
+    memory_threshold: 85  # Alert if memory usage > 85%
+    disk_threshold: 90  # Alert if disk usage > 90%
+    
+  # Network security
+  network_policies:
+    # Restrict outbound connections
+    egress_rules:
+      - protocol: "tcp"
+        port: 443
+        description: "HTTPS outbound"
+      - protocol: "tcp" 
+        port: 80
+        description: "HTTP outbound (limit to specific hosts)"
+      - protocol: "tcp"
+        port: 22
+        description: "SSH for git operations"
+    
+    # Allow inbound connections
+    ingress_rules:
+      - protocol: "tcp"
+        port: "{{ jenkins_port }}"
+        description: "Jenkins web interface"
+      - protocol: "tcp"
+        port: "{{ jenkins_agent_port }}"
+        description: "Jenkins agent connections"
+
 # Image Build Configuration
 jenkins_images_build_dir: "/tmp/jenkins-images"
 jenkins_images_push: true

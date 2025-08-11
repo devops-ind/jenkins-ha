@@ -1,0 +1,64 @@
+---
+jenkins_teams:
+  - name: devops
+    ports:
+      web: 8080
+      agent: 50000
+    resources:
+      memory: "3g"
+      cpu: "2.0"
+    env_vars:
+      JENKINS_TEAM: "devops"
+      JENKINS_ADMIN_PASSWORD: "{{ devops_jenkins_admin_password | default('VAULT_DEVOPS_JENKINS_ADMIN_PASSWORD') }}"
+    labels:
+      team: "devops"
+      tier: "production"
+      environment: "{{ deployment_mode | default('local') }}"
+    credentials:
+      - type: "usernamePassword"
+        id: "devops-git-credentials"
+        username: "{{ devops_git_username }}"
+        password: "{{ devops_git_password }}"
+        description: "DevOps Team Git Credentials"
+
+  - name: developer
+    ports:
+      web: 8081
+      agent: 50001
+    resources:
+      memory: "2g"
+      cpu: "1.5"
+    env_vars:
+      JENKINS_TEAM: "developer"
+      JENKINS_ADMIN_PASSWORD: "{{ developer_jenkins_admin_password | default('VAULT_DEVELOPER_JENKINS_ADMIN_PASSWORD') }}"
+    labels:
+      team: "developer"
+      tier: "production"
+      environment: "{{ deployment_mode | default('local') }}"
+    credentials:
+      - type: "usernamePassword"
+        id: "developer-git-credentials"
+        username: "{{ developer_git_username }}"
+        password: "{{ developer_git_password }}"
+        description: "Developer Team Git Credentials"
+
+  - name: qa
+    ports:
+      web: 8082
+      agent: 50002
+    resources:
+      memory: "2g"
+      cpu: "1.0"
+    env_vars:
+      JENKINS_TEAM: "qa"
+      JENKINS_ADMIN_PASSWORD: "{{ qa_jenkins_admin_password | default('VAULT_QA_JENKINS_ADMIN_PASSWORD') }}"
+    labels:
+      team: "qa"
+      tier: "production"
+      environment: "{{ deployment_mode | default('local') }}"
+    credentials:
+      - type: "usernamePassword"
+        id: "qa-git-credentials"
+        username: "{{ qa_git_username }}"
+        password: "{{ qa_git_password }}"
+        description: "QA Team Git Credentials"

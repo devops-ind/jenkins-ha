@@ -50,16 +50,14 @@ pipeline {
         stage('Environment Setup') {
             steps {
                 script {
-                    echo "🚀 Jenkins Backup Pipeline"
-                    echo "🎯 Environment: ${params.ENVIRONMENT}"
-                    echo "📦 Backup Type: ${params.BACKUP_TYPE}"
-                    echo "🏷️ Backup Tag: ${params.CUSTOM_TAG ?: BACKUP_TIMESTAMP}"
-                    echo "✅ Verify Backup: ${params.VERIFY_BACKUP}"
-                    echo "🧹 Cleanup Old: ${params.CLEANUP_OLD_BACKUPS}"
-                    echo "🐍 Running on Python Agent: ${env.NODE_NAME}"
-                    
-                    // Ensure required tools are available
                     sh '''
+                        echo "🚀 Jenkins Backup Pipeline"
+                        echo "🎯 Environment: ${params.ENVIRONMENT}"
+                        echo "📦 Backup Type: ${params.BACKUP_TYPE}"
+                        echo "🏷️ Backup Tag: ${params.CUSTOM_TAG ?: BACKUP_TIMESTAMP}"
+                        echo "✅ Verify Backup: ${params.VERIFY_BACKUP}"
+                        echo "🧹 Cleanup Old: ${params.CLEANUP_OLD_BACKUPS}"
+                        echo "🐍 Running on Python Agent: ${env.NODE_NAME}"
                         python3 --version
                         pip3 --version
                         which ansible || echo "Ansible not found - will install"
@@ -72,18 +70,12 @@ pipeline {
         stage('Pre-Backup Validation') {
             steps {
                 script {
-                    echo "🔍 Validating backup prerequisites..."
-                    
-                    // Check backup destination
                     sh '''
+                        echo "🔍 Validating backup prerequisites..."
                         echo "Checking backup destination..."
                         # Add validation for backup mount points
                         df -h || true
                         mount | grep backup || echo "Backup mount not found"
-                    '''
-                    
-                    // Check Jenkins services status
-                    sh '''
                         echo "Checking Jenkins services status..."
                         ansible -i ansible/inventories/${ENVIRONMENT}/hosts.yml \
                             jenkins_masters -m shell \
@@ -96,8 +88,6 @@ pipeline {
         stage('Execute Backup') {
             steps {
                 script {
-                    echo "📦 Executing ${params.BACKUP_TYPE} backup..."
-                    
                     def backupTag = params.CUSTOM_TAG ?: BACKUP_TIMESTAMP
                     def extraVars = [
                         "backup_type=${params.BACKUP_TYPE}",
@@ -106,8 +96,8 @@ pipeline {
                         "cleanup_old_backups=${params.CLEANUP_OLD_BACKUPS}"
                     ]
                     
-                    // Execute backup using Ansible
                     sh """
+                        echo "📦 Executing ${params.BACKUP_TYPE} backup..."
                         echo "🚀 Running Ansible backup playbook..."
                         ansible-playbook -i ansible/inventories/${params.ENVIRONMENT}/hosts.yml \
                             ansible/site.yml \
@@ -125,9 +115,8 @@ pipeline {
             }
             steps {
                 script {
-                    echo "✅ Verifying backup integrity..."
-                    
                     sh '''
+                        echo "✅ Verifying backup integrity..."
                         echo "Running backup verification scripts..."
                         # Add backup verification logic
                         python3 -c "print('Backup verification completed')" 
@@ -142,9 +131,8 @@ pipeline {
             }
             steps {
                 script {
-                    echo "🧹 Cleaning up old backups..."
-                    
                     sh '''
+                        echo "🧹 Cleaning up old backups..."
                         echo "Running backup cleanup..."
                         # Add cleanup logic based on retention policies
                         find /backup -type f -name "*.tar.gz" -mtime +30 -ls || true

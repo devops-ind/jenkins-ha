@@ -55,22 +55,19 @@ pipeline {
         stage('Disaster Recovery Setup') {
             steps {
                 script {
-                    echo "🎆 Jenkins Disaster Recovery Pipeline"
-                    echo "🎯 Environment: ${params.ENVIRONMENT}"
-                    echo "🔄 Recovery Action: ${params.RECOVERY_ACTION}"
-                    echo "📦 Backup Tag: ${params.BACKUP_TAG}"
-                    echo "🎯 Recovery Scope: ${params.RECOVERY_SCOPE}"
-                    echo "⚠️ Dry Run: ${params.DRY_RUN}"
-                    echo "🐍 Running on Python Agent: ${env.NODE_NAME}"
-                    
-                    // Validate disaster recovery environment
                     sh '''
+                        set -e
+                        echo "🎆 Jenkins Disaster Recovery Pipeline"
+                        echo "🎯 Environment: ${params.ENVIRONMENT}"
+                        echo "🔄 Recovery Action: ${params.RECOVERY_ACTION}"
+                        echo "📦 Backup Tag: ${params.BACKUP_TAG}"
+                        echo "🎯 Recovery Scope: ${params.RECOVERY_SCOPE}"
+                        echo "⚠️ Dry Run: ${params.DRY_RUN}"
+                        echo "🐍 Running on Python Agent: ${env.NODE_NAME}"
                         python3 --version
                         pip3 --version
                         which ansible || echo "Ansible not found - will install"
                         which rsync || echo "Rsync not found - will install"
-                        
-                        # Install disaster recovery tools
                         pip3 install --user pyyaml requests
                     '''
                     
@@ -95,9 +92,9 @@ pipeline {
         stage('Pre-Recovery Validation') {
             steps {
                 script {
-                    echo "🔍 Pre-recovery validation..."
-                    
                     sh '''
+                        set -e
+                        echo "🔍 Pre-recovery validation..."
                         echo "Validating backup availability..."
                         
                         # Check backup location and files
@@ -110,49 +107,45 @@ pipeline {
                         echo "Validating recovery target infrastructure..."
                         ansible -i ansible/inventories/${ENVIRONMENT}/hosts.yml \
                             all -m ping || echo "Some hosts are not reachable"
-                    '''
-                    
-                    // Create recovery plan
-                    sh '''
+
                         echo "Creating disaster recovery plan..."
                         
                         python3 -c "
-                        import json
-                        from datetime import datetime
-                        
-                        recovery_plan = {
-                            'recovery_id': '${RECOVERY_TIMESTAMP}',
-                            'environment': '${ENVIRONMENT}',
-                            'action': '${RECOVERY_ACTION}',
-                            'scope': '${RECOVERY_SCOPE}',
-                            'backup_tag': '${BACKUP_TAG}',
-                            'dry_run': ${params.DRY_RUN},
-                            'created_at': datetime.now().isoformat(),
-                            'steps': []
-                        }
-                        
-                        # Define recovery steps based on scope
-                        if '${params.RECOVERY_SCOPE}' in ['all', 'jenkins-masters']:
-                            recovery_plan['steps'].append('Restore Jenkins Master configurations')
-                            recovery_plan['steps'].append('Restore Jenkins Master data')
-                        
-                        if '${params.RECOVERY_SCOPE}' in ['all', 'jenkins-agents']:
-                            recovery_plan['steps'].append('Restore Jenkins Agent configurations')
-                        
-                        if '${params.RECOVERY_SCOPE}' in ['all', 'monitoring']:
-                            recovery_plan['steps'].append('Restore monitoring stack')
-                        
-                        if '${params.RECOVERY_SCOPE}' in ['all', 'configuration-only']:
-                            recovery_plan['steps'].append('Restore configuration files')
-                        
-                        # Save recovery plan
-                        with open(f'recovery-plan-{recovery_plan[\"recovery_id\"]}.json', 'w') as f:
-                            json.dump(recovery_plan, f, indent=2)
-                        
-                        print(f'Recovery plan created: recovery-plan-{recovery_plan[\"recovery_id\"]}.json')
-                        print(f'Total recovery steps: {len(recovery_plan[\"steps\"])}')
-                        "
-                    '''
+import json
+from datetime import datetime
+
+recovery_plan = {
+    'recovery_id': '${RECOVERY_TIMESTAMP}',
+    'environment': '${ENVIRONMENT}',
+    'action': '${RECOVERY_ACTION}',
+    'scope': '${RECOVERY_SCOPE}',
+    'backup_tag': '${BACKUP_TAG}',
+    'dry_run': ${params.DRY_RUN},
+    'created_at': datetime.now().isoformat(),
+    'steps': []
+}
+
+# Define recovery steps based on scope
+if '${params.RECOVERY_SCOPE}' in ['all', 'jenkins-masters']:
+    recovery_plan['steps'].append('Restore Jenkins Master configurations')
+    recovery_plan['steps'].append('Restore Jenkins Master data')
+
+if '${params.RECOVERY_SCOPE}' in ['all', 'jenkins-agents']:
+    recovery_plan['steps'].append('Restore Jenkins Agent configurations')
+
+if '${params.RECOVERY_SCOPE}' in ['all', 'monitoring']:
+    recovery_plan['steps'].append('Restore monitoring stack')
+
+if '${params.RECOVERY_SCOPE}' in ['all', 'configuration-only']:
+    recovery_plan['steps'].append('Restore configuration files')
+
+# Save recovery plan
+with open(f'recovery-plan-{recovery_plan["recovery_id"]}.json', 'w') as f:
+    json.dump(recovery_plan, f, indent=2)
+
+print(f'Recovery plan created: recovery-plan-{recovery_plan["recovery_id"]}.json')
+print(f'Total recovery steps: {len(recovery_plan["steps"])}')
+"
                 }
             }
         }
@@ -191,9 +184,9 @@ pipeline {
                     ]
                     
                     if (params.DRY_RUN) {
-                        echo "🎭 DRY RUN MODE - Simulating disaster recovery..."
-                        
                         sh '''
+                            set -e
+                            echo "🎭 DRY RUN MODE - Simulating disaster recovery..."
                             echo "=== DRY RUN DISASTER RECOVERY ==="
                             echo "Would execute the following recovery operations:"
                             
@@ -215,10 +208,9 @@ pipeline {
                             "
                         '''
                     } else {
-                        echo "⚠️ EXECUTING ACTUAL DISASTER RECOVERY ⚠️"
-                        
-                        // Execute actual recovery using Ansible
                         sh """
+                            set -e
+                            echo "⚠️ EXECUTING ACTUAL DISASTER RECOVERY ⚠️"
                             echo "🚀 Running Ansible disaster recovery playbook..."
                             ansible-playbook -i ansible/inventories/${params.ENVIRONMENT}/hosts.yml \
                                 ansible/site.yml \
@@ -235,8 +227,6 @@ pipeline {
         stage('Post-Recovery Validation') {
             steps {
                 script {
-                    echo "✅ Post-recovery validation..."
-                    
                     if (!params.DRY_RUN) {
                         // Wait for services to stabilize
                         sleep(time: 60, unit: 'SECONDS')
@@ -250,33 +240,33 @@ pipeline {
                               ],
                               wait: true
                     }
-                    
-                    // Generate recovery report
+
                     sh '''
+                        set -e
+                        echo "✅ Post-recovery validation..."
                         echo "Generating disaster recovery report..."
                         
                         python3 -c "
-                        import json
-                        from datetime import datetime
-                        
-                        recovery_report = {
-                            'recovery_id': '${RECOVERY_TIMESTAMP}',
-                            'environment': '${ENVIRONMENT}',
-                            'action': '${RECOVERY_ACTION}',
-                            'scope': '${RECOVERY_SCOPE}',
-                            'backup_tag': '${BACKUP_TAG}',
-                            'dry_run': ${params.DRY_RUN},
-                            'completed_at': datetime.now().isoformat(),
-                            'status': 'completed',
-                            'validation_results': 'pending'
-                        }
-                        
-                        with open(f'recovery-report-{recovery_report[\"recovery_id\"]}.json', 'w') as f:
-                            json.dump(recovery_report, f, indent=2)
-                        
-                        print(f'Recovery report generated: recovery-report-{recovery_report[\"recovery_id\"]}.json')
-                        "
-                    '''
+import json
+from datetime import datetime
+
+recovery_report = {
+    'recovery_id': '${RECOVERY_TIMESTAMP}',
+    'environment': '${ENVIRONMENT}',
+    'action': '${RECOVERY_ACTION}',
+    'scope': '${RECOVERY_SCOPE}',
+    'backup_tag': '${BACKUP_TAG}',
+    'dry_run': ${params.DRY_RUN},
+    'completed_at': datetime.now().isoformat(),
+    'status': 'completed',
+    'validation_results': 'pending'
+}
+
+with open(f'recovery-report-{recovery_report["recovery_id"]}.json', 'w') as f:
+    json.dump(recovery_report, f, indent=2)
+
+print(f'Recovery report generated: recovery-report-{recovery_report["recovery_id"]}.json')
+"'''
                 }
             }
         }

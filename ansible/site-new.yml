@@ -57,102 +57,18 @@
       tags: ['harbor', 'registry']
       when: harbor_integration_enabled | default(true)
 
-# NEW: Deploy Jenkins Masters using the reusable jenkins-master role
-- name: Deploy DevOps Team Jenkins Master
+- name: Deploy Jenkins Masters
   hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'jenkins_masters') }}"
   become: yes
   gather_facts: yes
   vars:
     jenkins_master_container_runtime: "{{ jenkins_container_runtime | default('podman') }}"
-    jenkins_master_config:
-      team_name: "devops"
-      active_environment: "blue"
-      ports:
-        web: 8080
-        agent: 50000
-      resources:
-        memory: "3g"
-        cpu: "2.0"
-      env_vars:
-        JENKINS_TEAM: "devops"
-        JENKINS_ADMIN_PASSWORD: "{{ devops_jenkins_admin_password }}"
-      labels:
-        team: "devops"
-        tier: "production"
-        environment: "{{ deployment_mode | default('local') }}"
-      credentials:
-        - type: "usernamePassword"
-          id: "devops-git-credentials"
-          username: "{{ devops_git_username }}"
-          password: "{{ devops_git_password }}"
-          description: "DevOps Team Git Credentials"
   roles:
     - role: jenkins-master
-      tags: ['jenkins', 'devops', 'deploy']
-
-- name: Deploy Developer Team Jenkins Master
-  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'jenkins_masters') }}"
-  become: yes
-  gather_facts: yes
-  vars:
-    jenkins_master_container_runtime: "{{ jenkins_container_runtime | default('podman') }}"
-    jenkins_master_config:
-      team_name: "developer"
-      active_environment: "blue"
-      ports:
-        web: 8081
-        agent: 50001
-      resources:
-        memory: "2g"
-        cpu: "1.5"
-      env_vars:
-        JENKINS_TEAM: "developer"
-        JENKINS_ADMIN_PASSWORD: "{{ developer_jenkins_admin_password }}"
-      labels:
-        team: "developer"
-        tier: "production"
-        environment: "{{ deployment_mode | default('local') }}"
-      credentials:
-        - type: "usernamePassword"
-          id: "developer-git-credentials"
-          username: "{{ developer_git_username }}"
-          password: "{{ developer_git_password }}"
-          description: "Developer Team Git Credentials"
-  roles:
-    - role: jenkins-master
-      tags: ['jenkins', 'developer', 'deploy']
-
-- name: Deploy QA Team Jenkins Master
-  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'jenkins_masters') }}"
-  become: yes
-  gather_facts: yes
-  vars:
-    jenkins_master_container_runtime: "{{ jenkins_container_runtime | default('podman') }}"
-    jenkins_master_config:
-      team_name: "qa"
-      active_environment: "blue"
-      ports:
-        web: 8082
-        agent: 50002
-      resources:
-        memory: "2g"
-        cpu: "1.0"
-      env_vars:
-        JENKINS_TEAM: "qa"
-        JENKINS_ADMIN_PASSWORD: "{{ qa_jenkins_admin_password }}"
-      labels:
-        team: "qa"
-        tier: "production"
-        environment: "{{ deployment_mode | default('local') }}"
-      credentials:
-        - type: "usernamePassword"
-          id: "qa-git-credentials"
-          username: "{{ qa_git_username }}"
-          password: "{{ qa_git_password }}"
-          description: "QA Team Git Credentials"
-  roles:
-    - role: jenkins-master
-      tags: ['jenkins', 'qa', 'deploy']
+      vars:
+        jenkins_master_config: "{{ item }}"
+      loop: "{{ jenkins_teams }}"
+      tags: ['jenkins', 'deploy']
 
 - name: Configure High Availability
   hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'load_balancers:jenkins_masters') }}"

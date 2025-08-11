@@ -18,7 +18,7 @@
         that:
           - operation in ['switch', 'status', 'health-check', 'rollback']
           - target_environment in ['blue', 'green']
-          - target_team in ['all', 'devops', 'developer', 'qa'] or target_team in jenkins_teams|map(attribute='name')|list
+          - target_team in ['all'] or target_team in jenkins_teams|map(attribute='name')|list
         fail_msg: |
           Invalid parameters:
           - operation must be: switch, status, health-check, or rollback
@@ -58,7 +58,7 @@
     - name: Perform comprehensive health checks
       block:
         - name: Run health checks for target environment
-          script: "{{ jenkins_home_dir }}/bin/jenkins-blue-green-healthcheck.sh {{ target_environment }} {{ target_team }}"
+          script: "{{ jenkins_script_path }}/jenkins-blue-green-healthcheck.sh {{ target_environment }} {{ target_team }}"
           register: health_check_results
           failed_when: health_check_results.rc != 0
           
@@ -68,23 +68,247 @@
       when: operation == 'health-check' or (operation == 'switch' and not skip_health_checks)
       tags: ['health-check']
 
-    # Environment Switching Operation
+    # Enhanced Pre-Switch Validation
+    - name: Comprehensive pre-switch validation
+      block:
+        - name: Validate deployment readiness metrics
+          uri:
+            url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_blue_green_port[target_environment] }}/metrics"
+            method: GET
+            return_content: yes
+            timeout: 10
+          register: deployment_metrics
+          failed_when: false
+          
+        - name: Parse and validate readiness metrics
+          set_fact:
+            deployment_ready: >-
+              {{
+                deployment_metrics.status == 200 and
+                (deployment_metrics.content | regex_search('jenkins_build_queue_size ([0-9]+)', '\\1') | first | default('0') | int) < 5 and
+                (deployment_metrics.content | regex_search('jenkins_executor_in_use_value ([0-9]+)', '\\1') | first | default('0') | int) == 0 and
+                (deployment_metrics.content | regex_search('jenkins_health_check_status ([0-9]+)', '\\1') | first | default('0') | int) == 1
+              }}
+          when: deployment_metrics is defined
+          
+        - name: Check for active builds in target environment
+          uri:
+            url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_blue_green_port[target_environment] }}/api/json?tree=jobs[name,builds[building,number]]"
+            method: GET
+            user: "{{ vault_jenkins_admin_username }}"
+            password: "{{ vault_jenkins_admin_password }}"
+            force_basic_auth: yes
+            return_content: yes
+            timeout: 30
+          register: jenkins_jobs_status
+          failed_when: false
+          
+        - name: Validate no active builds
+          set_fact:
+            active_builds_count: >-
+              {{
+                jenkins_jobs_status.json.jobs | 
+                selectattr('builds', 'defined') |
+                map(attribute='builds') |
+                flatten |
+                selectattr('building', 'equalto', true) |
+                list | length
+              }}
+          when: jenkins_jobs_status.status == 200
+          
+        - name: Check plugin compatibility
+          uri:
+            url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_blue_green_port[target_environment] }}/pluginManager/api/json?depth=2"
+            method: GET
+            user: "{{ vault_jenkins_admin_username }}"
+            password: "{{ vault_jenkins_admin_password }}"
+            force_basic_auth: auth
+            return_content: yes
+            timeout: 30
+          register: plugin_status
+          failed_when: false
+          
+        - name: Validate plugin health
+          set_fact:
+            plugin_issues: >-
+              {{
+                plugin_status.json.plugins |
+                selectattr('enabled', 'equalto', false) |
+                selectattr('active', 'equalto', false) |
+                list | length
+              }}
+          when: plugin_status.status == 200
+          
+        - name: Check database connectivity
+          uri:
+            url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_blue_green_port[target_environment] }}/api/json?tree=nodeDescription"
+            method: GET
+            user: "{{ vault_jenkins_admin_username }}"
+            password: "{{ vault_jenkins_admin_password }}"
+            force_basic_auth: yes
+            timeout: 15
+          register: db_connectivity
+          failed_when: false
+          
+        - name: Abort switch if validation fails
+          fail:
+            msg: |
+              ❌ Pre-switch validation failed:
+              {% if not deployment_ready | default(true) %}
+              - Deployment readiness check failed (builds in queue or executors busy)
+              {% endif %}
+              {% if active_builds_count | default(0) | int > 0 %}
+              - {{ active_builds_count }} active builds detected in target environment
+              {% endif %}
+              {% if plugin_issues | default(0) | int > 0 %}
+              - {{ plugin_issues }} plugins have issues in target environment
+              {% endif %}
+              {% if db_connectivity.status | default(200) != 200 %}
+              - Database connectivity check failed (status: {{ db_connectivity.status | default('timeout') }})
+              {% endif %}
+              
+              Switch aborted to prevent service disruption.
+          when: >
+            not deployment_ready | default(true) or
+            active_builds_count | default(0) | int > 0 or
+            plugin_issues | default(0) | int > 0 or
+            db_connectivity.status | default(200) != 200
+            
+        - name: Display pre-switch validation results
+          debug:
+            msg: |
+              ✅ Pre-switch validation passed:
+              - Queue size: {{ (deployment_metrics.content | regex_search('jenkins_build_queue_size ([0-9]+)', '\\1') | first | default('0')) }} items
+              - Active executors: {{ (deployment_metrics.content | regex_search('jenkins_executor_in_use_value ([0-9]+)', '\\1') | first | default('0')) }}
+              - Active builds: {{ active_builds_count | default(0) }}
+              - Plugin issues: {{ plugin_issues | default(0) }}
+              - Database connectivity: {{ 'OK' if db_connectivity.status | default(200) == 200 else 'Failed' }}
+              - Target environment health: {{ 'Ready' if deployment_ready | default(true) else 'Not Ready' }}
+      when: operation == 'switch' and not skip_health_checks
+      tags: ['pre-switch-validation']
+
+    # Environment Switching Operation with Circuit Breaker
     - name: Switch blue-green environments
       block:
+        - name: Check circuit breaker state
+          stat:
+            path: "{{ jenkins_home_dir }}/blue-green/circuit-breaker.json"
+          register: circuit_breaker_file
+          
+        - name: Load circuit breaker state
+          slurp:
+            src: "{{ jenkins_home_dir }}/blue-green/circuit-breaker.json"
+          register: circuit_breaker_data
+          when: circuit_breaker_file.stat.exists
+          
+        - name: Parse circuit breaker state
+          set_fact:
+            circuit_breaker_state: "{{ circuit_breaker_data.content | b64decode | from_json }}"
+          when: circuit_breaker_file.stat.exists
+          
+        - name: Validate circuit breaker allows switch
+          fail:
+            msg: |
+              🚨 Circuit breaker is OPEN - switch blocked!
+              Recent failures: {{ circuit_breaker_state.failure_count | default(0) }}
+              Last failure: {{ circuit_breaker_state.last_failure_time | default('N/A') }}
+              Cooldown until: {{ circuit_breaker_state.cooldown_until | default('N/A') }}
+          when: 
+            - circuit_breaker_file.stat.exists
+            - circuit_breaker_state.state | default('closed') == 'open'
+            - circuit_breaker_state.cooldown_until | default(0) | int > ansible_date_time.epoch | int
+        
         - name: Pre-switch backup
           shell: "{{ jenkins_home_dir }}/bin/jenkins-blue-green-switch.sh backup {{ target_team }}"
           register: pre_switch_backup
-          when: operation == 'switch'
           
-        - name: Execute environment switch
+        - name: Record switch attempt in circuit breaker
+          copy:
+            content: |
+              {
+                "state": "half-open",
+                "last_attempt_time": "{{ ansible_date_time.epoch }}",
+                "team": "{{ target_team }}",
+                "target_environment": "{{ target_environment }}"
+              }
+            dest: "{{ jenkins_home_dir }}/blue-green/circuit-breaker.json"
+            mode: '0644'
+          
+        - name: Execute canary traffic split (10%)
+          block:
+            - name: Configure canary traffic routing
+              template:
+                src: haproxy-canary-config.cfg.j2
+                dest: /etc/haproxy/conf.d/jenkins-canary.cfg
+                backup: yes
+              vars:
+                canary_percentage: 10
+                canary_environment: "{{ target_environment }}"
+                canary_team: "{{ target_team }}"
+                
+            - name: Reload HAProxy for canary
+              systemd:
+                name: haproxy
+                state: reloaded
+                
+            - name: Monitor canary metrics for 2 minutes
+              uri:
+                url: "http://{{ ansible_default_ipv4.address }}:9090/api/v1/query"
+                method: GET
+                body_format: form-urlencoded
+                body:
+                  query: "rate(jenkins_http_requests_total{environment='{{ target_environment }}',status=~'5..'}[1m])"
+              register: canary_errors
+              until: (canary_errors.json.data.result | length == 0) or (canary_errors.json.data.result[0].value[1] | float < 0.05)
+              retries: 24
+              delay: 5
+              failed_when: false
+              
+            - name: Abort on canary failure
+              fail:
+                msg: "Canary deployment failed - error rate too high: {{ canary_errors.json.data.result[0].value[1] | default(0) }}"
+              when: 
+                - canary_errors.json.data.result | length > 0
+                - canary_errors.json.data.result[0].value[1] | float >= 0.05
+          when: enable_canary_deployment | default(true)
+          
+        - name: Execute full environment switch
           shell: "{{ jenkins_home_dir }}/bin/jenkins-blue-green-switch.sh {{ target_environment }} {{ target_team }}"
           register: switch_results
           
-        - name: Verify switch success
-          shell: "{{ jenkins_home_dir }}/bin/jenkins-blue-green-healthcheck.sh {{ target_environment }} {{ target_team }}"
+        - name: Update circuit breaker on success
+          copy:
+            content: |
+              {
+                "state": "closed",
+                "last_success_time": "{{ ansible_date_time.epoch }}",
+                "failure_count": 0,
+                "team": "{{ target_team }}",
+                "target_environment": "{{ target_environment }}"
+              }
+            dest: "{{ jenkins_home_dir }}/blue-green/circuit-breaker.json"
+            mode: '0644'
+          
+        - name: Post-switch comprehensive health validation
+          uri:
+            url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_blue_green_port[target_environment] }}/api/json?tree=nodeDescription"
+            method: GET
+            user: "{{ vault_jenkins_admin_username }}"
+            password: "{{ vault_jenkins_admin_password }}"
+            force_basic_auth: yes
+            timeout: 30
           register: post_switch_health
-          retries: 3
-          delay: 30
+          retries: 6
+          delay: 10
+          
+        - name: Validate post-switch metrics
+          uri:
+            url: "http://{{ ansible_default_ipv4.address }}:9090/api/v1/query"
+            method: GET
+            body_format: form-urlencoded
+            body:
+              query: "jenkins:service_availability"
+          register: post_switch_availability
           
         - name: Display switch results
           debug:
@@ -92,8 +316,35 @@
               🔄 Environment Switch Results:
               {{ switch_results.stdout_lines | join('\n') }}
               
-              ✅ Post-Switch Health Check:
-              {{ post_switch_health.stdout_lines | join('\n') }}
+              ✅ Post-Switch Validation:
+              - API Health: {{ 'OK' if post_switch_health.status == 200 else 'Failed' }}
+              - Service Availability: {{ (post_switch_availability.json.data.result[0].value[1] | float * 100) | round(2) }}%
+              - Circuit Breaker: Closed (success)
+              
+      rescue:
+        - name: Update circuit breaker on failure
+          copy:
+            content: |
+              {
+                "state": "open",
+                "failure_count": {{ (circuit_breaker_state.failure_count | default(0) | int) + 1 }},
+                "last_failure_time": "{{ ansible_date_time.epoch }}",
+                "cooldown_until": {{ (ansible_date_time.epoch | int) + 1800 }},
+                "team": "{{ target_team }}",
+                "target_environment": "{{ target_environment }}"
+              }
+            dest: "{{ jenkins_home_dir }}/blue-green/circuit-breaker.json"
+            mode: '0644'
+            
+        - name: Trigger automatic rollback on switch failure
+          shell: "{{ jenkins_home_dir }}/bin/jenkins-blue-green-switch.sh {{ 'blue' if target_environment == 'green' else 'green' }} {{ target_team }}"
+          register: automatic_rollback
+          when: enable_auto_rollback | default(true)
+          
+        - name: Re-raise the failure
+          fail:
+            msg: "Switch operation failed and automatic rollback was attempted"
+            
       when: operation == 'switch'
       tags: ['switch']
 
@@ -173,46 +424,46 @@
           ansible-playbook playbooks/blue-green-operations.yml -e blue_green_operation=health-check -e team_filter=all
 
 # Utility play for batch operations across multiple teams
-- name: Batch Blue-Green Operations
-  hosts: "{{ target_hosts | default('jenkins_masters') }}"
-  become: yes
-  gather_facts: no
-  vars:
-    batch_operation: "{{ batch_blue_green_operation | default('none') }}"
-    
-  tasks:
-    - name: Execute batch environment switch
-      include_tasks: 
-        file: "{{ playbook_dir }}/blue-green-operations.yml"
-        apply:
-          vars:
-            operation: switch
-            target_team: "{{ item.name }}"
-            target_environment: "{{ batch_target_environment | default('green') }}"
-      loop: "{{ jenkins_teams }}"
-      when: 
-        - batch_operation == 'switch-all'
-        - item.name != 'skip'  # Allow skipping specific teams
-      tags: ['batch-switch']
-      
-    - name: Execute batch health check
-      include_tasks:
-        file: "{{ playbook_dir }}/blue-green-operations.yml"
-        apply:
-          vars:
-            operation: health-check
-            target_team: "{{ item.name }}"
-            target_environment: "{{ batch_target_environment | default('blue') }}"
-      loop: "{{ jenkins_teams }}"
-      when: batch_operation == 'health-check-all'
-      tags: ['batch-health']
-
-    - name: Batch operation summary
-      debug:
-        msg: |
-          📊 Batch Operation Summary:
-          Operation: {{ batch_operation }}
-          Teams Processed: {{ jenkins_teams | map(attribute='name') | join(', ') }}
-          Target Environment: {{ batch_target_environment | default('current') }}
-          Completed: {{ ansible_date_time.iso8601 }}
-      when: batch_operation != 'none'
+#- name: Batch Blue-Green Operations
+#  hosts: "{{ target_hosts | default('jenkins_masters') }}"
+#  become: yes
+#  gather_facts: no
+#  vars:
+#    batch_operation: "{{ batch_blue_green_operation | default('none') }}"
+#    
+#  tasks:
+#    - name: Execute batch environment switch
+#      include_tasks: 
+#        file: "{{ playbook_dir }}/blue-green-operations.yml"
+#        apply:
+#          vars:
+#            operation: switch
+#            target_team: "{{ item.name }}"
+#            target_environment: "{{ batch_target_environment | default('green') }}"
+#      loop: "{{ jenkins_teams }}"
+#      when: 
+#        - batch_operation == 'switch-all'
+#        - item.name != 'skip'  # Allow skipping specific teams
+#      tags: ['batch-switch']
+#      
+#    - name: Execute batch health check
+#      include_tasks:
+#        file: "{{ playbook_dir }}/blue-green-operations.yml"
+#        apply:
+#          vars:
+#            operation: health-check
+#            target_team: "{{ item.name }}"
+#            target_environment: "{{ batch_target_environment | default('blue') }}"
+#      loop: "{{ jenkins_teams }}"
+#      when: batch_operation == 'health-check-all'
+#      tags: ['batch-health']
+#
+#    - name: Batch operation summary
+#      debug:
+#        msg: |
+#          📊 Batch Operation Summary:
+#          Operation: {{ batch_operation }}
+#          Teams Processed: {{ jenkins_teams | map(attribute='name') | join(', ') }}
+#          Target Environment: {{ batch_target_environment | default('current') }}
+#          Completed: {{ ansible_date_time.iso8601 }}
+#      when: batch_operation != 'none'

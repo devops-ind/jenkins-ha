@@ -1,19 +1,57 @@
-# DEPLOYMENT
+# Jenkins HA Deployment Guide
 
 ## Overview
 
-This document provides comprehensive deployment procedures and guidelines for the Jenkins High Availability infrastructure, including environment setup, configuration management, and operational procedures.
+This document provides comprehensive deployment guidance for the Jenkins High Availability infrastructure with enhanced security, automated rollback capabilities, and enterprise-grade operational procedures.
+
+**Enhanced Features:**
+- **Automated HA Setup**: Enterprise-grade setup script with 559 lines of functionality
+- **Security Integration**: Trivy vulnerability scanning and container security constraints
+- **Automated Rollback**: SLI-based rollback triggers and approval gates
+- **Pre-deployment Validation**: Comprehensive system validation framework
+- **Blue-Green Deployment**: Enhanced blue-green operations with validation
 
 ## Table of Contents
 
-- [Prerequisites](#prerequisites)
-- [Environment Preparation](#environment-preparation)
-- [Initial Deployment](#initial-deployment)
-- [Configuration Management](#configuration-management)
-- [Verification Procedures](#verification-procedures)
-- [Common Deployment Scenarios](#common-deployment-scenarios)
+- [Quick Start](#quick-start)
+- [Pre-deployment Preparation](#pre-deployment-preparation)
+- [Deployment Methods](#deployment-methods)
+- [Enhanced Infrastructure Pipeline](#enhanced-infrastructure-pipeline)
+- [Blue-Green Deployment](#blue-green-deployment)
+- [Security Deployment](#security-deployment)
+- [Post-deployment Validation](#post-deployment-validation)
 - [Rollback Procedures](#rollback-procedures)
 - [Troubleshooting](#troubleshooting)
+
+## Quick Start
+
+### Automated HA Setup (Recommended)
+
+```bash
+# 1. Clone repository and setup credentials
+git clone https://github.com/company/jenkins-ha.git
+cd jenkins-ha
+scripts/generate-credentials.sh production
+
+# 2. Configure inventory with your infrastructure details
+cp ansible/inventories/production/hosts.yml.example ansible/inventories/production/hosts.yml
+# Edit hosts.yml with your infrastructure details
+
+# 3. Deploy full HA infrastructure with validation
+scripts/ha-setup.sh production full
+
+# 4. Validate deployment
+scripts/ha-setup.sh production validate-only
+```
+
+### Traditional Make-based Deployment
+
+```bash
+# Setup and deploy
+make vault-create && make credentials
+make deploy-production
+make health-check
+```
 
 ## Prerequisites
 

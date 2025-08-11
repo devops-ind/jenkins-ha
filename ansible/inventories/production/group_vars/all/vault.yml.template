@@ -1,0 +1,138 @@
+---
+# Production Vault Variables Template
+# IMPORTANT: This template shows the structure but should be encrypted with ansible-vault
+# Use: ansible-vault create vault.yml to create encrypted version
+# Use: ansible-vault edit vault.yml to modify encrypted values
+# Vault password should be stored securely (not in repo)
+
+# Infrastructure Access Credentials
+vault_ansible_user: "CHANGE_ME"
+vault_ssh_private_key_file: "/etc/ansible/keys/jenkins-prod-key"
+
+# Network Configuration - Production IPs
+vault_jenkins_master_01_ip: "10.0.1.10"
+vault_jenkins_master_02_ip: "10.0.1.11"
+vault_jenkins_agent_01_ip: "10.0.1.20"
+vault_jenkins_agent_02_ip: "10.0.1.21"
+vault_jenkins_agent_03_ip: "10.0.1.22"
+vault_monitoring_01_ip: "10.0.1.30"
+vault_harbor_01_ip: "10.0.1.40"
+vault_lb_01_ip: "10.0.1.50"
+vault_lb_02_ip: "10.0.1.51"
+vault_storage_01_ip: "10.0.1.60"
+
+# Virtual IPs for Load Balancer
+vault_jenkins_vip: "10.0.1.100"
+vault_monitoring_vip: "10.0.1.101"
+vault_harbor_vip: "10.0.1.102"
+
+# Jenkins Security Configuration - GENERATE STRONG RANDOM PASSWORDS
+vault_jenkins_admin_username: "admin"
+vault_jenkins_admin_password: "CHANGE_TO_STRONG_RANDOM_PASSWORD"
+vault_jenkins_admin_email: "jenkins-admin@company.com"
+vault_jenkins_api_token: "GENERATE_RANDOM_API_TOKEN"
+vault_jenkins_secret_key: "GENERATE_RANDOM_SECRET_KEY"
+vault_jenkins_agent_secret: "GENERATE_RANDOM_AGENT_SECRET"
+
+# LDAP Integration (if enabled)
+vault_ldap_server: "ldap://ldap.company.com:389"
+vault_ldap_bind_dn: "cn=jenkins-service,ou=ServiceAccounts,dc=company,dc=com"
+vault_ldap_bind_password: "CHANGE_TO_STRONG_LDAP_PASSWORD"
+vault_ldap_user_search_base: "ou=Users,dc=company,dc=com"
+vault_ldap_group_search_base: "ou=Groups,dc=company,dc=com"
+
+# Database Credentials - GENERATE STRONG RANDOM PASSWORDS
+vault_jenkins_db_username: "jenkins_prod"
+vault_jenkins_db_password: "GENERATE_STRONG_DB_PASSWORD"
+vault_jenkins_db_name: "jenkins_production"
+vault_jenkins_db_host: "db.company.local"
+
+# Harbor Registry Credentials - GENERATE STRONG RANDOM PASSWORDS
+vault_harbor_admin_username: "admin"
+vault_harbor_admin_password: "GENERATE_STRONG_HARBOR_PASSWORD"
+vault_harbor_database_password: "GENERATE_STRONG_HARBOR_DB_PASSWORD"
+vault_harbor_registry_username: "jenkins-registry"
+vault_harbor_registry_password: "GENERATE_STRONG_REGISTRY_PASSWORD"
+vault_harbor_robot_token: "GENERATE_RANDOM_ROBOT_TOKEN"
+
+# Monitoring Stack Credentials - GENERATE STRONG RANDOM PASSWORDS
+vault_grafana_admin_username: "admin"
+vault_grafana_admin_password: "GENERATE_STRONG_GRAFANA_PASSWORD"
+vault_grafana_secret_key: "GENERATE_RANDOM_GRAFANA_SECRET"
+vault_grafana_database_password: "GENERATE_STRONG_GRAFANA_DB_PASSWORD"
+
+vault_prometheus_basic_auth_username: "prometheus"
+vault_prometheus_basic_auth_password: "GENERATE_STRONG_PROMETHEUS_PASSWORD"
+vault_prometheus_web_config_password: "GENERATE_STRONG_PROMETHEUS_WEB_PASSWORD"
+
+vault_alertmanager_auth_username: "alertmanager"
+vault_alertmanager_auth_password: "GENERATE_STRONG_ALERTMANAGER_PASSWORD"
+vault_alertmanager_webhook_url: "https://hooks.slack.com/services/CHANGE_TO_REAL_WEBHOOK"
+
+# High Availability Configuration
+vault_vip_auth_pass: "GENERATE_STRONG_VIP_PASSWORD"
+vault_haproxy_stats_user: "haproxy-admin"
+vault_haproxy_stats_password: "GENERATE_STRONG_HAPROXY_PASSWORD"
+vault_cluster_auth_token: "GENERATE_RANDOM_CLUSTER_TOKEN"
+
+# SSL Certificate Configuration
+vault_ssl_country: "US"
+vault_ssl_state: "California"
+vault_ssl_city: "San Francisco"
+vault_ssl_organization: "Company Inc"
+vault_ssl_organizational_unit: "DevOps"
+vault_ssl_email: "devops@company.com"
+
+# Certificate Authority - GENERATE STRONG RANDOM PASSWORDS
+vault_ca_key_password: "GENERATE_STRONG_CA_KEY_PASSWORD"
+vault_ca_cert_password: "GENERATE_STRONG_CA_CERT_PASSWORD"
+
+# SSL Certificate Passwords - GENERATE STRONG RANDOM PASSWORDS
+vault_jenkins_ssl_key_password: "GENERATE_STRONG_JENKINS_SSL_PASSWORD"
+vault_harbor_ssl_key_password: "GENERATE_STRONG_HARBOR_SSL_PASSWORD"
+vault_grafana_ssl_key_password: "GENERATE_STRONG_GRAFANA_SSL_PASSWORD"
+vault_prometheus_ssl_key_password: "GENERATE_STRONG_PROMETHEUS_SSL_PASSWORD"
+
+# Backup and Storage Credentials
+vault_backup_encryption_key: "GENERATE_STRONG_BACKUP_ENCRYPTION_KEY"
+vault_backup_s3_access_key: "CHANGE_TO_REAL_AWS_ACCESS_KEY"
+vault_backup_s3_secret_key: "CHANGE_TO_REAL_AWS_SECRET_KEY"
+vault_backup_s3_bucket: "jenkins-production-backups"
+vault_backup_passphrase: "GENERATE_STRONG_BACKUP_PASSPHRASE"
+
+vault_nfs_auth_user: "nfs-jenkins"
+vault_nfs_auth_password: "GENERATE_STRONG_NFS_PASSWORD"
+
+# External Service Integrations
+vault_slack_webhook_url: "https://hooks.slack.com/services/CHANGE_TO_REAL_WEBHOOK"
+vault_slack_channel: "#jenkins-alerts"
+vault_slack_username: "Jenkins Production"
+
+vault_email_smtp_host: "smtp.company.com"
+vault_email_smtp_port: "587"
+vault_email_smtp_username: "jenkins-alerts@company.com"
+vault_email_smtp_password: "GENERATE_STRONG_SMTP_PASSWORD"
+
+vault_jira_url: "https://company.atlassian.net"
+vault_jira_username: "jenkins-integration@company.com"
+vault_jira_api_token: "GENERATE_JIRA_API_TOKEN"
+
+vault_sonarqube_url: "https://sonar.company.com"
+vault_sonarqube_token: "GENERATE_SONARQUBE_TOKEN"
+
+vault_artifactory_url: "https://artifactory.company.com"
+vault_artifactory_username: "jenkins-artifactory"
+vault_artifactory_password: "GENERATE_STRONG_ARTIFACTORY_PASSWORD"
+vault_artifactory_api_key: "GENERATE_ARTIFACTORY_API_KEY"
+
+# Security Scanning Tools
+vault_security_scanner_api_key: "GENERATE_SECURITY_SCANNER_API_KEY"
+vault_vulnerability_db_token: "GENERATE_VULNERABILITY_DB_TOKEN"
+
+# License Keys
+vault_jenkins_enterprise_license: "CHANGE_TO_REAL_LICENSE_KEY"
+vault_harbor_enterprise_license: "CHANGE_TO_REAL_LICENSE_KEY"
+
+# Emergency Access - GENERATE STRONG CREDENTIALS
+vault_emergency_ssh_key: "GENERATE_EMERGENCY_SSH_KEY"
+vault_break_glass_password: "GENERATE_STRONG_EMERGENCY_PASSWORD"

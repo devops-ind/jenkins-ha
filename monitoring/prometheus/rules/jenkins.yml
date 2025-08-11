@@ -1,4 +1,85 @@
 groups:
+  - name: jenkins.sli.recording
+    interval: 30s
+    rules:
+      # Deployment Success Rate SLI
+      - record: jenkins:deployment_success_rate_5m
+        expr: |
+          (
+            rate(jenkins_deployment_success_total[5m]) /
+            rate(jenkins_deployment_total[5m])
+          ) * 100
+
+      # Mean Time to Recovery (MTTR) SLI  
+      - record: jenkins:deployment_mttr_hours
+        expr: |
+          (
+            rate(jenkins_deployment_recovery_duration_seconds_sum[24h]) /
+            rate(jenkins_deployment_recovery_total[24h])
+          ) / 3600
+
+      # Change Failure Rate SLI
+      - record: jenkins:change_failure_rate_7d
+        expr: |
+          (
+            increase(jenkins_deployment_failures_total[7d]) /
+            increase(jenkins_deployment_total[7d])
+          ) * 100
+          
+      # Deployment Frequency SLI
+      - record: jenkins:deployment_frequency_per_day
+        expr: increase(jenkins_deployment_success_total[1d])
+        
+      # Error Rate SLI
+      - record: jenkins:error_rate_5m
+        expr: |
+          (
+            rate(jenkins_http_requests_total{status=~"5.."}[5m]) /
+            rate(jenkins_http_requests_total[5m])
+          ) * 100
+          
+      # Response Time P95 SLI
+      - record: jenkins:response_time_p95
+        expr: histogram_quantile(0.95, rate(jenkins_http_request_duration_seconds_bucket[5m])) * 1000
+        
+      # Service Availability SLI
+      - record: jenkins:service_availability
+        expr: |
+          avg(up{job=~"jenkins-master|jenkins-loadbalancer"})
+
+  - name: jenkins.blue_green.recording
+    interval: 30s
+    rules:
+      # Blue-Green Switch Success Rate
+      - record: jenkins:blue_green_switch_success_rate
+        expr: |
+          (
+            jenkins_blue_green_switch_success_total /
+            jenkins_blue_green_switch_total
+          ) * 100
+          
+      # Blue-Green Switch Duration Average
+      - record: jenkins:blue_green_switch_duration_avg
+        expr: |
+          jenkins_blue_green_switch_duration_seconds_sum /
+          jenkins_blue_green_switch_duration_seconds_count
+          
+      # Blue-Green Health Check Success Rate
+      - record: jenkins:blue_green_health_check_success_rate
+        expr: |
+          (
+            rate(jenkins_blue_green_health_check_success_total[5m]) /
+            rate(jenkins_blue_green_health_check_total[5m])
+          ) * 100
+          
+      # Traffic Distribution by Environment
+      - record: jenkins:blue_green_traffic_percentage
+        expr: |
+          (
+            rate(jenkins_http_requests_total{environment=~"blue|green"}[5m]) /
+            on() group_left sum(rate(jenkins_http_requests_total{environment=~"blue|green"}[5m]))
+          ) * 100
+
   - name: jenkins.infrastructure
     rules:
       # Jenkins Master Availability
