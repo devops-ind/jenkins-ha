@@ -114,7 +114,6 @@ listView('Infrastructure/Seed Jobs') {
     
     jobs {
         name('Infrastructure/Job-DSL-Seed')
-        name('Infrastructure/Repository-Monitor')
         regex('.*[Ss]eed.*')
         regex('.*[Dd][Ss][Ll].*')
     }

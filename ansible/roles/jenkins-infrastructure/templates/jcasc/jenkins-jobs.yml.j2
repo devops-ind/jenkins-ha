@@ -13,32 +13,66 @@ jobs:
   # NOTE: Pipeline jobs are defined in their respective Jenkinsfile.* scripts in pipelines/ directory
   # The Job DSL Seed job below will create these jobs from the jenkins-dsl/ scripts directory
 
-  # Job DSL Seed Job - Single Unified Job for All DSL Operations
+  # Job DSL Seed Job - Simple Repository-Based Job Generation
   - script: |
       pipelineJob('Infrastructure/Job-DSL-Seed') {
         displayName('Job DSL Seed Pipeline')
         description('''
-          Job DSL Seed Pipeline: Unified Job Generation and Management
+          Simple Job DSL Seed Pipeline with Git repository integration.
           
-          This pipeline runs on dynamic python-agent and performs:
-          - Job DSL script execution for all job generation
-          - Pipeline configuration management
-          - Automated job updates and maintenance
-          - Repository-based job definitions processing
+          This pipeline pulls Job DSL scripts from Git and processes them:
+          • Pulls from specified Git repository and branch
+          • Processes jenkins-dsl/**/*.groovy files
+          • Creates/updates jobs, folders, and views
+          • Supports dry-run mode for testing
           
-          Agent: Runs on python dynamic agents with Job DSL capabilities
-          Labels: python, python-build
-          DSL Scripts Location: jenkins-dsl/**/*.groovy
+          Repository structure expected:
+          jenkins-dsl/
+          ├── folders.groovy
+          ├── views.groovy  
+          ├── infrastructure/*.groovy
+          └── applications/*.groovy
         ''')
+        
+        parameters {
+          stringParam {
+            name('GIT_REPOSITORY')
+            description('Git repository containing Job DSL scripts')
+            defaultValue('https://github.com/your-org/jenkins-ha.git')
+            trim(true)
+          }
+          stringParam {
+            name('DSL_BRANCH')
+            description('Git branch containing Job DSL scripts')
+            defaultValue('main')
+            trim(true)
+          }
+          credentialsParam('GIT_CREDENTIALS') {
+            type('com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl')
+            description('Git repository credentials')
+            defaultValue('git-credentials')
+          }
+          choiceParam {
+            name('REMOVAL_ACTION')
+            description('Action for removed jobs/views')
+            choices(['IGNORE', 'DELETE', 'DISABLE'])
+            defaultValue('IGNORE')
+          }
+          booleanParam {
+            name('DRY_RUN')
+            description('Perform dry run without making changes')
+            defaultValue(false)
+          }
+        }
         
         properties {
           buildDiscarder {
             strategy {
               logRotator {
                 daysToKeepStr('30')
-                numToKeepStr('25')
-                artifactDaysToKeepStr('14')
-                artifactNumToKeepStr('10')
+                numToKeepStr('20')
+                artifactDaysToKeepStr('7')
+                artifactNumToKeepStr('5')
               }
             }
           }
@@ -46,38 +80,8 @@ jobs:
           pipelineTriggers {
             triggers {
               scm {
-                scmpoll_spec('H/15 * * * *')  // Poll SCM every 15 minutes
+                scmpoll_spec('H/15 * * * *')
               }
-            }
-          }
-          
-          parameters {
-            choiceParam {
-              name('SEED_ACTION')
-              description('Type of seed operation to perform')
-              choices(['generate-all', 'update-existing', 'dry-run', 'cleanup-orphaned'])
-            }
-            stringParam {
-              name('JOB_PATTERNS')
-              description('Job patterns to generate (comma separated, empty for all)')
-              defaultValue('')
-              trim(true)
-            }
-            booleanParam {
-              name('REMOVE_DISABLED')
-              description('Remove disabled jobs during cleanup')
-              defaultValue(false)
-            }
-            booleanParam {
-              name('VALIDATE_SCRIPTS')
-              description('Validate Job DSL scripts before execution')
-              defaultValue(true)
-            }
-            stringParam {
-              name('DSL_SCRIPTS_PATH')
-              description('Path to Job DSL scripts in repository')
-              defaultValue('jenkins-dsl/**/*.groovy')
-              trim(true)
             }
           }
         }
@@ -85,149 +89,100 @@ jobs:
         definition {
           cps {
             script('''
-              pipeline {
-                agent {
-                  label 'python'  // Targets dynamic python-agent
+pipeline {
+    agent any
+    
+    options {
+        timeout(time: 15, unit: 'MINUTES')
+        timestamps()
+        ansiColor('xterm')
+        disableConcurrentBuilds()
+    }
+    
+    stages {
+        stage('Checkout Repository') {
+            steps {
+                script {
+                    echo "🔄 Checking out repository: ${params.GIT_REPOSITORY}"
+                    echo "📋 Branch: ${params.DSL_BRANCH}"
+                    
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: "*/${params.DSL_BRANCH}"]],
+                        extensions: [[$class: 'CleanBeforeCheckout']],
+                        userRemoteConfigs: [[
+                            credentialsId: params.GIT_CREDENTIALS,
+                            url: params.GIT_REPOSITORY
+                        ]]
+                    ])
                 }
-                
-                options {
-                  timeout(time: 30, unit: 'MINUTES')
-                  skipStagesAfterUnstable()
-                  disableConcurrentBuilds()
-                  buildDiscarder(logRotator(daysToKeepStr: '30', numToKeepStr: '25'))
-                }
-                
-                environment {
-                  PYTHONPATH = '/home/jenkins/agent'
-                  PIP_CACHE_DIR = '/home/jenkins/.cache/pip'
-                  JOB_DSL_VERSION = '1.82'
-                }
-                
-                stages {
-                  stage('Setup Environment') {
-                    steps {
-                      script {
-                        echo "Running on agent: ${env.NODE_NAME}"
-                        echo "Agent labels: ${env.NODE_LABELS}"
-                        echo "Workspace: ${env.WORKSPACE}"
-                      }
-                      
-                      // Ensure required tools are available
-                      sh '''
-                        python3 --version
-                        pip3 --version
-                        which groovy || echo "Groovy not found - will use Jenkins internal"
-                      '''
-                    }
-                  }
-                  
-                  stage('Validate DSL Scripts') {
-                    when {
-                      params.VALIDATE_SCRIPTS == true
-                    }
-                    steps {
-                      script {
-                        def dslFiles = findFiles(glob: params.DSL_SCRIPTS_PATH)
-                        if (dslFiles.length == 0) {
-                          error "No Job DSL scripts found with pattern: ${params.DSL_SCRIPTS_PATH}"
-                        }
-                        echo "Found ${dslFiles.length} Job DSL scripts to process"
+            }
+        }
+        
+        stage('Process Job DSL Scripts') {
+            steps {
+                script {
+                    echo "🚀 Processing Job DSL scripts"
+                    echo "📋 Dry Run: ${params.DRY_RUN}"
+                    
+                    if (params.DRY_RUN) {
+                        echo "🧪 DRY RUN MODE - No actual changes will be made"
                         
-                        // Basic syntax validation
+                        def dslFiles = findFiles(glob: 'jenkins-dsl/**/*.groovy')
+                        echo "📁 Found ${dslFiles.length} Job DSL scripts:"
                         dslFiles.each { file ->
-                          echo "Validating: ${file.path}"
-                          def content = readFile(file.path)
-                          if (content.trim().isEmpty()) {
-                            error "Empty DSL script found: ${file.path}"
-                          }
+                            echo "   • ${file.path}"
                         }
-                      }
+                        
+                        echo "✅ Dry run completed - review the files that would be processed above"
+                        return
                     }
-                  }
-                  
-                  stage('Execute Job DSL') {
-                    steps {
-                      script {
-                        def action = params.SEED_ACTION
-                        def patterns = params.JOB_PATTERNS?.split(',')?.collect { it.trim() }?.findAll { it }
+                    
+                    try {
+                        def result = jobDsl(
+                            targets: 'jenkins-dsl/**/*.groovy',
+                            removedJobAction: params.REMOVAL_ACTION,
+                            removedViewAction: params.REMOVAL_ACTION,
+                            lookupStrategy: 'SEED_JOB',
+                            sandbox: false
+                        )
                         
-                        echo "Executing seed action: ${action}"
-                        if (patterns) {
-                          echo "Job patterns: ${patterns.join(', ')}"
+                        echo "✅ Job DSL processing completed successfully!"
+                        echo "📊 Results:"
+                        echo "   Jobs - Created: ${result.createdJobs.size()}, Updated: ${result.updatedJobs.size()}, Removed: ${result.removedJobs.size()}"
+                        echo "   Views - Created: ${result.createdViews.size()}, Updated: ${result.updatedViews.size()}, Removed: ${result.removedViews.size()}"
+                        
+                        if (result.createdJobs) {
+                            echo "🆕 Created Jobs:"
+                            result.createdJobs.each { job -> echo "   • ${job.fullName}" }
                         }
                         
-                        // Execute Job DSL with appropriate settings
-                        def dslConfig = [
-                          targets: params.DSL_SCRIPTS_PATH,
-                          removeAction: params.REMOVE_DISABLED ? 'DELETE' : 'IGNORE',
-                          removeViewAction: 'DELETE',
-                          lookupStrategy: 'SEED_JOB',
-                          additionalClasspath: '',
-                          additionalParameters: [
-                            SEED_ACTION: action,
-                            JOB_PATTERNS: params.JOB_PATTERNS,
-                            BUILD_NUMBER: env.BUILD_NUMBER ?: 'unknown'
-                          ]
-                        ]
-                        
-                        if (action == 'dry-run') {
-                          echo "DRY RUN MODE - Would execute Job DSL with config:"
-                          dslConfig.each { key, value ->
-                            echo "  ${key}: ${value}"
-                          }
-                        } else {
-                          jobDsl(dslConfig)
+                        if (result.createdViews) {
+                            echo "🆕 Created Views:"
+                            result.createdViews.each { view -> echo "   • ${view.name}" }
                         }
-                      }
+                        
+                    } catch (Exception e) {
+                        echo "❌ Job DSL processing failed: ${e.message}"
+                        throw e
                     }
-                  }
-                  
-                  stage('Post-Process Jobs') {
-                    steps {
-                      script {
-                        // Additional post-processing if needed
-                        echo "Seed job execution completed"
-                        echo "Generated jobs will appear in Jenkins shortly"
-                        
-                        // Optional: Trigger health check after job generation
-                        if (params.SEED_ACTION in ['generate-all', 'update-existing']) {
-                          echo "Consider running health check after job generation"
-                        }
-                      }
-                    }
-                  }
                 }
-                
-                post {
-                  always {
-                    // Archive any generated reports
-                    archiveArtifacts(
-                      artifacts: '**/job-dsl-*.log, **/seed-*.xml',
-                      allowEmptyArchive: true,
-                      fingerprint: false
-                    )
-                  }
-                  success {
-                    echo "Seed job pipeline completed successfully"
-                  }
-                  failure {
-                    echo "Seed job pipeline failed - check logs for details"
-                  }
-                  cleanup {
-                    // Clean up workspace on python agent
-                    cleanWs(
-                      cleanWhenAborted: true,
-                      cleanWhenFailure: true,
-                      cleanWhenNotBuilt: true,
-                      cleanWhenSuccess: true,
-                      cleanWhenUnstable: true,
-                      deleteDirs: true
-                    )
-                  }
-                }
-              }
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo "🎉 Job DSL Seed pipeline completed successfully!"
+        }
+        
+        failure {
+            echo "❌ Job DSL Seed pipeline failed!"
+        }
+    }
+}
             ''')
-            sandbox(true)
+            sandbox(false)
           }
         }
       }
