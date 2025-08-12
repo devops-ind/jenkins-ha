@@ -324,4 +324,5 @@ dashboardView('Operations Dashboard') {
     }
 }
 
-println "✅ All views created successfully - Single source of truth established"
+// Success message (sandbox-safe)
+out.println('✅ All views created successfully - Single source of truth established')

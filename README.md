@@ -29,7 +29,6 @@ This infrastructure provides:
 - **Security Hardening**: Comprehensive security controls and compliance measures
 - **Monitoring Stack**: Prometheus/Grafana with custom dashboards and alerting
 - **Automated Backups**: Multi-tier backup strategy with disaster recovery procedures
-- **Private Registry**: Harbor integration for secure image management
 - **Job DSL Integration**: Automated job creation and management through code
 
 ### Key Components
@@ -38,7 +37,6 @@ This infrastructure provides:
 - **HAProxy Load Balancer**: Traffic routing with health checks and API management
 - **Dynamic Agent Templates**: On-demand containerized agents (DIND, Maven, Python, Node.js)
 - **Job DSL Automation**: Code-driven job creation and management
-- **Registry**: Harbor private Docker registry with vulnerability scanning
 - **Monitoring**: Prometheus metrics collection and Grafana visualization
 - **Storage**: NFS/GlusterFS shared storage for persistence
 - **Security**: Fail2ban, AIDE, RKHunter, and comprehensive hardening
@@ -185,7 +183,6 @@ For detailed architecture information, see [docs/ARCHITECTURE.md](docs/ARCHITECT
 - ✅ **Infrastructure Pipelines**: Complete infrastructure management pipelines
 - ✅ **Dynamic Agent Templates**: DIND, Maven, Python, Node.js container agents
 - ✅ **Job DSL Scripts**: Organized job definitions in `jenkins-dsl/` directory
-- ✅ **Harbor Registry**: Private Docker registry with RBAC and vulnerability scanning
 - ✅ **Infrastructure as Code**: Complete Ansible automation with blue-green deployment
 - ✅ **Environment Management**: Production, staging, and devcontainer support
 - ✅ **Multi-Team Workflows**: Isolated CI/CD environments per development team
@@ -224,7 +221,6 @@ For detailed architecture information, see [docs/ARCHITECTURE.md](docs/ARCHITECT
 - **Redundancy**: RAID 10 or distributed replication
 
 **Supporting Services**
-- **Harbor Registry**: 4 CPU, 8GB RAM, 200GB+ storage
 - **Monitoring Stack**: 4 CPU, 8GB RAM, 200GB+ storage
 - **Load Balancer**: 2 CPU, 4GB RAM (can be virtual/shared)
 

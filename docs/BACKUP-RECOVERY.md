@@ -46,7 +46,6 @@ The backup system protects the following critical components:
 │  └─────────────────┘   ┌─────────────────┐                 │
 │                        │ Monitoring Data │                 │
 │  ┌─────────────────┐   │ - Prometheus DB │                 │
-│  │ Harbor Registry │   │ - Grafana Configs│                │
 │  │ - Image Blobs   │   │ - Alert History │                 │
 │  │ - Registry DB   │   │ - Dashboards    │                 │
 │  │ - Configurations│   └─────────────────┘                 │
@@ -167,10 +166,7 @@ backup_components:
     - grafana_configs: "/etc/grafana"
     - alertmanager_configs: "/etc/alertmanager"
     
-  harbor:
     - registry_data: "/data/registry"
-    - database: "harbor_db"
-    - configurations: "/harbor/common/config"
 ```
 
 #### Backup Execution
@@ -244,7 +240,6 @@ fi
 # Database backups (if applicable)
 if command -v pg_dump &> /dev/null; then
     echo "$(date): Backing up databases..." | tee -a "${LOG_FILE}"
-    pg_dump -h localhost -U harbor harbor > "${BACKUP_DIR}/infrastructure/harbor-db-${BACKUP_DATE}.sql"
 fi
 
 # Create backup manifest
@@ -429,13 +424,9 @@ tar czf "shared-storage-$(date +%Y%m%d_%H%M%S).tar.gz" \
   .
 ```
 
-#### Harbor Registry
 ```bash
-# Backup Harbor data
-docker-compose -f /harbor/docker-compose.yml exec -T registry \
   /bin/registry garbage-collect /etc/registry/config.yml
 
-tar czf "harbor-data-$(date +%Y%m%d).tar.gz" \
   -C /data \
   registry/ database/
 ```
@@ -565,16 +556,10 @@ docker cp "$BACKUP_DIR/jenkins/credentials.xml" jenkins-master-1:/var/jenkins_ho
 docker restart jenkins-master-1
 ```
 
-#### Database Restoration (Harbor)
 ```bash
-# Restore Harbor database
-docker-compose -f /harbor/docker-compose.yml stop
 
 # Restore database
-pg_restore -h localhost -U harbor -d harbor harbor-db-20240115_140000.sql
 
-# Restart Harbor
-docker-compose -f /harbor/docker-compose.yml start
 ```
 
 ### Point-in-Time Recovery

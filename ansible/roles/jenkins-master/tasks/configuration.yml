@@ -22,6 +22,16 @@
   become: yes
   tags: ['config', 'user']
 
+# Create Jenkins initialization script directory
+- name: Create Jenkins init.groovy.d directory
+  file:
+    path: "{{ jenkins_master_home_dir }}/init.groovy.d"
+    state: directory
+    owner: "{{ jenkins_master_user }}"
+    group: "{{ jenkins_master_user }}"
+    mode: '0755'
+  tags: ['config', 'directories']
+
 # Create directories for all teams (single or multi-team)
 - name: Create team-specific Jenkins directories
   file:
@@ -91,3 +101,14 @@
     jenkins_current_team: "{{ item.0 }}"
     jenkins_current_environment: "{{ item.1 }}"
   tags: ['config', 'jcasc']
+
+# Copy Jenkins initialization scripts
+- name: Copy DSL script approval initialization script
+  copy:
+    src: init-scripts/setup-dsl-approval.groovy
+    dest: "{{ jenkins_master_home_dir }}/init.groovy.d/01-setup-dsl-approval.groovy"
+    owner: "{{ jenkins_master_user }}"
+    group: "{{ jenkins_master_user }}"
+    mode: '0644'
+  tags: ['config', 'init-scripts', 'dsl']
+  notify: restart jenkins

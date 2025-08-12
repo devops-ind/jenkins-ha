@@ -123,7 +123,7 @@ credentials:
           {% endfor %}
           {% endif %}
 
-# Job DSL Configuration
+# Job DSL Configuration with Sandbox Security
 jobs:
   - script: |
       folder('{{ jenkins_master_config.team_name | title }}') {
@@ -131,25 +131,51 @@ jobs:
           description('Jobs for the {{ jenkins_master_config.team_name }} team - {{ jenkins_master_config.active_environment }} environment')
       }
       
-      pipelineJob('{{ jenkins_master_config.team_name | title }}/seed-job') {
-          displayName('Job DSL Seed Job')
-          description('Automatically creates jobs from DSL scripts')
-          definition {
-              cpsScm {
-                  scm {
-                      git {
-                          remote {
-                              url('${GIT_REPO_URL}')
-                              credentials('git-credentials')
-                          }
-                          branches('*/main')
-                      }
+      // DSL Seed Job with Sandbox enabled
+      job('{{ jenkins_master_config.team_name | title }}/dsl-seed-job') {
+          displayName('DSL Seed Job (Sandboxed)')
+          description('Automatically creates jobs from DSL scripts with sandbox security')
+          
+          scm {
+              git {
+                  remote {
+                      url('${GIT_REPO_URL:-https://github.com/your-org/jenkins-dsl.git}')
+                      credentials('${GIT_CREDENTIALS_ID:-git-credentials}')
                   }
-                  scriptPath('jenkins-dsl/seed.groovy')
+                  branches('*/main')
               }
           }
+          
           triggers {
-              scm('H/5 * * * *')
+              scm('H/15 * * * *')  // Check every 15 minutes
+          }
+          
+          steps {
+              dsl {
+                  // Enable sandbox to avoid script approval
+                  sandbox(true)
+                  
+                  // External DSL scripts
+                  external('jenkins-dsl/**/*.groovy')
+                  
+                  // Remove jobs/views that are no longer defined
+                  removeAction('DELETE')
+                  removeViewAction('DELETE')
+                  
+                  // Additional classpath (if needed)
+                  additionalClasspath('lib/**/*.jar')
+              }
+          }
+          
+          publishers {
+              // Archive DSL logs
+              archiveArtifacts {
+                  pattern('**/*.log')
+                  allowEmpty(true)
+              }
+              
+              // Notify on DSL job failures
+              mailer('${DEVOPS_EMAIL:-devops@company.com}', false, true)
           }
       }
 
@@ -168,10 +194,77 @@ security:
   # Disable CLI over remoting
   cli:
     enabled: false
+  
+  # Script Security Configuration
+  scriptApproval:
+    approvedScriptHashes:
+      # Pre-approve safe script hashes for DSL jobs
+      - "7c5c98b70b5b6b7b8b7d8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0"
+    approvedSignatures:
+      # Pre-approve safe method signatures for DSL
+      - "method groovy.lang.GroovyObject getProperty java.lang.String"
+      - "method java.lang.Object equals java.lang.Object"
+      - "method java.lang.String toString"
+      - "method java.util.Map get java.lang.Object"
+      - "method java.util.Map put java.lang.Object java.lang.Object"
+      - "staticMethod jenkins.model.Jenkins getInstance"
+      - "staticMethod org.codehaus.groovy.runtime.DefaultGroovyMethods println java.lang.Object"
+      - "new java.util.ArrayList"
+      - "new java.util.HashMap"
+      - "new java.lang.String java.lang.String"
 
-# Monitoring Configuration
-{% if jenkins_master_monitoring_enabled %}
+# Unclassified Plugin Configuration
 unclassified:
+  # Job DSL Security Configuration
+  globalJobDslSecurityConfiguration:
+    useScriptSecurity: true
+    
+  # Script Security Configuration
+  scriptApproval:
+    # Enable sandbox by default for user scripts
+    approvedScriptHashes: []
+    approvedSignatures:
+      # Basic Groovy operations
+      - "method groovy.lang.GroovyObject invokeMethod java.lang.String java.lang.Object"
+      - "method groovy.lang.GroovyObject getProperty java.lang.String"
+      - "method groovy.lang.GroovyObject setProperty java.lang.String java.lang.Object"
+      - "method java.lang.Object equals java.lang.Object"
+      - "method java.lang.Object toString"
+      - "method java.lang.String valueOf java.lang.Object"
+      - "method java.util.Collection size"
+      - "method java.util.Map get java.lang.Object"
+      - "method java.util.Map put java.lang.Object java.lang.Object"
+      - "method java.util.Map containsKey java.lang.Object"
+      # Jenkins API operations commonly used in DSL
+      - "staticMethod jenkins.model.Jenkins getInstance"
+      - "method jenkins.model.Jenkins getItemByFullName java.lang.String"
+      - "method hudson.model.ItemGroup getItem java.lang.String"
+      - "staticMethod hudson.model.Hudson getInstance"
+      # Safe constructors
+      - "new java.util.ArrayList"
+      - "new java.util.HashMap"
+      - "new java.util.LinkedHashMap"
+      - "new java.lang.String java.lang.String"
+      - "new java.lang.StringBuilder"
+      # Date and time operations
+      - "new java.util.Date"
+      - "method java.util.Date getTime"
+      # String operations
+      - "method java.lang.String replace java.lang.CharSequence java.lang.CharSequence"
+      - "method java.lang.String replaceAll java.lang.String java.lang.String"
+      - "method java.lang.String split java.lang.String"
+      - "method java.lang.String trim"
+      - "method java.lang.String toLowerCase"
+      - "method java.lang.String toUpperCase"
+      # System properties (safe ones)
+      - "staticMethod java.lang.System getProperty java.lang.String"
+      # File operations (limited)
+      - "method java.io.File exists"
+      - "method java.io.File isDirectory"
+      - "method java.io.File getName"
+    
+  {% if jenkins_master_monitoring_enabled %}
+  # Monitoring Configuration  
   prometheusConfiguration:
     collectDiskUsage: true
     collectNodeStatus: true
@@ -181,4 +274,16 @@ unclassified:
     fetchTestResults: true
     processingDisabledBuilds: true
     collectBuildStatus: true
-{% endif %}
+  {% endif %}
+  
+  # Location configuration
+  location:
+    adminAddress: "${JENKINS_ADMIN_EMAIL:-admin@company.com}"
+    url: "${JENKINS_URL}"
+    
+  # Mailer configuration
+  mailer:
+    smtpHost: "${SMTP_HOST:-smtp.company.com}"
+    smtpPort: "${SMTP_PORT:-587}"
+    useSsl: false
+    charset: "UTF-8"

@@ -125,25 +125,6 @@ bootstrap_infrastructure() {
     fi
 }
 
-# Setup Harbor registry
-setup_harbor() {
-    info "🐳 Setting up Harbor registry..."
-    
-    if [[ "$SETUP_MODE" == "masters-only" ]]; then
-        info "Skipping Harbor setup in masters-only mode"
-        return 0
-    fi
-    
-    if ansible-playbook -i "$INVENTORY" "$PROJECT_DIR/ansible/site.yml" \
-        --tags "harbor,registry" \
-        -e "deployment_mode=$ENVIRONMENT" \
-        --limit "harbor" \
-        --timeout 600 2>>"$LOG_FILE"; then
-        success "Harbor registry setup completed"
-    else
-        warn "Harbor registry setup failed - continuing without registry"
-    fi
-}
 
 # Build Jenkins images
 build_jenkins_images() {
@@ -368,7 +349,6 @@ execute_ha_setup() {
             validate_environment
             install_prerequisites
             bootstrap_infrastructure
-            setup_harbor
             build_jenkins_images
             deploy_jenkins_masters
             setup_monitoring
@@ -496,8 +476,7 @@ if [[ "$DRY_RUN" == "true" ]]; then
             echo "  1. Validate environment"
             echo "  2. Install prerequisites" 
             echo "  3. Bootstrap infrastructure"
-            echo "  4. Setup Harbor registry"
-            echo "  5. Build Jenkins images"
+            echo "  4. Build Jenkins images"
             echo "  6. Deploy Jenkins masters"
             echo "  7. Setup monitoring stack"
             echo "  8. Setup load balancers"

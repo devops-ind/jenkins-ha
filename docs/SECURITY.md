@@ -217,7 +217,6 @@ security_allowed_ports:
 # Jenkins Masters: 10.0.2.0/24
 # Jenkins Agents: 10.0.3.0/24
 # Shared Storage: 10.0.4.0/24
-# Harbor Registry: 10.0.5.0/24
 # Monitoring: 10.0.6.0/24
 ```
 
@@ -335,8 +334,6 @@ store.addCredentials(Domain.global(), sshKey)
 // Add API tokens
 def apiToken = new StringCredentialsImpl(
     CredentialsScope.GLOBAL,
-    "harbor-api-token",
-    "Harbor registry API token",
     Secret.fromString(apiTokenValue)
 )
 store.addCredentials(Domain.global(), apiToken)
@@ -348,16 +345,11 @@ store.addCredentials(Domain.global(), apiToken)
 
 #### Vulnerability Scanning with Trivy
 ```bash
-# Automated image scanning in Harbor
-trivy image harbor.company.com/jenkins/jenkins-master:latest
-trivy image harbor.company.com/jenkins/jenkins-agent-dind:latest
-trivy image harbor.company.com/jenkins/jenkins-agent-maven:latest
 ```
 
 #### Security Scanning Results
 ```yaml
 # Example security scan configuration
-harbor_security_scanning:
   enabled: true
   scan_all_policy: true
   vulnerability_allowlist:
@@ -685,10 +677,7 @@ security_patching:
 
 ### Container Image Security
 
-#### Harbor Registry Security Policies
 ```yaml
-# Harbor security policies
-harbor_policies:
   vulnerability_scanning:
     enabled: true
     severity_threshold: "High"
@@ -696,7 +685,6 @@ harbor_policies:
     
   content_trust:
     enabled: true
-    notary_url: "https://notary.harbor.company.com"
     
   image_signing:
     enabled: true

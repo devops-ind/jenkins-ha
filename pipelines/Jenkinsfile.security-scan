@@ -96,10 +96,10 @@ pipeline {
                         
                         # List of images to scan
                         IMAGES=(
-                            "${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-master:latest"
-                            "${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-python-agent:latest"
-                            "${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-maven-agent:latest"
-                            "${HARBOR_REGISTRY}/${HARBOR_PROJECT}/jenkins-nodejs-agent:latest"
+                            "jenkins/jenkins:latest"
+                            "jenkins/jenkins-agent-python:latest"
+                            "jenkins/jenkins-agent-maven:latest"
+                            "jenkins/jenkins-agent-nodejs:latest"
                         )
                         
                         for image in "${IMAGES[@]}"; do

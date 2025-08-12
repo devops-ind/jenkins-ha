@@ -12,7 +12,7 @@ pipelineJob('Infrastructure/Ansible-Image-Builder') {
         • Parallel execution across multiple hosts
         • Real-time log streaming from remote execution
         • Artifact collection from remote builds
-        • Integration with Harbor registry for image push
+        • Integration with Docker registry for image push
         
         Prerequisites:
         • SSH keys must be exchanged with target hosts
@@ -38,7 +38,7 @@ build-server-1.example.com''')
         
         choiceParam('ANSIBLE_ROLE', [
             'jenkins-images',
-            'harbor', 
+ 
             'monitoring',
             'custom'
         ], 'Ansible role to execute on remote hosts')
@@ -47,7 +47,6 @@ build-server-1.example.com''')
 Example:
 jenkins_images_build: true
 jenkins_images_push: true
-harbor_registry_url: "harbor.example.com"''')
         
         stringParam('ANSIBLE_PLAYBOOK_REPO', 'https://github.com/your-org/jenkins-ha.git', 'Git repository containing Ansible playbooks')
         stringParam('ANSIBLE_PLAYBOOK_BRANCH', 'main', 'Git branch to use for Ansible playbooks')
@@ -287,7 +286,6 @@ localhost
 [monitoring]  
 localhost
 
-[harbor]
 localhost
 
 [shared_storage]
@@ -335,8 +333,6 @@ if [ "${params.COLLECT_ARTIFACTS}" = "true" ]; then
         "jenkins-images")
             docker images --format "table {{.Repository}}:{{.Tag}}\\t{{.Size}}\\t{{.CreatedAt}}" > /tmp/jenkins-agent/artifacts/docker-images.txt 2>/dev/null || true
             ;;
-        "harbor")
-            curl -s http://localhost/api/v2.0/projects 2>/dev/null > /tmp/jenkins-agent/artifacts/harbor-projects.json || true
             ;;
         "monitoring") 
             curl -s http://localhost:9090/api/v1/targets 2>/dev/null > /tmp/jenkins-agent/artifacts/prometheus-targets.json || true

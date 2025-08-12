@@ -70,7 +70,7 @@ COMMON TAG COMBINATIONS:
     --tags common,docker,jenkins,infrastructure,monitoring
 
     # Images and registry
-    --tags images,harbor,registry
+    --tags images
 
     # Everything except backup
     --skip-tags backup
@@ -79,12 +79,10 @@ SERVICE URLS (after deployment):
     • Jenkins:    http://localhost:8080
     • Grafana:    http://localhost:3000
     • Prometheus: http://localhost:9090  
-    • Harbor:     http://localhost:8082
 
 DEFAULT CREDENTIALS:
     • Jenkins:    admin / admin123
     • Grafana:    admin / admin
-    • Harbor:     admin / Harbor12345
 
 EOF
 }
@@ -232,12 +230,10 @@ deploy() {
             echo -e "  • Jenkins:    ${GREEN}http://localhost:8080${NC}"
             echo -e "  • Grafana:    ${GREEN}http://localhost:3000${NC}"
             echo -e "  • Prometheus: ${GREEN}http://localhost:9090${NC}"
-            echo -e "  • Harbor:     ${GREEN}http://localhost:8082${NC}"
             echo
             echo -e "${CYAN}Default Credentials:${NC}"
             echo -e "  • Jenkins:    ${YELLOW}admin${NC} / ${YELLOW}admin123${NC}"
             echo -e "  • Grafana:    ${YELLOW}admin${NC} / ${YELLOW}admin${NC}"
-            echo -e "  • Harbor:     ${YELLOW}admin${NC} / ${YELLOW}Harbor12345${NC}"
             echo
             echo -e "${CYAN}Useful Commands:${NC}"
             echo -e "  • Check containers: ${GREEN}docker ps${NC}"

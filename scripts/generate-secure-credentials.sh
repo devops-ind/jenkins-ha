@@ -71,10 +71,6 @@ JENKINS_AGENT_SECRET=$(generate_password 32)
 LDAP_BIND_PASSWORD=$(generate_password 24)
 JENKINS_DB_PASSWORD=$(generate_password 24)
 
-HARBOR_ADMIN_PASSWORD=$(generate_password 24)
-HARBOR_DB_PASSWORD=$(generate_password 24)
-HARBOR_REGISTRY_PASSWORD=$(generate_password 24)
-HARBOR_ROBOT_TOKEN=$(generate_api_token)
 
 GRAFANA_ADMIN_PASSWORD=$(generate_password 24)
 GRAFANA_SECRET_KEY=$(generate_password 32)
@@ -92,7 +88,6 @@ CLUSTER_AUTH_TOKEN=$(generate_api_token)
 CA_KEY_PASSWORD=$(generate_password 24)
 CA_CERT_PASSWORD=$(generate_password 24)
 JENKINS_SSL_KEY_PASSWORD=$(generate_password 24)
-HARBOR_SSL_KEY_PASSWORD=$(generate_password 24)
 GRAFANA_SSL_KEY_PASSWORD=$(generate_password 24)
 PROMETHEUS_SSL_KEY_PASSWORD=$(generate_password 24)
 
@@ -129,7 +124,6 @@ vault_jenkins_agent_01_ip: "10.0.1.20"
 vault_jenkins_agent_02_ip: "10.0.1.21"
 vault_jenkins_agent_03_ip: "10.0.1.22"
 vault_monitoring_01_ip: "10.0.1.30"
-vault_harbor_01_ip: "10.0.1.40"
 vault_lb_01_ip: "10.0.1.50"
 vault_lb_02_ip: "10.0.1.51"
 vault_storage_01_ip: "10.0.1.60"
@@ -137,7 +131,6 @@ vault_storage_01_ip: "10.0.1.60"
 # Virtual IPs for Load Balancer
 vault_jenkins_vip: "10.0.1.100"
 vault_monitoring_vip: "10.0.1.101"
-vault_harbor_vip: "10.0.1.102"
 
 # Jenkins Security Configuration
 vault_jenkins_admin_username: "admin"
@@ -160,13 +153,6 @@ vault_jenkins_db_password: "$JENKINS_DB_PASSWORD"
 vault_jenkins_db_name: "jenkins_production"
 vault_jenkins_db_host: "db.$COMPANY_DOMAIN"
 
-# Harbor Registry Credentials
-vault_harbor_admin_username: "admin"
-vault_harbor_admin_password: "$HARBOR_ADMIN_PASSWORD"
-vault_harbor_database_password: "$HARBOR_DB_PASSWORD"
-vault_harbor_registry_username: "jenkins-registry"
-vault_harbor_registry_password: "$HARBOR_REGISTRY_PASSWORD"
-vault_harbor_robot_token: "$HARBOR_ROBOT_TOKEN"
 
 # Monitoring Stack Credentials
 vault_grafana_admin_username: "admin"
@@ -202,7 +188,6 @@ vault_ca_cert_password: "$CA_CERT_PASSWORD"
 
 # SSL Certificate Passwords
 vault_jenkins_ssl_key_password: "$JENKINS_SSL_KEY_PASSWORD"
-vault_harbor_ssl_key_password: "$HARBOR_SSL_KEY_PASSWORD"
 vault_grafana_ssl_key_password: "$GRAFANA_SSL_KEY_PASSWORD"
 vault_prometheus_ssl_key_password: "$PROMETHEUS_SSL_KEY_PASSWORD"
 
@@ -244,7 +229,6 @@ vault_vulnerability_db_token: "$VULNERABILITY_DB_TOKEN"
 
 # License Keys
 vault_jenkins_enterprise_license: "CHANGE_TO_REAL_LICENSE_KEY"
-vault_harbor_enterprise_license: "CHANGE_TO_REAL_LICENSE_KEY"
 
 # Emergency Access
 vault_emergency_ssh_key: "$EMERGENCY_SSH_KEY"
@@ -267,7 +251,6 @@ Environment: $ENVIRONMENT
 
 Jenkins Admin: admin / $JENKINS_ADMIN_PASSWORD
 Grafana Admin: admin / $GRAFANA_ADMIN_PASSWORD  
-Harbor Admin: admin / $HARBOR_ADMIN_PASSWORD
 HAProxy Stats: haproxy-admin / $HAPROXY_STATS_PASSWORD
 
 Emergency Access: $BREAK_GLASS_PASSWORD

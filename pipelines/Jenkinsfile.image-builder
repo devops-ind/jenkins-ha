@@ -13,9 +13,8 @@ pipeline {
     }
     
     environment {
-        HARBOR_REGISTRY = "${HARBOR_REGISTRY_URL}"
-        HARBOR_PROJECT = "${HARBOR_PROJECT_NAME}"
-        HARBOR_CREDENTIALS = credentials('harbor-registry')
+        DOCKER_REGISTRY = "docker.io"
+        DOCKER_PROJECT = "jenkins"
         JENKINS_VERSION = "${JENKINS_VERSION}"
         AGENT_VERSION = "${JENKINS_AGENT_VERSION}"
         BUILD_DATE = sh(script: 'date -u +"%Y-%m-%dT%H:%M:%SZ"', returnStdout: true).trim()
@@ -30,17 +29,14 @@ pipeline {
             steps {
                 script {
                     echo "🚀 Jenkins Infrastructure Image Builder Pipeline"
-                    echo "📦 Harbor Registry: ${HARBOR_REGISTRY}/${HARBOR_PROJECT}"
+                    echo "📦 Docker Registry: ${DOCKER_REGISTRY}/${DOCKER_PROJECT}"
                     echo "🏷️ Image Tag: ${IMAGE_TAG}"
                     echo "🔨 Force Rebuild: ${params.FORCE_REBUILD}"
-                    echo "📤 Push to Harbor: ${params.PUSH_TO_HARBOR}"
+                    echo "📤 Push to Registry: ${params.PUSH_TO_REGISTRY}"
                     echo "🎯 Images to Build: ${params.IMAGES_TO_BUILD}"
                     
-                    // Login to Harbor registry
-                    sh """
-                        echo "🔐 Logging into Harbor registry..."
-                        echo \$HARBOR_CREDENTIALS_PSW | docker login \$HARBOR_REGISTRY -u \$HARBOR_CREDENTIALS_USR --password-stdin
-                    """
+                    // Docker registry login (optional for public registry)
+                    echo "📝 Using public Docker registry (no login required)"
                 }
             }
         }
@@ -55,9 +51,7 @@ pipeline {
                         "jenkins_master_image_tag=${IMAGE_TAG}",
                         "jenkins_agent_image_tag=${IMAGE_TAG}",
                         "jenkins_images_force_rebuild=${params.FORCE_REBUILD}",
-                        "jenkins_images_push=${params.PUSH_TO_HARBOR}",
-                        "harbor_registry_url=${HARBOR_REGISTRY}",
-                        "harbor_project=${HARBOR_PROJECT}"
+                        "jenkins_images_push=${params.PUSH_TO_REGISTRY}"
                     ]
                     
                     // Execute ansible playbook
@@ -75,14 +69,14 @@ pipeline {
         
         stage('Security Scanning') {
             when {
-                expression { params.PUSH_TO_HARBOR }
+                expression { params.PUSH_TO_REGISTRY }
             }
             steps {
                 script {
-                    echo "🔍 Images will be automatically scanned by Harbor registry..."
+                    echo "🔍 Images pushed to registry"
                     echo "📊 Built images for: ${params.IMAGES_TO_BUILD}"
                     echo "🏷️ Image tag: ${IMAGE_TAG}"
-                    echo "📤 Check Harbor UI at ${HARBOR_REGISTRY} for vulnerability reports"
+                    echo "📤 Images available at ${DOCKER_REGISTRY}/${DOCKER_PROJECT}"
                 }
             }
         }
@@ -90,7 +84,7 @@ pipeline {
         stage('Trigger Infrastructure Update') {
             when {
                 allOf {
-                    expression { params.PUSH_TO_HARBOR }
+                    expression { params.PUSH_TO_REGISTRY }
                     equals expected: 'all', actual: params.IMAGES_TO_BUILD
                 }
             }
@@ -118,7 +112,7 @@ pipeline {
                 echo "Images Built: ${params.IMAGES_TO_BUILD}"
                 echo "Image Tag: ${IMAGE_TAG}"
                 echo "Force Rebuild: ${params.FORCE_REBUILD}"
-                echo "Pushed to Harbor: ${params.PUSH_TO_HARBOR}"
+                echo "Pushed to Registry: ${params.PUSH_TO_REGISTRY}"
                 
                 // Archive build artifacts
                 archiveArtifacts artifacts: '**/Dockerfile*', allowEmptyArchive: true
@@ -142,7 +136,7 @@ pipeline {
                             
                             📦 Images: ${params.IMAGES_TO_BUILD}
                             🏷️ Tag: ${IMAGE_TAG}
-                            📤 Registry: ${HARBOR_REGISTRY}/${HARBOR_PROJECT}
+                            📤 Registry: ${DOCKER_REGISTRY}/${DOCKER_PROJECT}
                             ⏱️ Duration: ${currentBuild.durationString}
                             
                             🔗 Build: ${env.BUILD_URL}

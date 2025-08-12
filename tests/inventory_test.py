@@ -11,7 +11,7 @@ def test_inventory(inventory_path):
             inventory = yaml.safe_load(stream)
 
         # Check required groups
-        required_groups = ['jenkins_masters', 'jenkins_agents', 'monitoring', 'harbor']
+        required_groups = ['jenkins_masters', 'jenkins_agents', 'monitoring']
         for group in required_groups:
             if group not in inventory:
                 print(f"ERROR: Missing group {group}")

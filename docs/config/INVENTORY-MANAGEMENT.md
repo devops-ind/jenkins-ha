@@ -27,7 +27,6 @@ ansible/inventories/
 │   └── host_vars/
 │       ├── jenkins-master-01.yml
 │       ├── jenkins-master-02.yml
-│       └── harbor-01.yml
 ├── staging/
 │   ├── hosts.yml
 │   ├── group_vars/
@@ -162,18 +161,9 @@ all:
         keepalived_interface: "eth0"
         keepalived_virtual_router_id: 50
 
-    harbor:
       hosts:
-        harbor-01:
           ansible_host: 10.0.3.10
-          harbor_hostname: "harbor.company.com"
-          harbor_admin_password: "{{ vault_harbor_admin_password }}"
-          harbor_database_password: "{{ vault_harbor_db_password }}"
       vars:
-        harbor_version: "2.9.0"
-        harbor_data_volume: "/data"
-        harbor_ssl_cert: "/data/cert/harbor.crt"
-        harbor_ssl_key: "/data/cert/harbor.key"
 
     monitoring:
       children:
@@ -325,7 +315,6 @@ maven_versions:
     path: "/opt/maven/3.9.4"
 
 # Container configuration
-container_image: "harbor.company.com/jenkins/agent-maven:latest"
 container_volumes:
   - "/opt/jenkins:/opt/jenkins"
   - "/var/run/docker.sock:/var/run/docker.sock"
@@ -564,7 +553,6 @@ backup_retention_days: 30
 
 # Container configuration
 jenkins_container_name: "jenkins-master"
-jenkins_container_image: "harbor.company.com/jenkins/master:{{ jenkins_version }}"
 jenkins_container_restart_policy: "unless-stopped"
 
 jenkins_container_volumes:

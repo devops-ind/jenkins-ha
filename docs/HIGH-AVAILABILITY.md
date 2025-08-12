@@ -187,7 +187,6 @@ Each Jenkins master runs in an isolated container with systemd management:
 ```yaml
 # Container specifications per master
 jenkins-master-1:
-  image: harbor.company.com/jenkins/jenkins-master:latest
   ports:
     - "8080:8080"
     - "50000:50000"

@@ -35,7 +35,7 @@ pipelineJob('Infrastructure/Secure-Ansible-Executor') {
         
         choiceParam('ANSIBLE_ROLE', [
             'jenkins-images',
-            'harbor', 
+ 
             'monitoring',
             'backup',
             'security',
@@ -47,7 +47,6 @@ pipelineJob('Infrastructure/Secure-Ansible-Executor') {
         
         textParam('ANSIBLE_EXTRA_VARS', '', '''Additional Ansible variables (YAML format)
 Example:
-harbor_registry_url: "harbor.example.com"
 jenkins_images_build: true
 deployment_mode: "production"''')
         

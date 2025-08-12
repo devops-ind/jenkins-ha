@@ -170,8 +170,6 @@ for master_url in masters:
                             monitoring -m shell \
                             -a "systemctl is-active prometheus grafana-server || echo 'Monitoring services not running'" || echo "No monitoring group found"
                         
-                        echo "Checking Harbor registry..."
-                        curl -s -o /dev/null -w "%{http_code}" "${HARBOR_REGISTRY_URL}/api/v2.0/health" || echo "Harbor health check failed"
                     '''
                 }
             }
@@ -216,7 +214,6 @@ def check_port(host, port, service_name):
 services = [
     # Add your service endpoints here
     # ('jenkins-master-host', 8080, 'Jenkins Master'),
-    # ('harbor-host', 443, 'Harbor Registry'),
     # ('prometheus-host', 9090, 'Prometheus'),
     # ('grafana-host', 3000, 'Grafana')
 ]

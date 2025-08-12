@@ -16,7 +16,6 @@ vault_jenkins_agent_01_ip: "10.0.1.20"
 vault_jenkins_agent_02_ip: "10.0.1.21"
 vault_jenkins_agent_03_ip: "10.0.1.22"
 vault_monitoring_01_ip: "10.0.1.30"
-vault_harbor_01_ip: "10.0.1.40"
 vault_lb_01_ip: "10.0.1.50"
 vault_lb_02_ip: "10.0.1.51"
 vault_storage_01_ip: "10.0.1.60"
@@ -24,7 +23,6 @@ vault_storage_01_ip: "10.0.1.60"
 # Virtual IPs for Load Balancer
 vault_jenkins_vip: "10.0.1.100"
 vault_monitoring_vip: "10.0.1.101"
-vault_harbor_vip: "10.0.1.102"
 
 # Jenkins Security Configuration - GENERATE STRONG RANDOM PASSWORDS
 vault_jenkins_admin_username: "admin"
@@ -47,13 +45,6 @@ vault_jenkins_db_password: "GENERATE_STRONG_DB_PASSWORD"
 vault_jenkins_db_name: "jenkins_production"
 vault_jenkins_db_host: "db.company.local"
 
-# Harbor Registry Credentials - GENERATE STRONG RANDOM PASSWORDS
-vault_harbor_admin_username: "admin"
-vault_harbor_admin_password: "GENERATE_STRONG_HARBOR_PASSWORD"
-vault_harbor_database_password: "GENERATE_STRONG_HARBOR_DB_PASSWORD"
-vault_harbor_registry_username: "jenkins-registry"
-vault_harbor_registry_password: "GENERATE_STRONG_REGISTRY_PASSWORD"
-vault_harbor_robot_token: "GENERATE_RANDOM_ROBOT_TOKEN"
 
 # Monitoring Stack Credentials - GENERATE STRONG RANDOM PASSWORDS
 vault_grafana_admin_username: "admin"
@@ -89,7 +80,6 @@ vault_ca_cert_password: "GENERATE_STRONG_CA_CERT_PASSWORD"
 
 # SSL Certificate Passwords - GENERATE STRONG RANDOM PASSWORDS
 vault_jenkins_ssl_key_password: "GENERATE_STRONG_JENKINS_SSL_PASSWORD"
-vault_harbor_ssl_key_password: "GENERATE_STRONG_HARBOR_SSL_PASSWORD"
 vault_grafana_ssl_key_password: "GENERATE_STRONG_GRAFANA_SSL_PASSWORD"
 vault_prometheus_ssl_key_password: "GENERATE_STRONG_PROMETHEUS_SSL_PASSWORD"
 
@@ -131,7 +121,6 @@ vault_vulnerability_db_token: "GENERATE_VULNERABILITY_DB_TOKEN"
 
 # License Keys
 vault_jenkins_enterprise_license: "CHANGE_TO_REAL_LICENSE_KEY"
-vault_harbor_enterprise_license: "CHANGE_TO_REAL_LICENSE_KEY"
 
 # Emergency Access - GENERATE STRONG CREDENTIALS
 vault_emergency_ssh_key: "GENERATE_EMERGENCY_SSH_KEY"

@@ -79,7 +79,6 @@ The Jenkins HA infrastructure follows a distributed, containerized architecture 
 ┌─────────────────────────────────────────────────────────────┐
 │                  Supporting Services                       │
 ├─────────────────┬─────────────────┬─────────────────────────┤
-│ Harbor Registry │ Monitoring      │ Security & Backup       │
 │ ┌─────────────┐ │ ┌─────────────┐ │ ┌─────────────────────┐ │
 │ │ Image Store │ │ │ Prometheus  │ │ │ Fail2ban            │ │
 │ │ Vuln Scan   │ │ │ Grafana     │ │ │ AIDE File Integrity │ │
@@ -159,10 +158,8 @@ All Jenkins components use custom-built images optimized for HA deployment:
   - Client-side caching for performance
 - **Directory Structure**: Organized subdirectories for different data types
 
-#### 4. Container Registry (Harbor)
 - **Integration**: Seamless authentication with Jenkins
 - **Image Management**: Automated builds and vulnerability scanning
-- **Maven Integration**: Harbor as Maven repository proxy
 - **Security**: Role-based access control and image signing
 
 #### 5. Jenkins Agents (Containerized)
@@ -207,7 +204,6 @@ All Jenkins components use custom-built images optimized for HA deployment:
 │ │ 10.0.2.10-20   │ │ 10.0.3.10-50   │ │ 10.0.4.10-20   │ │
 │ └─────────────────┘ └─────────────────┘ └─────────────────┘ │
 │ ┌─────────────────┐ ┌─────────────────┐                   │
-│ │ Harbor Registry │ │ Monitoring      │                   │
 │ │ 10.0.5.10      │ │ 10.0.6.10-20   │                   │
 │ └─────────────────┘ └─────────────────┘                   │
 └─────────────────────────────────────────────────────────────┘
@@ -216,7 +212,6 @@ All Jenkins components use custom-built images optimized for HA deployment:
 ### Port Configuration
 - **Load Balancer**: 80/443 (HTTP/HTTPS)
 - **Jenkins Masters**: 8080 (HTTP), 50000 (Agent connection)
-- **Harbor Registry**: 80/443 (HTTP/HTTPS)
 - **Prometheus**: 9090 (HTTP)
 - **Grafana**: 3000 (HTTP)
 - **NFS**: 2049 (NFS protocol)
@@ -341,10 +336,8 @@ The infrastructure is deployed and managed through a comprehensive set of Ansibl
   - Permission and security configuration
   - Storage health monitoring
 
-#### 4. **harbor** - Container Registry
 - **Purpose**: Private Docker registry with security features
 - **Features**:
-  - Harbor installation and configuration
   - LDAP/OIDC authentication integration
   - Image vulnerability scanning setup
   - Replication configuration
@@ -430,7 +423,6 @@ The infrastructure is deployed and managed through a comprehensive set of Ansibl
 ```
 Deployment Flow:
 1. common → docker → shared-storage
-2. harbor (parallel with step 3)
 3. security → jenkins-images
 4. jenkins-master → high-availability
 5. monitoring → backup
@@ -451,7 +443,6 @@ Deployment Flow:
 - **Load Balancing**: HAProxy 2.8+ + Keepalived
 - **Storage**: NFS 4.1 / GlusterFS 10.x
 - **Monitoring**: Prometheus + Grafana + AlertManager
-- **Registry**: Harbor 2.8+ with Trivy scanning
 - **Security**: Fail2ban, AIDE, RKHunter, SSL/TLS
 - **Backup**: Custom scripts with multiple backend support
 - **CI/CD**: Jenkins 2.426.1 LTS with containerized agents

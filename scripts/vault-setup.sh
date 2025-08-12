@@ -395,13 +395,11 @@ rotate_passwords() {
     
     # Generate new passwords
     local new_jenkins_pass=$(generate_app_password "J3nk1ns")
-    local new_harbor_pass=$(generate_app_password "H@rb0r")
     local new_grafana_pass=$(generate_app_password "Gr@f@n@")
     local new_prometheus_pass=$(generate_app_password "Pr0m3th3us")
     
     # Update passwords in file
     sed -i.tmp "s/vault_jenkins_admin_password:.*/vault_jenkins_admin_password: \"$new_jenkins_pass\"/" "$vault_file"
-    sed -i.tmp "s/vault_harbor_admin_password:.*/vault_harbor_admin_password: \"$new_harbor_pass\"/" "$vault_file"
     sed -i.tmp "s/vault_grafana_admin_password:.*/vault_grafana_admin_password: \"$new_grafana_pass\"/" "$vault_file"
     sed -i.tmp "s/vault_prometheus_basic_auth_password:.*/vault_prometheus_basic_auth_password: \"$new_prometheus_pass\"/" "$vault_file"
     
@@ -441,7 +439,6 @@ validate_vault() {
         local content=$(ansible-vault view "$vault_file" --vault-password-file="$vault_password_file")
         local required_vars=(
             "vault_jenkins_admin_password"
-            "vault_harbor_admin_password"
             "vault_grafana_admin_password"
             "vault_prometheus_basic_auth_password"
             "vault_ssl_key_password"

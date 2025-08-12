@@ -17,7 +17,6 @@ The local setup runs all services as Docker containers on `localhost` with diffe
 | Jenkins Master | http://localhost:8080 | jenkins-master-dev | admin / admin123 |
 | Grafana | http://localhost:3000 | grafana-dev | admin / admin |
 | Prometheus | http://localhost:9090 | prometheus-dev | - |
-| Harbor Registry | http://localhost:8082 | harbor-dev | admin / Harbor12345 |
 
 ## 🚀 Quick Start
 
@@ -75,7 +74,6 @@ Use these tags to deploy specific components:
 - `infrastructure` - Complete Jenkins infrastructure
 
 ### Additional Services
-- `harbor` - Harbor registry
 - `monitoring` - Complete monitoring stack
 - `prometheus` - Prometheus only
 - `grafana` - Grafana only

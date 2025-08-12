@@ -89,7 +89,6 @@ make health-check
 - **Redundancy**: RAID 10 or distributed replication
 - **Network**: Dedicated storage network recommended
 
-**Harbor Registry Node**
 - **CPU**: 4 cores
 - **RAM**: 8GB
 - **Disk**: 200GB+ (for image storage)
@@ -167,7 +166,6 @@ sudo systemctl start podman
 - **Ansible Vault Password**: For encrypted variables
 - **SSH Private Keys**: For node access
 - **Jenkins Admin Password**: For initial setup
-- **Harbor Registry Credentials**: For image management
 - **SSL Certificates**: For HTTPS (optional)
 
 #### Vault Setup
@@ -212,9 +210,7 @@ all:
       hosts:
         monitoring-01:
           ansible_host: 10.0.6.10
-    harbor:
       hosts:
-        harbor-01:
           ansible_host: 10.0.5.10
     shared_storage:
       hosts:
@@ -235,7 +231,6 @@ all:
 ENVIRONMENT=production
 JENKINS_VERSION=2.426.1
 JENKINS_MASTER_HOST=jenkins-master-01
-HARBOR_REGISTRY=harbor.company.com
 BACKUP_ENABLED=true
 MONITORING_ENABLED=true
 HA_ENABLED=true
@@ -250,9 +245,6 @@ BACKUP_RETENTION_DAYS=30
 ```yaml
 # ansible/inventories/production/group_vars/all/vault.yml
 vault_jenkins_admin_password: "SecureAdminPassword123!"
-vault_harbor_admin_password: "HarborAdminPass456!"
-vault_harbor_db_password: "DatabasePassword789!"
-vault_harbor_redis_password: "RedisPassword012!"
 vault_monitoring_admin_password: "MonitoringPass345!"
 vault_backup_encryption_key: "BackupEncryptionKey678!"
 ```
@@ -322,10 +314,8 @@ ansible-playbook -i ansible/inventories/production/hosts.yml \
   --tags security \
   --vault-password-file=environments/vault-passwords/.vault_pass_production
 
-# Deploy Harbor registry
 ansible-playbook -i ansible/inventories/production/hosts.yml \
   ansible/site.yml \
-  --tags harbor \
   --vault-password-file=environments/vault-passwords/.vault_pass_production
 ```
 
@@ -480,8 +470,6 @@ curl -s http://10.0.1.10:8404/stats  # HAProxy stats
 # Test Jenkins API
 curl -u admin:password http://10.0.1.10:8080/api/json
 
-# Test Harbor registry
-curl -k https://harbor.company.com/api/v2.0/systeminfo
 
 # Test monitoring endpoints
 curl http://10.0.6.10:9090/api/v1/query?query=up
@@ -714,7 +702,6 @@ iostat -x 1
 #### Application Logs
 - **Jenkins Application**: `/shared/jenkins/logs/`
 - **HAProxy Logs**: `/var/log/haproxy.log`
-- **Harbor Logs**: `/var/log/harbor/` (if deployed)
 - **Monitoring Logs**: 
   - Prometheus: `/var/log/prometheus/`
   - Grafana: `/var/log/grafana/`
@@ -735,5 +722,4 @@ iostat -x 1
 - [Jenkins Documentation](https://www.jenkins.io/doc/)
 - [Ansible Documentation](https://docs.ansible.com/)
 - [Docker Documentation](https://docs.docker.com/)
-- [Harbor Documentation](https://goharbor.io/docs/)
 - [Prometheus Documentation](https://prometheus.io/docs/)

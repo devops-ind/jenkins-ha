@@ -8,7 +8,7 @@ pipelineJob('Applications/Maven-Build-Sample') {
         - Git SCM checkout
         - Maven build and test
         - Docker image creation
-        - Harbor registry push
+        - Docker registry push
         - Runs on dynamic maven-agent
     ''')
     
@@ -33,7 +33,7 @@ pipelineJob('Applications/Maven-Build-Sample') {
             }
             booleanParam {
                 name('PUSH_TO_REGISTRY')
-                description('Push built image to Harbor registry')
+                description('Push built image to Docker registry')
                 defaultValue(true)
             }
             choiceParam {
@@ -60,8 +60,8 @@ pipelineJob('Applications/Maven-Build-Sample') {
                     
                     environment {
                         MAVEN_OPTS = '-Xmx1024m -Xms512m'
-                        HARBOR_REGISTRY = ''' + "'${HARBOR_REGISTRY}'" + '''
-                        HARBOR_PROJECT = ''' + "'${HARBOR_PROJECT}'" + '''
+                        DOCKER_REGISTRY = "docker.io"
+                        DOCKER_PROJECT = "jenkins"
                     }
                     
                     stages {
@@ -93,12 +93,12 @@ pipelineJob('Applications/Maven-Build-Sample') {
                             }
                         }
                         
-                        stage('Push to Harbor') {
+                        stage('Push to Registry') {
                             when {
                                 expression { params.PUSH_TO_REGISTRY == true }
                             }
                             steps {
-                                echo "Pushing to Harbor registry: ${HARBOR_REGISTRY}/${HARBOR_PROJECT}"
+                                echo "Pushing to Docker registry: ${DOCKER_REGISTRY}/${DOCKER_PROJECT}"
                             }
                         }
                     }

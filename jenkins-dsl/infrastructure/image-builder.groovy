@@ -4,7 +4,7 @@
 pipelineJob('Infrastructure/Image-Builder') {
     displayName('Jenkins Image Builder Pipeline')
     description('''
-        Infrastructure Pipeline: Build and Push Jenkins Images to Harbor Registry
+        Infrastructure Pipeline: Build and Push Jenkins Images to Docker Registry
         
         This pipeline builds all Jenkins infrastructure images including:
         - Jenkins Master with pre-configured plugins and JCasC
@@ -13,7 +13,7 @@ pipelineJob('Infrastructure/Image-Builder') {
         - Python Agent for Python builds
         - Node.js Agent for frontend builds
         
-        Images are pushed to Harbor registry
+        Images are pushed to Docker registry
         Script: pipelines/Jenkinsfile.image-builder
     ''')
     
@@ -44,8 +44,8 @@ pipelineJob('Infrastructure/Image-Builder') {
                 defaultValue(false)
             }
             booleanParam {
-                name('PUSH_TO_HARBOR')
-                description('Push built images to Harbor registry')
+                name('PUSH_TO_REGISTRY')
+                description('Push built images to Docker registry')
                 defaultValue(true)
             }
             stringParam {
