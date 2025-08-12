@@ -1,33 +1,116 @@
 ---
 # High Availability Configuration for Jenkins
 
-- name: Install HAProxy for load balancing
+- name: Ensure Docker is installed for HAProxy container
   package:
-    name: haproxy
+    name: docker.io
     state: present
+  become: yes
+  tags: ['ha', 'docker']
+
+- name: Ensure Docker is running
+  systemd:
+    name: docker
+    state: started
+    enabled: yes
+  become: yes
+  tags: ['ha', 'docker']
+
+- name: Create HAProxy container user
+  user:
+    name: haproxy
+    system: yes
+    shell: /bin/false
+    home: /var/lib/haproxy
+    create_home: no
   become: yes
   tags: ['ha', 'loadbalancer']
 
-- name: Create HAProxy configuration directory
-  file:
-    path: /etc/haproxy/conf.d
-    state: directory
-    mode: '0755'
-  become: yes
-  tags: ['ha', 'config']
-
-- name: Create SSL certificate directory
+- name: Create HAProxy configuration directories
   file:
     path: "{{ item }}"
     state: directory
     mode: '0755'
-    owner: haproxy
+    owner: root
+    group: haproxy
+  loop:
+    - /etc/haproxy
+    - /etc/haproxy/conf.d
+    - /var/lib/haproxy
+    - /var/log/haproxy
+    - /etc/haproxy/errors
+  become: yes
+  tags: ['ha', 'config']
+
+- name: Create HAProxy error pages
+  copy:
+    dest: "/etc/haproxy/errors/{{ item.code }}.http"
+    content: |
+      HTTP/1.1 {{ item.code }} {{ item.message }}
+      Content-Type: text/html
+      Cache-Control: no-cache
+      Connection: close
+      Content-Length: {{ item.body | length }}
+      
+      {{ item.body }}
+    mode: '0644'
+  loop:
+    - { code: 400, message: "Bad Request", body: "<html><body><h1>400 Bad Request</h1><p>Your browser sent a request that this server could not understand.</p></body></html>" }
+    - { code: 403, message: "Forbidden", body: "<html><body><h1>403 Forbidden</h1><p>You don't have permission to access this resource.</p></body></html>" }
+    - { code: 408, message: "Request Timeout", body: "<html><body><h1>408 Request Timeout</h1><p>The server timed out waiting for the request.</p></body></html>" }
+    - { code: 500, message: "Internal Server Error", body: "<html><body><h1>500 Internal Server Error</h1><p>The server encountered an internal error.</p></body></html>" }
+    - { code: 502, message: "Bad Gateway", body: "<html><body><h1>502 Bad Gateway</h1><p>Jenkins service is temporarily unavailable.</p></body></html>" }
+    - { code: 503, message: "Service Unavailable", body: "<html><body><h1>503 Service Unavailable</h1><p>Jenkins service is temporarily unavailable. Please try again later.</p></body></html>" }
+    - { code: 504, message: "Gateway Timeout", body: "<html><body><h1>504 Gateway Timeout</h1><p>Jenkins service did not respond in time.</p></body></html>" }
+  become: yes
+  tags: ['ha', 'config']
+
+- name: Create SSL certificate directories for containers
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: root
     group: haproxy
   loop:
     - /etc/ssl/certs
     - /etc/ssl/private
+    - /etc/haproxy/ssl
   become: yes
   when: ssl_enabled | default(false)
+  tags: ['ha', 'ssl']
+
+- name: Set SSL certificate permissions for container access
+  file:
+    path: "{{ ssl_cert_path | default('/etc/ssl/certs/wildcard.devops.example.com.pem') }}"
+    owner: root
+    group: haproxy
+    mode: '0640'
+  become: yes
+  when: ssl_enabled | default(false) and ssl_cert_path is defined
+  tags: ['ha', 'ssl']
+
+- name: Set SSL key permissions for container access
+  file:
+    path: "{{ ssl_key_path | default('/etc/ssl/private/wildcard.devops.example.com.key') }}"
+    owner: root
+    group: haproxy
+    mode: '0640'
+  become: yes
+  when: ssl_enabled | default(false) and ssl_key_path is defined and ssl_key_path != ssl_cert_path
+  tags: ['ha', 'ssl']
+
+- name: Create combined SSL certificate for HAProxy container
+  shell: |
+    cat "{{ ssl_cert_path | default('/etc/ssl/certs/wildcard.devops.example.com.pem') }}" > /etc/haproxy/ssl/combined.pem
+    {% if ssl_key_path is defined and ssl_key_path != ssl_cert_path %}
+    cat "{{ ssl_key_path }}" >> /etc/haproxy/ssl/combined.pem
+    {% endif %}
+    chmod 640 /etc/haproxy/ssl/combined.pem
+    chown root:haproxy /etc/haproxy/ssl/combined.pem
+  become: yes
+  when: ssl_enabled | default(false)
+  notify: restart haproxy container
   tags: ['ha', 'ssl']
 
 - name: Validate team configuration
@@ -126,9 +209,38 @@
   become: yes
   tags: ['ha', 'firewall']
 
-- name: Start and enable HAProxy
+- name: Create HAProxy Docker Compose configuration
+  template:
+    src: haproxy-docker-compose.yml.j2
+    dest: /etc/haproxy/docker-compose.yml
+    owner: root
+    group: haproxy
+    mode: '0644'
+  become: yes
+  notify: restart haproxy container
+  tags: ['ha', 'container']
+
+- name: Pull HAProxy Docker image
+  docker_image:
+    name: "{{ haproxy_docker_image | default('haproxy:2.8-alpine') }}"
+    source: pull
+  become: yes
+  tags: ['ha', 'container']
+
+- name: Create HAProxy systemd service
+  template:
+    src: jenkins-haproxy.service.j2
+    dest: /etc/systemd/system/jenkins-haproxy.service
+    owner: root
+    group: root
+    mode: '0644'
+  become: yes
+  notify: restart haproxy container
+  tags: ['ha', 'systemd']
+
+- name: Enable and start HAProxy systemd service
   systemd:
-    name: haproxy
+    name: jenkins-haproxy.service
     state: started
     enabled: yes
     daemon_reload: yes
@@ -145,7 +257,7 @@
   when: jenkins_vip is defined and jenkins_vip != ""
   tags: ['ha', 'service']
 
-- name: Create HA monitoring scripts
+- name: Create HA monitoring and management scripts
   template:
     src: "{{ item }}.j2"
     dest: "/usr/local/bin/{{ item }}"
@@ -153,6 +265,7 @@
   loop:
     - jenkins-ha-monitor.sh
     - jenkins-failover.sh
+    - haproxy-container-manager.sh
   become: yes
   tags: ['ha', 'monitoring']
 
@@ -175,14 +288,17 @@
       Wildcard Support: {{ jenkins_wildcard_domain | default('*.devops.example.com') }}
       SSL Enabled: {{ ssl_enabled | default(false) }}
       
-      🔧 Load Balancer (HAProxy):
+      🐳 Containerized Load Balancer (HAProxy):
+      Container: jenkins-haproxy ({{ haproxy_docker_image | default('haproxy:2.8-alpine') }})
       {% if ssl_enabled | default(false) %}
       HTTPS: https://{{ jenkins_domain }}
       HTTP: http://{{ jenkins_domain }} (redirects to HTTPS)
+      SSL Certificate: /etc/haproxy/ssl/combined.pem (wildcard)
       {% else %}
       HTTP: http://{{ jenkins_domain }}
       {% endif %}
       Stats: http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port | default(8404) }}{{ haproxy_stats_uri | default('/stats') }}
+      Management: /usr/local/bin/haproxy-container-manager.sh
       
       {% if jenkins_vip is defined and jenkins_vip != "" %}
       🎯 Virtual IP Configuration:

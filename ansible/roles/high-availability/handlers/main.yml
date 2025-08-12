@@ -2,18 +2,25 @@
 # Handlers for high-availability role
 
 - name: restart haproxy
-  systemd:
-    name: haproxy
-    state: restarted
-    enabled: yes
-    daemon_reload: yes
+  docker_compose:
+    project_src: /etc/haproxy
+    state: present
+    recreate: always
   become: yes
   listen: "restart haproxy"
 
-- name: reload haproxy
+- name: restart haproxy container
   systemd:
-    name: haproxy
-    state: reloaded
+    name: jenkins-haproxy.service
+    state: restarted
+    daemon_reload: yes
+  become: yes
+  listen: "restart haproxy container"
+
+- name: reload haproxy
+  docker_container:
+    name: jenkins-haproxy
+    restart: yes
   become: yes
   listen: "reload haproxy"
 
@@ -27,14 +34,14 @@
   listen: "restart keepalived"
 
 - name: validate haproxy config
-  command: haproxy -f /etc/haproxy/haproxy.cfg -c
+  command: docker exec jenkins-haproxy haproxy -f /usr/local/etc/haproxy/haproxy.cfg -c
   become: yes
   listen: "validate haproxy config"
 
 - name: reload ssl certificates
   shell: |
-    # Reload HAProxy to pick up new certificates
-    systemctl reload haproxy || systemctl restart haproxy
+    # Reload HAProxy container to pick up new certificates
+    cd /etc/haproxy && docker-compose restart haproxy
   become: yes
   listen: "reload ssl certificates"
 

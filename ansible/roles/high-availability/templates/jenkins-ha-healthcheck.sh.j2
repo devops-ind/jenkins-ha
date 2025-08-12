@@ -5,6 +5,7 @@
 set -euo pipefail
 
 # Configuration
+HAPROXY_CONTAINER="jenkins-haproxy"
 DOMAIN="{{ jenkins_domain | default('devops.example.com') }}"
 PROTOCOL="{{ 'https' if ssl_enabled | default(false) else 'http' }}"
 TIMEOUT={{ health_check_timeout | default(10) }}
@@ -20,6 +21,35 @@ NC='\033[0m' # No Color
 # Logging function
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+# Container health check function
+check_haproxy_container() {
+    echo "🐳 Checking HAProxy container health..."
+    
+    if ! docker ps --format "table {{.Names}}" | grep -q "^$HAPROXY_CONTAINER$"; then
+        echo -e "${RED}❌ HAProxy container: NOT RUNNING${NC}"
+        log "ERROR: HAProxy container '$HAPROXY_CONTAINER' is not running"
+        return 1
+    fi
+    
+    # Check container health status
+    local health_status
+    health_status=$(docker inspect --format='{{.State.Health.Status}}' "$HAPROXY_CONTAINER" 2>/dev/null || echo "unknown")
+    
+    if [ "$health_status" = "healthy" ]; then
+        echo -e "${GREEN}✅ HAProxy container: HEALTHY${NC}"
+        log "SUCCESS: HAProxy container is healthy"
+        return 0
+    elif [ "$health_status" = "starting" ]; then
+        echo -e "${YELLOW}⚠️ HAProxy container: STARTING${NC}"
+        log "WARNING: HAProxy container is still starting"
+        return 1
+    else
+        echo -e "${RED}❌ HAProxy container: UNHEALTHY (status: $health_status)${NC}"
+        log "ERROR: HAProxy container health status: $health_status"
+        return 1
+    fi
 }
 
 # Health check function
@@ -75,7 +105,14 @@ main() {
     
     local overall_health=0
     
-    # Check HAProxy first
+    # Check HAProxy container first
+    if ! check_haproxy_container; then
+        overall_health=1
+    fi
+    
+    echo ""
+    
+    # Check HAProxy stats
     if ! check_haproxy_stats; then
         overall_health=1
     fi

@@ -5,6 +5,7 @@
 set -euo pipefail
 
 # Configuration
+HAPROXY_CONTAINER="jenkins-haproxy"
 HAPROXY_SOCKET="/run/haproxy/admin.sock"
 LOG_FILE="{{ monitoring_log_file | default('/var/log/jenkins-ha-monitor.log') }}"
 FAILOVER_TIMEOUT={{ failover_timeout | default(60) }}
@@ -21,14 +22,21 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [FAILOVER] $1" | tee -a "$LOG_FILE"
 }
 
-# HAProxy socket command function
+# HAProxy socket command function (containerized)
 haproxy_command() {
     local command="$1"
     
-    if [ -S "$HAPROXY_SOCKET" ]; then
-        echo "$command" | socat stdio "$HAPROXY_SOCKET" 2>/dev/null || return 1
+    # Check if container is running
+    if ! docker ps --format "table {{.Names}}" | grep -q "^$HAPROXY_CONTAINER$"; then
+        log "ERROR: HAProxy container '$HAPROXY_CONTAINER' is not running"
+        return 1
+    fi
+    
+    # Execute command inside container
+    if docker exec "$HAPROXY_CONTAINER" sh -c "echo '$command' | socat stdio $HAPROXY_SOCKET" 2>/dev/null; then
+        return 0
     else
-        log "ERROR: HAProxy socket not available at $HAPROXY_SOCKET"
+        log "ERROR: Failed to execute HAProxy command: $command"
         return 1
     fi
 }

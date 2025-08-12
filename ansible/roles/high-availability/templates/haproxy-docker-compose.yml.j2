@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  haproxy:
+    image: "{{ haproxy_docker_image | default('haproxy:2.8-alpine') }}"
+    container_name: jenkins-haproxy
+    restart: unless-stopped
+    
+    # Network configuration
+    network_mode: host
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: "{{ haproxy_memory_limit | default('512M') }}"
+          cpus: "{{ haproxy_cpu_limit | default('0.5') }}"
+        reservations:
+          memory: "{{ haproxy_memory_reservation | default('256M') }}"
+          cpus: "{{ haproxy_cpu_reservation | default('0.25') }}"
+    
+    # Volume mounts
+    volumes:
+      # HAProxy configuration
+      - /etc/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - /etc/haproxy/conf.d:/usr/local/etc/haproxy/conf.d:ro
+      
+      # SSL certificates (combined for HAProxy)
+      {% if ssl_enabled | default(false) %}
+      - /etc/haproxy/ssl/combined.pem:/usr/local/etc/haproxy/ssl/combined.pem:ro
+      - /etc/ssl/certs:/etc/ssl/certs:ro
+      - /etc/ssl/private:/etc/ssl/private:ro
+      {% endif %}
+      
+      # Logs
+      - /var/log/haproxy:/var/log/haproxy:rw
+      
+      # HAProxy runtime files
+      - /var/lib/haproxy:/var/lib/haproxy:rw
+      - haproxy_socket:/run/haproxy:rw
+      
+      # Error pages
+      - /etc/haproxy/errors:/etc/haproxy/errors:ro
+    
+    # Environment variables
+    environment:
+      - HAPROXY_USER=haproxy
+      - HAPROXY_GROUP=haproxy
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:{{ haproxy_stats_port | default(8404) }}/stats", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Labels for management
+    labels:
+      - "jenkins.service=haproxy"
+      - "jenkins.environment={{ environment_name | default('production') }}"
+      - "jenkins.version={{ haproxy_version | default('2.8') }}"
+      - "jenkins.teams={{ jenkins_teams | map(attribute='team_name') | join(',') }}"
+
+volumes:
+  haproxy_socket:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs

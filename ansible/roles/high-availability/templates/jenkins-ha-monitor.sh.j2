@@ -5,6 +5,7 @@
 set -euo pipefail
 
 # Configuration
+HAPROXY_CONTAINER="jenkins-haproxy"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HEALTH_CHECK_SCRIPT="$SCRIPT_DIR/jenkins-ha-healthcheck.sh"
 LOG_FILE="{{ monitoring_log_file | default('/var/log/jenkins-ha-monitor.log') }}"
