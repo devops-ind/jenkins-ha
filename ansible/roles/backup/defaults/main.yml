@@ -33,8 +33,8 @@ dr_rpo_target: "1 hour"
 
 # DR Test Environments
 dr_test_environments:
-  - name: "dr-staging"
-    description: "Disaster recovery staging environment"
+  - name: "dr-production"
+    description: "Disaster recovery production environment"
     type: "isolated"
     resources:
       cpu: "2"

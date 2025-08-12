@@ -40,7 +40,6 @@ jenkins:
           - labelString: "{{ jenkins_master_config.team_name }}-maven"
             dockerTemplateBase:
               image: "{{ jenkins_master_image_registry }}/jenkins/maven-agent:{{ jenkins_master_dynamic_agent_image_tag }}"
-              pullCredentialsId: "harbor-registry"
               network: "{{ jenkins_master_network_name }}"
             remoteFs: "/home/jenkins/agent"
             connector:
@@ -60,7 +59,6 @@ jenkins:
           - labelString: "{{ jenkins_master_config.team_name }}-python"
             dockerTemplateBase:
               image: "{{ jenkins_master_image_registry }}/jenkins/python-agent:{{ jenkins_master_dynamic_agent_image_tag }}"
-              pullCredentialsId: "harbor-registry"
               network: "{{ jenkins_master_network_name }}"
             remoteFs: "/home/jenkins/agent"
             connector:
@@ -80,7 +78,6 @@ jenkins:
           - labelString: "{{ jenkins_master_config.team_name }}-nodejs"
             dockerTemplateBase:
               image: "{{ jenkins_master_image_registry }}/jenkins/nodejs-agent:{{ jenkins_master_dynamic_agent_image_tag }}"
-              pullCredentialsId: "harbor-registry"
               network: "{{ jenkins_master_network_name }}"
             remoteFs: "/home/jenkins/agent"
             connector:
@@ -113,12 +110,6 @@ credentials:
   system:
     domainCredentials:
       - credentials:
-          - usernamePassword:
-              scope: GLOBAL
-              id: "harbor-registry"
-              username: "${HARBOR_USERNAME}"
-              password: "${HARBOR_PASSWORD}"
-              description: "Harbor Registry Credentials"
           {% if jenkins_master_config.credentials is defined %}
           {% for cred in jenkins_master_config.credentials %}
           - {{ cred.type }}:

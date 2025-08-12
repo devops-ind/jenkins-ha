@@ -64,11 +64,6 @@ jenkins_agent_image_tag: "latest"
 jenkins_images_force_rebuild: false
 jenkins_images_push: true
 
-# Harbor registry configuration for production
-harbor_integration_enabled: true
-harbor_registry_url: "harbor.company.com"
-harbor_project: "jenkins-prod"
-harbor_ssl_verify: true
 
 # Production-specific plugins (extends defaults)
 jenkins_additional_plugins:

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-This is a production-grade Jenkins infrastructure with **Blue-Green Deployment**, **Multi-Team Support**, and **Enterprise Security** using Ansible for configuration management. The system deploys Jenkins masters in blue-green configuration with secure container management, HAProxy load balancing, Harbor registry integration, comprehensive monitoring stack (Prometheus/Grafana), automated backup and disaster recovery systems, and Job DSL automation with enhanced security controls.
+This is a production-grade Jenkins infrastructure with **Blue-Green Deployment**, **Multi-Team Support**, and **Enterprise Security** using Ansible for configuration management. The system deploys Jenkins masters in blue-green configuration with secure container management, HAProxy load balancing, comprehensive monitoring stack (Prometheus/Grafana), automated backup and disaster recovery systems, and Job DSL automation with enhanced security controls.
 
 ### Recent Security & Operational Enhancements
 - **Container Security**: Trivy vulnerability scanning, security constraints, runtime monitoring
@@ -21,8 +21,8 @@ This is a production-grade Jenkins infrastructure with **Blue-Green Deployment**
 # Deploy to production environment
 make deploy-production
 
-# Deploy to staging environment  
-make deploy-staging
+# Deploy to local development environment  
+make deploy-local
 
 # Build and push Docker images
 make build-images
@@ -91,7 +91,6 @@ scripts/disaster-recovery.sh production --validate
 - **HAProxy Load Balancer**: Advanced traffic routing with health checks, SLI monitoring, and API management
 - **Secure Dynamic Jenkins Agents**: Container-based agents (maven, python, nodejs, dind) with security constraints and vulnerability scanning
 - **Job DSL Automation**: Code-driven job creation with security sandboxing and approval workflows
-- **Harbor Registry Integration**: Private Docker registry with automated image scanning and compliance validation
 - **Comprehensive Monitoring Stack**: Prometheus metrics, enhanced Grafana dashboards with 26 panels, DORA metrics, and SLI tracking
 - **Enterprise Backup & DR**: Automated backup with RTO/RPO compliance and automated disaster recovery procedures
 - **Secure Shared Storage**: NFS/GlusterFS with encryption and access controls for persistent data across teams
@@ -100,7 +99,6 @@ scripts/disaster-recovery.sh production --validate
 ### Deployment Flow (ansible/site.yml)
 1. **Pre-deployment Validation**: Comprehensive system validation framework with connectivity, security, and resource checks
 2. **Bootstrap Infrastructure**: Common setup, Docker, shared storage, security hardening with container security constraints
-3. **Harbor Registry Integration**: Setup private Docker registry connection with security scanning integration
 4. **Secure Jenkins Image Building**: Custom Jenkins images with vulnerability scanning and security validation
 5. **Blue-Green Jenkins Deployment**: Deploy blue/green environments with enhanced pre-switch validation and automated rollback triggers
 6. **HAProxy Load Balancer Setup**: Configure traffic routing, health checks, and SLI monitoring integration
@@ -111,7 +109,6 @@ scripts/disaster-recovery.sh production --validate
 
 ### Key Ansible Roles
 - `jenkins-master`: Unified Jenkins deployment supporting both single and multi-team configurations with blue-green deployment, secure container management, vulnerability scanning, and security constraints
-- `harbor`: Private registry integration with automated security scanning and authentication
 - `monitoring`: Enhanced Prometheus/Grafana stack with 26-panel dashboards, DORA metrics, SLI tracking, and automated alerting
 - `backup`: Enterprise-grade automated backup procedures with RTO/RPO compliance and disaster recovery automation
 - `security`: Comprehensive security hardening, container security constraints, vulnerability scanning, compliance validation, and audit logging
@@ -121,8 +118,7 @@ scripts/disaster-recovery.sh production --validate
 
 ### Environment Configuration
 - **Production**: `environments/production.env` and `ansible/inventories/production/`
-- **Staging**: `environments/staging.env` and `ansible/inventories/staging/`
-- **DevContainer**: Local development with `deployment_mode: devcontainer`
+- **Local**: `environments/local.env` and `ansible/inventories/local/` with `deployment_mode: local`
 - **Vault Variables**: Encrypted in `ansible/inventories/*/group_vars/all/vault.yml`
 
 ### Pipeline Definitions
@@ -149,7 +145,6 @@ Job definitions are organized in `jenkins-dsl/` directory with enhanced security
 Required inventory groups for proper deployment:
 - `jenkins_masters`: Blue-green Jenkins master nodes (supports multiple teams)
 - `monitoring`: Prometheus/Grafana monitoring stack
-- `harbor`: Private Docker registry nodes
 - `load_balancers`: HAProxy load balancer nodes
 - `shared_storage`: NFS/GlusterFS storage nodes
 
@@ -181,7 +176,6 @@ Required inventory groups for proper deployment:
 - **Enhanced Vault Security**: All sensitive data stored in encrypted Ansible Vault files with automated credential generation
 - **Container Security**: Trivy vulnerability scanning, security constraints (non-root, non-privileged, read-only filesystem)
 - **Runtime Security Monitoring**: Real-time container security monitoring with automated alerting
-- **Harbor Registry Security**: Registry credentials managed through vault variables with automated scanning integration
 - **Jenkins Security**: Admin credentials encrypted and rotated through Ansible with secure Job DSL execution
 - **SSL/TLS Management**: Certificates managed in `environments/certificates/` with automated renewal
 - **Compliance Validation**: Automated security compliance reporting and validation

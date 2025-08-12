@@ -82,10 +82,8 @@ slack:latest
 shared-workspace:latest
 {% endif %}
 
-# Environment Specific Plugins
-{% if harbor_integration_enabled | default(true) %}
+# Docker Plugin
 docker-plugin:latest
-{% endif %}
 
 {% if backup_enabled | default(true) %}
 backup:latest

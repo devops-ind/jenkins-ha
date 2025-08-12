@@ -1,8 +1,8 @@
 ---
-# Local DevContainer Deployment Playbook
-# This playbook deploys Jenkins HA infrastructure locally in devcontainers
+# Local Development Deployment Playbook
+# This playbook deploys Jenkins HA infrastructure locally for development
 
-- name: Local DevContainer Jenkins Infrastructure Deployment
+- name: Local Development Jenkins Infrastructure Deployment
   hosts: localhost
   connection: local
   become: yes
@@ -15,21 +15,19 @@
     - name: Display local deployment information
       debug:
         msg: |
-          🚀 Starting Local DevContainer Deployment
+          🚀 Starting Local Development Deployment
           
           📋 Configuration:
           Environment: {{ deployment_environment }}
-          Mode: {{ deployment_mode | default('devcontainer') }}
+          Mode: {{ deployment_mode | default('local') }}
           Jenkins URL: {{ jenkins_local_url | default('http://localhost:8080') }}
           Grafana URL: {{ grafana_local_url | default('http://localhost:3000') }}
           Prometheus URL: {{ prometheus_local_url | default('http://localhost:9090') }}
-          Harbor URL: {{ harbor_local_url | default('http://localhost:8082') }}
           
           🔧 Services to Deploy:
           • Jenkins Master ({{ jenkins_master_memory | default('2g') }} memory)
           • Jenkins Agents (DIND, Maven, Python, Node.js)
           • Monitoring Stack (Prometheus, Grafana)
-          • Harbor Registry (if enabled)
           • Backup System (if enabled)
 
     - name: Check Docker availability
@@ -45,7 +43,7 @@
         mode: '0755'
       loop:
         - "/tmp/jenkins-backup"
-        - "/tmp/jenkins-backup-staging"
+        - "/tmp/jenkins-backup-local"
         - "/tmp/shared"
         - "{{ jenkins_home_dir | default('/var/jenkins') }}"
 
@@ -57,9 +55,6 @@
     - role: docker
       tags: ['docker', 'containers']
       
-    # - role: harbor
-    #   tags: ['harbor', 'registry']
-    #   when: harbor_integration_enabled | default(true)
       
     - role: jenkins-images
       tags: ['images', 'build']
@@ -104,7 +99,7 @@
     - name: Display local deployment summary
       debug:
         msg: |
-          🎉 Local DevContainer Deployment Completed!
+          🎉 Local Development Deployment Completed!
           
           📋 Access URLs:
           Jenkins: {{ jenkins_local_url | default('http://localhost:8080') }}
@@ -112,34 +107,25 @@
           Grafana: {{ grafana_local_url | default('http://localhost:3000') }}
           Prometheus: {{ prometheus_local_url | default('http://localhost:9090') }}
           {% endif %}
-          {% if harbor_integration_enabled | default(true) %}
-          Harbor: {{ harbor_local_url | default('http://localhost:8082') }}
-          {% endif %}
           
           🔐 Default Credentials:
           Jenkins: admin / {{ vault_jenkins_admin_password | default('admin123') }}
           {% if monitoring_enabled | default(true) %}
           Grafana: admin / {{ vault_grafana_admin_password | default('admin') }}
           {% endif %}
-          {% if harbor_integration_enabled | default(true) %}
-          Harbor: admin / {{ vault_harbor_admin_password | default('Harbor12345') }}
-          {% endif %}
           
           🐳 Running Containers:
-          Jenkins Master: jenkins-master-dev
-          Jenkins Agents: jenkins-agent-*-dev
+          Jenkins Master: jenkins-master-local
+          Jenkins Agents: jenkins-agent-*-local
           {% if monitoring_enabled | default(true) %}
-          Prometheus: prometheus-dev
-          Grafana: grafana-dev
-          {% endif %}
-          {% if harbor_integration_enabled | default(true) %}
-          Harbor: harbor-dev  
+          Prometheus: prometheus-local
+          Grafana: grafana-local
           {% endif %}
           
           🛠️ Development Commands:
           • Check containers: docker ps
           • View logs: docker logs <container-name>
-          • Access Jenkins CLI: docker exec -it jenkins-master-dev jenkins-cli
+          • Access Jenkins CLI: docker exec -it jenkins-master-local jenkins-cli
           • Stop all: docker stop $(docker ps -q)
           
-          ✨ Happy Coding in your DevContainer! ✨
+          ✨ Happy Local Development! ✨

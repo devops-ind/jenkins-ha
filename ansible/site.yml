@@ -11,27 +11,19 @@
     - name: Determine target hosts for deployment
       set_fact:
         target_hosts: >-
-          {% if hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') == 'devcontainer' %}
-          localhost
-          {% elif hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') == 'production' %}
-          jenkins_masters:monitoring:harbor:load_balancers:shared_storage
-          {% elif hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') == 'staging' %}
-          jenkins_masters:monitoring
+          {% if hostvars[groups['all'][0]]['deployment_mode'] | default('local') == 'production' %}
+          jenkins_masters:monitoring:load_balancers:shared_storage
           {% else %}
           localhost
           {% endif %}
         jenkins_target_hosts: >-
-          {% if hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') == 'devcontainer' %}
-          localhost
-          {% elif hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') in ['production', 'staging'] %}
+          {% if hostvars[groups['all'][0]]['deployment_mode'] | default('local') == 'production' %}
           jenkins_masters
           {% else %}
           localhost
           {% endif %}
         monitoring_target_hosts: >-
-          {% if hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') == 'devcontainer' %}
-          localhost
-          {% elif hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') in ['production', 'staging'] %}
+          {% if hostvars[groups['all'][0]]['deployment_mode'] | default('local') == 'production' %}
           monitoring
           {% else %}
           localhost
@@ -40,13 +32,13 @@
     - name: Display deployment configuration
       debug:
         msg:
-          - "Deployment Mode: {{ hostvars[groups['all'][0]]['deployment_mode'] | default('localhost') }}"
+          - "Deployment Mode: {{ hostvars[groups['all'][0]]['deployment_mode'] | default('local') }}"
           - "Target Hosts: {{ target_hosts }}"
           - "Jenkins Hosts: {{ jenkins_target_hosts }}"
           - "Monitoring Hosts: {{ monitoring_target_hosts }}"
 
 - name: Pre-Deployment Validation Suite
-  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'all') }}"
+  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'all') }}"
   become: yes
   gather_facts: yes
   serial: "100%"  # Run validation on all hosts in parallel
@@ -153,7 +145,7 @@
       tags: ['validation', 'pre-deployment']
 
 - name: Bootstrap Infrastructure
-  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'all') }}"
+  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'all') }}"
   become: yes
   gather_facts: yes
   serial: "{{ serial_execution | default('100%') }}"
@@ -170,20 +162,9 @@
     - role: security
       tags: ['security', 'bootstrap']
 
-- name: Setup Harbor Registry Integration
-  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'harbor') }}"
-  become: yes
-  gather_facts: yes
-  vars:
-    harbor_registry_url: "{{ harbor_registry_url }}"
-    harbor_project: "{{ harbor_project }}"
-  roles:
-    - role: harbor
-      tags: ['harbor', 'registry']
-      when: harbor_integration_enabled | default(true)
 
 - name: Build and Manage Jenkins Images
-  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'jenkins_masters[0]') }}"  # Build on primary master only
+  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'jenkins_masters[0]') }}"  # Build on primary master only
   become: yes
   gather_facts: yes
   vars:
@@ -195,7 +176,7 @@
       when: build_jenkins_images | default(false)
 
 - name: Deploy Jenkins Infrastructure
-  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'jenkins_masters') }}"
+  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'jenkins_masters') }}"
   become: yes
   gather_facts: yes
   serial: 1  # Deploy masters one by one for HA
@@ -221,7 +202,7 @@
       tags: ['jenkins', 'verify']
 
 - name: Configure High Availability
-  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'load_balancers:jenkins_masters') }}"
+  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'load_balancers:jenkins_masters') }}"
   become: yes
   gather_facts: yes
   roles:
@@ -232,7 +213,7 @@
         - groups['jenkins_masters'] | default([]) | length > 1
 
 - name: Setup Monitoring Stack
-  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'monitoring') }}"
+  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'monitoring') }}"
   become: yes
   gather_facts: yes
   roles:
@@ -241,7 +222,7 @@
       when: monitoring_enabled | default(true)
 
 - name: Configure Backup System
-  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'shared_storage:jenkins_masters') }}"
+  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'shared_storage:jenkins_masters') }}"
   become: yes
   gather_facts: yes
   roles:
@@ -250,7 +231,7 @@
       when: backup_enabled | default(true)
 
 - name: Post-Deployment Verification
-  hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'jenkins_masters:monitoring') }}"
+  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'jenkins_masters:monitoring') }}"
   become: no
   gather_facts: yes
   tasks:
@@ -269,12 +250,12 @@
 
     - name: Verify monitoring endpoints
       uri:
-        url: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('http://localhost:9090/api/v1/query?query=up', 'http://' + hostvars[groups['monitoring'][0]]['ansible_default_ipv4']['address'] + ':9090/api/v1/query?query=up') }}"
+        url: "{{ (deployment_mode | default('local') == 'local') | ternary('http://localhost:9090/api/v1/query?query=up', 'http://' + hostvars[groups['monitoring'][0]]['ansible_default_ipv4']['address'] + ':9090/api/v1/query?query=up') }}"
         method: GET
       register: prometheus_check
       when: 
         - monitoring_enabled | default(true)
-        - (deployment_mode | default('devcontainer') == 'devcontainer') or (groups['monitoring'] is defined and groups['monitoring'] | length > 0)
+        - (deployment_mode | default('local') == 'local') or (groups['monitoring'] is defined and groups['monitoring'] | length > 0)
       ignore_errors: yes
       tags: ['verify', 'monitoring']
 
@@ -284,7 +265,7 @@
           🎉 Jenkins Infrastructure Deployment Completed!
           
           📋 Team Access Information:
-          {% if deployment_mode | default('devcontainer') == 'devcontainer' %}
+          {% if deployment_mode | default('local') == 'local' %}
           {% for team in jenkins_teams | default([{'team_name': 'default', 'ports': {'web': 8080}}]) %}
           {{ team.team_name | title }} Team: http://localhost:{{ team.ports.web | default(8080) }}
           {% endfor %}
@@ -299,7 +280,7 @@
           Load Balancer VIP: http://{{ jenkins_vip }}:{{ jenkins_master_port }}
           {% endif %}
           {% if monitoring_enabled | default(true) %}
-          {% if deployment_mode | default('devcontainer') == 'devcontainer' %}
+          {% if deployment_mode | default('local') == 'local' %}
           Prometheus: http://localhost:9090
           Grafana: http://localhost:3000
           {% elif groups['monitoring'] is defined and groups['monitoring'] | length > 0 %}

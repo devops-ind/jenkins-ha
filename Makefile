@@ -8,7 +8,6 @@
 ANSIBLE_DIR := ansible
 SCRIPTS_DIR := scripts
 LOCAL_INVENTORY := inventories/local/hosts.yml
-STAGING_INVENTORY := inventories/staging/hosts.yml
 PRODUCTION_INVENTORY := inventories/production/hosts.yml
 
 # Colors for output
@@ -21,7 +20,7 @@ RESET := \033[0m
 ##@ Development Commands
 
 .PHONY: local
-local: ## Deploy Jenkins HA locally in devcontainers
+local: ## Deploy Jenkins HA locally
 	@echo "$(BLUE)🚀 Deploying Jenkins HA locally...$(RESET)"
 	@$(SCRIPTS_DIR)/deploy-local.sh
 
@@ -45,17 +44,13 @@ local-monitoring: ## Deploy only monitoring stack locally
 	@echo "$(BLUE)📊 Deploying monitoring stack locally...$(RESET)"
 	@$(SCRIPTS_DIR)/deploy-local.sh --tags monitoring,prometheus,grafana
 
-.PHONY: local-harbor
-local-harbor: ## Deploy only Harbor registry locally
-	@echo "$(BLUE)🐳 Deploying Harbor registry locally...$(RESET)"
-	@$(SCRIPTS_DIR)/deploy-local.sh --tags harbor,registry
 
 ##@ Production Commands
 
-.PHONY: deploy-staging
-deploy-staging: ## Deploy to staging environment
-	@echo "$(YELLOW)🏗️ Deploying to staging environment...$(RESET)"
-	@cd $(ANSIBLE_DIR) && ansible-playbook -i $(STAGING_INVENTORY) site.yml
+.PHONY: deploy-local
+deploy-local: ## Deploy to local development environment
+	@echo "$(BLUE)🏗️ Deploying to local development environment...$(RESET)"
+	@cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml
 
 .PHONY: deploy-production
 deploy-production: ## Deploy to production environment
@@ -99,7 +94,6 @@ test-syntax: ## Test Ansible syntax
 test-inventory: ## Test inventory configurations
 	@echo "$(BLUE)🔍 Testing inventory configurations...$(RESET)"
 	@cd $(ANSIBLE_DIR) && ansible-inventory -i $(LOCAL_INVENTORY) --list > /dev/null
-	@cd $(ANSIBLE_DIR) && ansible-inventory -i $(STAGING_INVENTORY) --list > /dev/null
 	@cd $(ANSIBLE_DIR) && ansible-inventory -i $(PRODUCTION_INVENTORY) --list > /dev/null
 	@echo "$(GREEN)✅ All inventories are valid$(RESET)"
 
@@ -187,7 +181,6 @@ status: ## Show deployment status
 	@curl -s -o /dev/null -w "Jenkins:    %{http_code}\n" http://localhost:8080/login || echo "Jenkins:    Not running"
 	@curl -s -o /dev/null -w "Grafana:    %{http_code}\n" http://localhost:3000/api/health || echo "Grafana:    Not running"
 	@curl -s -o /dev/null -w "Prometheus: %{http_code}\n" http://localhost:9090/-/healthy || echo "Prometheus: Not running"  
-	@curl -s -o /dev/null -w "Harbor:     %{http_code}\n" http://localhost:8082/api/v2.0/systeminfo || echo "Harbor:     Not running"
 
 .PHONY: urls
 urls: ## Show service URLs
@@ -195,7 +188,6 @@ urls: ## Show service URLs
 	@echo "$(GREEN)Jenkins:    http://localhost:8080$(RESET)"
 	@echo "$(GREEN)Grafana:    http://localhost:3000$(RESET)"
 	@echo "$(GREEN)Prometheus: http://localhost:9090$(RESET)"
-	@echo "$(GREEN)Harbor:     http://localhost:8082$(RESET)"
 
 .PHONY: credentials
 credentials: ## Show credential locations

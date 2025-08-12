@@ -1,18 +1,18 @@
 ---
-# Local DevContainer Environment Configuration
+# Local Development Environment Configuration
 # This file overrides defaults from group_vars/all/ for local development
 
 # Environment identification
 deployment_environment: "local"
 environment_tier: "dev"
-deployment_mode: "devcontainer"
+deployment_mode: "local"
 
 # Local development versions
 jenkins_version: "2.426.1"
 docker_version: "24.0.7"
 timezone: "UTC"
 
-# Local networking configuration (using localhost with different ports)
+# Local networking configuration (using 10.5.6.12 with different ports)
 jenkins_network_name: "jenkins-dev-net"
 jenkins_network_subnet: "172.25.0.0/16"
 monitoring_network_name: "monitoring-dev-net"
@@ -64,13 +64,6 @@ jenkins_agent_image_tag: "latest"
 jenkins_images_force_rebuild: false
 jenkins_images_push: false  # Don't push to registry in local dev
 
-# Harbor registry configuration for local development
-harbor_integration_enabled: true
-harbor_registry_url: "localhost:8082"
-harbor_project: "jenkins-dev"
-harbor_ssl_verify: false
-harbor_admin_user: "admin"
-harbor_admin_password: "Harbor12345"
 
 # Local development-specific plugins (extends defaults)
 jenkins_additional_plugins:
@@ -88,11 +81,11 @@ docker_daemon_options:
     max-file: "3"
   storage-driver: "overlay2"
   
-# DevContainer specific paths
-devcontainer_workspace: "/workspaces/jenkins-ha"
-devcontainer_user: "vscode"
-devcontainer_uid: 1000
-devcontainer_gid: 1000
+# Local development paths
+local_workspace: "/tmp/jenkins-workspace"
+local_user: "{{ ansible_user }}"
+local_uid: "{{ ansible_user_uid | default(1000) }}"
+local_gid: "{{ ansible_user_gid | default(1000) }}"
 
 # Local development feature flags
 build_jenkins_images: false  # Use pre-built images for faster dev
@@ -106,10 +99,9 @@ debug_mode: true
 development_mode: true
 
 # Local service URLs for easy access
-jenkins_local_url: "http://localhost:8080"
-grafana_local_url: "http://localhost:3000"
-prometheus_local_url: "http://localhost:9090"
-harbor_local_url: "http://localhost:8082"
+jenkins_local_url: "http://10.5.6.12:8080"
+grafana_local_url: "http://10.5.6.12:3000"
+prometheus_local_url: "http://10.5.6.12:9090"
 
 # Quick start settings
 quick_start_mode: true

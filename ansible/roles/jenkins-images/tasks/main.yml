@@ -1,6 +1,6 @@
 ---
 # Jenkins Images Building and Management Role
-# Builds images and pushes to Harbor registry
+# Builds Docker images for Jenkins infrastructure
 
 - name: Set default images_to_build if not provided
   set_fact:
@@ -16,7 +16,7 @@
       🏷️ Agent Image Tag: {{ jenkins_agent_image_tag | default('latest') }}
       🔨 Force Rebuild: {{ jenkins_images_force_rebuild | default(false) }}
       📤 Push to Registry: {{ jenkins_images_push | default(true) }}
-      🏪 Harbor Registry: {{ harbor_registry_url }}/{{ harbor_project }}
+      🏪 Registry: docker.io
 
 - name: Create image build directories
   file:
@@ -100,17 +100,10 @@
     - { src: 'docker-entrypoint.sh', dest: "{{ jenkins_images_build_dir }}/docker-entrypoint.sh", mode: '0755' }
     - { src: 'healthcheck.sh', dest: "{{ jenkins_images_build_dir }}/healthcheck.sh", mode: '0755' }
 
-# - name: Login to Harbor registry
-#   community.docker.docker_login:
-#     registry_url: "{{ harbor_registry_url }}"
-#     username: "{{ harbor_username }}"
-#     password: "{{ harbor_password }}"
-#     email: "{{ harbor_email | default(omit) }}"
-#   when: harbor_integration_enabled | default(true)
 
 - name: Build Jenkins master image
   community.docker.docker_image:
-    name: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-master"
+    name: "jenkins/jenkins-master"
     tag: "{{ jenkins_master_image_tag }}"
     build:
       path: "{{ jenkins_images_build_dir }}/master"
@@ -129,7 +122,7 @@
 
 - name: Build DIND agent image
   community.docker.docker_image:
-    name: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-agent-dind"
+    name: "jenkins/jenkins-agent-dind"
     tag: "{{ jenkins_agent_image_tag }}"
     build:
       path: "{{ jenkins_images_build_dir }}/agents/dind"
@@ -148,7 +141,7 @@
 
 - name: Build Maven agent image
   community.docker.docker_image:
-    name: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-agent-maven"
+    name: "jenkins/jenkins-agent-maven"
     tag: "{{ jenkins_agent_image_tag }}"
     build:
       path: "{{ jenkins_images_build_dir }}/agents/maven"
@@ -168,7 +161,7 @@
 
 - name: Build Python agent image
   community.docker.docker_image:
-    name: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-agent-python"
+    name: "jenkins/jenkins-agent-python"
     tag: "{{ jenkins_agent_image_tag }}"
     build:
       path: "{{ jenkins_images_build_dir }}/agents/python"
@@ -187,7 +180,7 @@
 
 - name: Build Node.js agent image
   community.docker.docker_image:
-    name: "{{ harbor_registry_url }}/{{ harbor_project }}/jenkins-agent-nodejs"
+    name: "jenkins/jenkins-agent-nodejs"
     tag: "{{ jenkins_agent_image_tag }}"
     build:
       path: "{{ jenkins_images_build_dir }}/agents/nodejs"
@@ -257,10 +250,10 @@
       🎯 Images to Build: {{ images_to_build }}
       📦 Successfully Built Images ({{ images_built_list | default([]) | length }}):
       {% for image in images_built_list | default([]) %}
-      • {{ image.name }}: {{ harbor_registry_url }}/{{ harbor_project }}/{{ image.name }}:{{ image.tag }}
+      • {{ image.name }}: jenkins/{{ image.name }}:{{ image.tag }}
       {% endfor %}
       
-      🏷️ Registry: {{ harbor_registry_url }}/{{ harbor_project }}
+      🏷️ Registry: docker.io/jenkins
       📅 Build Date: {{ ansible_date_time.iso8601 }}
       🔨 Force Rebuild: {{ jenkins_images_force_rebuild | default(false) }}
       📤 Push to Registry: {{ jenkins_images_push | default(true) }}

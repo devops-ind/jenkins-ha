@@ -47,7 +47,6 @@ docker_networks:
 docker_volumes:
   - jenkins_home
   - jenkins_shared
-  - harbor_data
   - prometheus_data
   - grafana_data
 

@@ -52,19 +52,6 @@ ssl_services:
     validity_days: 365
     use_letsencrypt: false
   
-  - name: "harbor"
-    common_name: "{{ harbor_hostname | default('harbor.company.com') }}"
-    san:
-      - "DNS:{{ harbor_hostname | default('harbor.company.com') }}"
-      - "DNS:harbor-01.company.local"
-      - "IP:{{ vault_harbor_vip | default('10.0.1.102') }}"
-    owner: "harbor"
-    group: "harbor"
-    cert_dest_path: "/etc/harbor/ssl/harbor.crt"
-    key_dest_path: "/etc/harbor/ssl/harbor.key"
-    bundle_dest_path: "/etc/harbor/ssl/harbor-bundle.crt"
-    validity_days: 365
-    use_letsencrypt: false
   
   - name: "grafana"
     common_name: "{{ monitoring_hostname | default('monitoring.company.local') }}"

@@ -17,8 +17,8 @@ jenkins_master_restart_policy: "unless-stopped"
 jenkins_master_startup_wait_time: 20
 
 # Image Configuration
-jenkins_master_image_registry: "{{ harbor_registry_url | default('docker.io') }}"
-jenkins_master_image_name: "{{ harbor_project | default('jenkins') }}/jenkins"
+jenkins_master_image_registry: "docker.io"
+jenkins_master_image_name: "jenkins/jenkins"
 jenkins_master_image_tag: "lts"
 
 # Network Configuration

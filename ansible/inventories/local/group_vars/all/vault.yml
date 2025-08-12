@@ -6,10 +6,6 @@
 vault_jenkins_admin_password: "admin123"
 vault_jenkins_api_token: "local-dev-token-123"
 
-# Harbor registry credentials
-vault_harbor_admin_password: "Harbor12345"
-vault_harbor_db_password: "root123"
-vault_harbor_secret_key: "local-harbor-secret"
 
 # Database passwords for local services
 vault_grafana_admin_password: "admin"
