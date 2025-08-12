@@ -1,0 +1,15 @@
+---
+# HAProxy High Availability - Container Management
+
+- name: Create HAProxy volumes for container runtime
+  include_tasks: volumes.yml
+  tags: ['containers', 'volumes']
+
+- name: Deploy HAProxy containers for container runtime
+  include_tasks: "containers/{{ haproxy_container_runtime }}.yml"
+  tags: ['containers', 'deploy']
+
+- name: Wait for HAProxy container to be operational
+  pause:
+    seconds: "{{ haproxy_startup_wait_time }}"
+  tags: ['containers', 'wait']

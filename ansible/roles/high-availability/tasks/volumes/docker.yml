@@ -1,0 +1,27 @@
+---
+# HAProxy High Availability - Docker Volume Management
+
+- name: Create HAProxy admin socket volume (Docker)
+  community.docker.docker_volume:
+    name: "haproxy-admin-socket"
+    driver: "local"
+    driver_options:
+      type: "tmpfs"
+      device: "tmpfs"
+    state: present
+    labels:
+      service: "haproxy"
+      type: "admin-socket"
+      managed_by: "ansible"
+  tags: ['volumes', 'docker', 'socket']
+
+- name: Create HAProxy log volume (Docker)
+  community.docker.docker_volume:
+    name: "haproxy-logs"
+    driver: "local"
+    state: present
+    labels:
+      service: "haproxy"
+      type: "logs"
+      managed_by: "ansible"
+  tags: ['volumes', 'docker', 'logs']

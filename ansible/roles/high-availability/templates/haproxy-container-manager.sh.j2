@@ -5,7 +5,7 @@
 set -euo pipefail
 
 HAPROXY_CONTAINER="jenkins-haproxy"
-COMPOSE_FILE="/etc/haproxy/docker-compose.yml"
+CONTAINER_RUNTIME="{{ haproxy_container_runtime | default('docker') }}"
 LOG_FILE="/var/log/haproxy-container.log"
 
 # Colors for output
@@ -19,11 +19,11 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
 }
 
-# Check if Docker is running
-check_docker() {
-    if ! systemctl is-active docker >/dev/null 2>&1; then
-        echo -e "${RED}❌ Docker service is not running${NC}"
-        log "ERROR: Docker service is not running"
+# Check if container runtime is running
+check_runtime() {
+    if ! systemctl is-active "$CONTAINER_RUNTIME" >/dev/null 2>&1; then
+        echo -e "${RED}❌ $CONTAINER_RUNTIME service is not running${NC}"
+        log "ERROR: $CONTAINER_RUNTIME service is not running"
         return 1
     fi
     return 0
@@ -33,12 +33,11 @@ check_docker() {
 start_haproxy() {
     log "Starting HAProxy container..."
     
-    if ! check_docker; then
+    if ! check_runtime; then
         return 1
     fi
     
-    cd /etc/haproxy
-    if docker-compose up -d; then
+    if $CONTAINER_RUNTIME start "$HAPROXY_CONTAINER" 2>/dev/null; then
         echo -e "${GREEN}✅ HAProxy container started successfully${NC}"
         log "SUCCESS: HAProxy container started"
         return 0
@@ -53,8 +52,7 @@ start_haproxy() {
 stop_haproxy() {
     log "Stopping HAProxy container..."
     
-    cd /etc/haproxy
-    if docker-compose down; then
+    if $CONTAINER_RUNTIME stop "$HAPROXY_CONTAINER" 2>/dev/null; then
         echo -e "${GREEN}✅ HAProxy container stopped successfully${NC}"
         log "SUCCESS: HAProxy container stopped"
         return 0
@@ -68,7 +66,16 @@ stop_haproxy() {
 # Restart HAProxy container
 restart_haproxy() {
     log "Restarting HAProxy container..."
-    stop_haproxy && sleep 2 && start_haproxy
+    
+    if $CONTAINER_RUNTIME restart "$HAPROXY_CONTAINER" 2>/dev/null; then
+        echo -e "${GREEN}✅ HAProxy container restarted successfully${NC}"
+        log "SUCCESS: HAProxy container restarted"
+        return 0
+    else
+        echo -e "${RED}❌ Failed to restart HAProxy container${NC}"
+        log "ERROR: Failed to restart HAProxy container"
+        return 1
+    fi
 }
 
 # Check HAProxy container status
@@ -76,27 +83,29 @@ status_haproxy() {
     echo "🔍 HAProxy Container Status:"
     echo "=========================="
     
-    if docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -q "^$HAPROXY_CONTAINER"; then
+    if $CONTAINER_RUNTIME ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -q "^$HAPROXY_CONTAINER"; then
         echo -e "${GREEN}✅ Container: RUNNING${NC}"
         
         # Show container details
-        docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep "$HAPROXY_CONTAINER"
+        $CONTAINER_RUNTIME ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep "$HAPROXY_CONTAINER"
         
-        # Show health status
-        local health_status
-        health_status=$(docker inspect --format='{{.State.Health.Status}}' "$HAPROXY_CONTAINER" 2>/dev/null || echo "unknown")
-        echo "Health Status: $health_status"
+        # Show health status (Docker only)
+        if [ "$CONTAINER_RUNTIME" = "docker" ]; then
+            local health_status
+            health_status=$(docker inspect --format='{{.State.Health.Status}}' "$HAPROXY_CONTAINER" 2>/dev/null || echo "unknown")
+            echo "Health Status: $health_status"
+        fi
         
         # Show resource usage
         echo ""
         echo "📊 Resource Usage:"
-        docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}" "$HAPROXY_CONTAINER"
+        $CONTAINER_RUNTIME stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}" "$HAPROXY_CONTAINER"
         
     else
         echo -e "${RED}❌ Container: NOT RUNNING${NC}"
         
         # Check if container exists but is stopped
-        if docker ps -a --format "table {{.Names}}" | grep -q "^$HAPROXY_CONTAINER$"; then
+        if $CONTAINER_RUNTIME ps -a --format "table {{.Names}}" | grep -q "^$HAPROXY_CONTAINER$"; then
             echo -e "${YELLOW}⚠️ Container exists but is stopped${NC}"
         else
             echo -e "${YELLOW}⚠️ Container does not exist${NC}"
@@ -114,8 +123,8 @@ logs_haproxy() {
     echo "📋 HAProxy Container Logs (last $lines lines):"
     echo "============================================="
     
-    if docker ps --format "table {{.Names}}" | grep -q "^$HAPROXY_CONTAINER$"; then
-        docker logs --tail "$lines" "$HAPROXY_CONTAINER"
+    if $CONTAINER_RUNTIME ps --format "table {{.Names}}" | grep -q "^$HAPROXY_CONTAINER$"; then
+        $CONTAINER_RUNTIME logs --tail "$lines" "$HAPROXY_CONTAINER"
     else
         echo -e "${RED}❌ Container is not running${NC}"
         return 1
@@ -127,27 +136,11 @@ validate_config() {
     echo "🔧 Validating HAProxy Configuration:"
     echo "===================================="
     
-    if docker exec "$HAPROXY_CONTAINER" haproxy -f /usr/local/etc/haproxy/haproxy.cfg -c 2>/dev/null; then
+    if $CONTAINER_RUNTIME exec "$HAPROXY_CONTAINER" haproxy -f /usr/local/etc/haproxy/haproxy.cfg -c 2>/dev/null; then
         echo -e "${GREEN}✅ Configuration is valid${NC}"
         return 0
     else
         echo -e "${RED}❌ Configuration validation failed${NC}"
-        return 1
-    fi
-}
-
-# Update container (pull new image and recreate)
-update_haproxy() {
-    log "Updating HAProxy container..."
-    
-    cd /etc/haproxy
-    if docker-compose pull && docker-compose up -d --force-recreate; then
-        echo -e "${GREEN}✅ HAProxy container updated successfully${NC}"
-        log "SUCCESS: HAProxy container updated"
-        return 0
-    else
-        echo -e "${RED}❌ Failed to update HAProxy container${NC}"
-        log "ERROR: Failed to update HAProxy container"
         return 1
     fi
 }
@@ -157,10 +150,10 @@ cleanup_haproxy() {
     log "Cleaning up HAProxy containers and images..."
     
     # Remove stopped containers
-    docker container prune -f
+    $CONTAINER_RUNTIME container prune -f
     
     # Remove unused images
-    docker image prune -f
+    $CONTAINER_RUNTIME image prune -f
     
     echo -e "${GREEN}✅ Cleanup completed${NC}"
     log "SUCCESS: Cleanup completed"
@@ -187,16 +180,13 @@ main() {
         "validate")
             validate_config
             ;;
-        "update")
-            update_haproxy
-            ;;
         "cleanup")
             cleanup_haproxy
             ;;
         *)
             echo "HAProxy Container Manager"
             echo "========================"
-            echo "Usage: $0 {start|stop|restart|status|logs|validate|update|cleanup}"
+            echo "Usage: $0 {start|stop|restart|status|logs|validate|cleanup}"
             echo ""
             echo "Commands:"
             echo "  start     - Start HAProxy container"
@@ -205,13 +195,14 @@ main() {
             echo "  status    - Show container status and stats"
             echo "  logs      - Show container logs (optional: number of lines)"
             echo "  validate  - Validate HAProxy configuration"
-            echo "  update    - Update container image and recreate"
             echo "  cleanup   - Clean up old containers and images"
             echo ""
             echo "Examples:"
             echo "  $0 status"
             echo "  $0 logs 100"
             echo "  $0 restart"
+            echo ""
+            echo "Container Runtime: $CONTAINER_RUNTIME"
             exit 1
             ;;
     esac

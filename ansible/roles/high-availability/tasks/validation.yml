@@ -1,0 +1,85 @@
+---
+# HAProxy High Availability - Configuration Validation
+
+- name: Validate HAProxy container runtime
+  assert:
+    that:
+      - haproxy_container_runtime in ['docker', 'podman']
+    fail_msg: "haproxy_container_runtime must be 'docker' or 'podman'"
+    success_msg: "HAProxy container runtime validated: {{ haproxy_container_runtime }}"
+  tags: ['validation', 'config']
+
+- name: Validate team configuration for multi-team setup
+  assert:
+    that:
+      - jenkins_teams is defined
+      - jenkins_teams | length > 0
+      - jenkins_domain is defined
+      - jenkins_domain | length > 0
+    fail_msg: "Multi-team configuration requires jenkins_teams and jenkins_domain to be defined"
+    success_msg: "Team configuration validated - {{ jenkins_teams | length }} team(s) configured"
+  when: team_routing_enabled | default(true)
+  tags: ['validation', 'teams']
+
+- name: Validate SSL configuration
+  assert:
+    that:
+      - ssl_cert_path is defined
+      - ssl_cert_path | length > 0
+    fail_msg: "SSL configuration requires ssl_cert_path to be defined"
+    success_msg: "SSL configuration validated - certificate path: {{ ssl_cert_path }}"
+  when: ssl_enabled | default(false)
+  tags: ['validation', 'ssl']
+
+- name: Validate required HAProxy image configuration
+  assert:
+    that:
+      - haproxy_image_name is defined
+      - haproxy_image_tag is defined
+      - haproxy_image_registry is defined
+    fail_msg: "HAProxy image configuration incomplete"
+    success_msg: "HAProxy image configuration validated: {{ haproxy_image_registry }}/{{ haproxy_image_name }}:{{ haproxy_image_tag }}"
+  tags: ['validation', 'image']
+
+- name: Validate VIP configuration
+  assert:
+    that:
+      - jenkins_vip | length > 0
+      - jenkins_vip | ipaddr
+    fail_msg: "VIP configuration requires valid IP address"
+    success_msg: "VIP configuration validated: {{ jenkins_vip }}"
+  when: keepalived_enabled | default(false)
+  tags: ['validation', 'vip']
+
+- name: Check if SSL certificate files exist
+  stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ ssl_cert_path }}"
+    - "{{ ssl_key_path | default(ssl_cert_path) }}"
+  register: ssl_cert_files
+  when: ssl_enabled | default(false)
+  tags: ['validation', 'ssl', 'files']
+
+- name: Validate SSL certificate files accessibility
+  assert:
+    that:
+      - item.stat.exists
+    fail_msg: "SSL certificate file not found: {{ item.item }}"
+    success_msg: "SSL certificate file accessible: {{ item.item }}"
+  loop: "{{ ssl_cert_files.results | default([]) }}"
+  when: ssl_enabled | default(false)
+  loop_control:
+    label: "{{ item.item }}"
+  tags: ['validation', 'ssl', 'files']
+
+- name: Validate HAProxy stats configuration
+  assert:
+    that:
+      - haproxy_stats_port is defined
+      - haproxy_stats_port | int > 1024
+      - haproxy_stats_port | int < 65536
+    fail_msg: "HAProxy stats port must be between 1024 and 65535"
+    success_msg: "HAProxy stats configuration validated: port {{ haproxy_stats_port }}"
+  when: haproxy_stats_enabled | default(true)
+  tags: ['validation', 'stats']

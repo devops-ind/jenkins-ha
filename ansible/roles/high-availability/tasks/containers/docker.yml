@@ -1,0 +1,77 @@
+---
+# HAProxy High Availability - Docker Container Management
+
+- name: Deploy HAProxy container (Docker)
+  community.docker.docker_container:
+    name: "jenkins-haproxy"
+    image: "{{ haproxy_image_registry }}/{{ haproxy_image_name }}:{{ haproxy_image_tag }}"
+    state: started
+    restart_policy: "{{ haproxy_restart_policy }}"
+    network_mode: "{{ haproxy_network_mode }}"
+    ports: "{{ _haproxy_ports }}"
+    volumes: "{{ _haproxy_volumes }}"
+    env: "{{ haproxy_env_vars }}"
+    memory: "{{ haproxy_memory_limit }}"
+    cpus: "{{ haproxy_cpu_limit }}"
+    log_driver: "{{ haproxy_log_driver }}"
+    log_options:
+      max-size: "{{ haproxy_log_max_size }}"
+      max-file: "{{ haproxy_log_max_files }}"
+    labels: "{{ haproxy_labels | combine(_haproxy_dynamic_labels) }}"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:{{ haproxy_stats_port | default(8404) }}/stats", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    user: "{{ haproxy_uid }}:{{ haproxy_gid }}"
+  vars:
+    _haproxy_ports: "{{ [] if haproxy_network_mode == 'host' else _haproxy_port_mappings }}"
+    _haproxy_port_mappings:
+      - "80:80"
+      - "443:443"
+      - "{{ haproxy_stats_port | default(8404) }}:{{ haproxy_stats_port | default(8404) }}"
+    _haproxy_volumes:
+      # HAProxy configuration
+      - "/etc/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro"
+      - "/etc/haproxy/conf.d:/usr/local/etc/haproxy/conf.d:ro"
+      # SSL certificates
+      - "{{ ssl_enabled | ternary('/etc/haproxy/ssl/combined.pem:/usr/local/etc/haproxy/ssl/combined.pem:ro', '') }}"
+      # Error pages
+      - "/etc/haproxy/errors:/etc/haproxy/errors:ro"
+      # Logs (host directory)
+      - "/var/log/haproxy:/var/log/haproxy:rw"
+      # Runtime files
+      - "/var/lib/haproxy:/var/lib/haproxy:rw"
+      # Admin socket (volume)
+      - "haproxy-admin-socket:/run/haproxy:rw"
+    _haproxy_dynamic_labels:
+      teams: "{{ jenkins_teams | default([]) | map(attribute='team_name') | join(',') }}"
+      ssl_enabled: "{{ ssl_enabled | default(false) | string }}"
+      version: "{{ haproxy_image_tag }}"
+  register: haproxy_container_docker
+  tags: ['containers', 'docker', 'deploy']
+
+- name: Wait for HAProxy container to be ready (Docker)
+  pause:
+    seconds: "{{ haproxy_startup_wait_time }}"
+  when: haproxy_container_docker.changed
+  tags: ['containers', 'docker', 'wait']
+
+- name: Verify HAProxy container health (Docker)
+  community.docker.docker_container_info:
+    name: "jenkins-haproxy"
+  register: haproxy_container_info
+  tags: ['containers', 'docker', 'verify']
+
+- name: Display HAProxy container status (Docker)
+  debug:
+    msg: |
+      HAProxy Container Status:
+      Name: {{ haproxy_container_info.container.Name | default('N/A') }}
+      State: {{ haproxy_container_info.container.State.Status | default('N/A') }}
+      Health: {{ haproxy_container_info.container.State.Health.Status | default('N/A') }}
+      Image: {{ haproxy_container_info.container.Config.Image | default('N/A') }}
+      Network Mode: {{ haproxy_container_info.container.HostConfig.NetworkMode | default('N/A') }}
+  when: haproxy_container_info.exists
+  tags: ['containers', 'docker', 'info']

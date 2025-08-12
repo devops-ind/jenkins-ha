@@ -1,162 +1,50 @@
 ---
-# High Availability Configuration for Jenkins
+# HAProxy High Availability Role - Unified Container Management
+# Supports multi-team Jenkins infrastructure with wildcard subdomain routing
 
-- name: Ensure Docker is installed for HAProxy container
-  package:
-    name: docker.io
-    state: present
-  become: yes
-  tags: ['ha', 'docker']
+# Detect deployment mode based on configuration
+- name: Determine HAProxy deployment mode
+  set_fact:
+    haproxy_deployment_mode: "{{ 'multi-team' if jenkins_teams is defined and jenkins_teams | length > 0 else 'single-team' }}"
+    haproxy_effective_teams: "{{ jenkins_teams if jenkins_teams is defined and jenkins_teams | length > 0 else [] }}"
+  tags: ['always']
 
-- name: Ensure Docker is running
-  systemd:
-    name: docker
-    state: started
-    enabled: yes
-  become: yes
-  tags: ['ha', 'docker']
+- name: Display HAProxy deployment configuration
+  debug:
+    msg: |
+      HAProxy Deployment Mode: {{ haproxy_deployment_mode }}
+      Teams: {{ haproxy_effective_teams | map(attribute='team_name') | list | join(', ') if haproxy_effective_teams else 'single-team' }}
+      Container Runtime: {{ haproxy_container_runtime }}
+      SSL Enabled: {{ ssl_enabled | default(false) }}
+      Domain: {{ jenkins_domain | default('devops.example.com') }}
+  tags: ['always']
 
-- name: Create HAProxy container user
-  user:
-    name: haproxy
-    system: yes
-    shell: /bin/false
-    home: /var/lib/haproxy
-    create_home: no
-  become: yes
-  tags: ['ha', 'loadbalancer']
+# Pre-deployment validation
+- name: Import validation tasks
+  import_tasks: validation.yml
+  tags: ['always', 'validate']
 
-- name: Create HAProxy configuration directories
-  file:
-    path: "{{ item }}"
-    state: directory
-    mode: '0755'
-    owner: root
-    group: haproxy
-  loop:
-    - /etc/haproxy
-    - /etc/haproxy/conf.d
-    - /var/lib/haproxy
-    - /var/log/haproxy
-    - /etc/haproxy/errors
-  become: yes
-  tags: ['ha', 'config']
+# System configuration and setup
+- name: Import system configuration tasks
+  import_tasks: configuration.yml
+  tags: ['config', 'setup']
 
-- name: Create HAProxy error pages
-  copy:
-    dest: "/etc/haproxy/errors/{{ item.code }}.http"
-    content: |
-      HTTP/1.1 {{ item.code }} {{ item.message }}
-      Content-Type: text/html
-      Cache-Control: no-cache
-      Connection: close
-      Content-Length: {{ item.body | length }}
-      
-      {{ item.body }}
-    mode: '0644'
-  loop:
-    - { code: 400, message: "Bad Request", body: "<html><body><h1>400 Bad Request</h1><p>Your browser sent a request that this server could not understand.</p></body></html>" }
-    - { code: 403, message: "Forbidden", body: "<html><body><h1>403 Forbidden</h1><p>You don't have permission to access this resource.</p></body></html>" }
-    - { code: 408, message: "Request Timeout", body: "<html><body><h1>408 Request Timeout</h1><p>The server timed out waiting for the request.</p></body></html>" }
-    - { code: 500, message: "Internal Server Error", body: "<html><body><h1>500 Internal Server Error</h1><p>The server encountered an internal error.</p></body></html>" }
-    - { code: 502, message: "Bad Gateway", body: "<html><body><h1>502 Bad Gateway</h1><p>Jenkins service is temporarily unavailable.</p></body></html>" }
-    - { code: 503, message: "Service Unavailable", body: "<html><body><h1>503 Service Unavailable</h1><p>Jenkins service is temporarily unavailable. Please try again later.</p></body></html>" }
-    - { code: 504, message: "Gateway Timeout", body: "<html><body><h1>504 Gateway Timeout</h1><p>Jenkins service did not respond in time.</p></body></html>" }
-  become: yes
-  tags: ['ha', 'config']
+# Network infrastructure setup
+- name: Import networking tasks
+  import_tasks: networking.yml
+  tags: ['network', 'setup']
 
-- name: Create SSL certificate directories for containers
-  file:
-    path: "{{ item }}"
-    state: directory
-    mode: '0755'
-    owner: root
-    group: haproxy
-  loop:
-    - /etc/ssl/certs
-    - /etc/ssl/private
-    - /etc/haproxy/ssl
-  become: yes
-  when: ssl_enabled | default(false)
-  tags: ['ha', 'ssl']
+# Volume management
+- name: Import volume management tasks
+  import_tasks: volumes.yml
+  tags: ['volumes', 'setup']
 
-- name: Set SSL certificate permissions for container access
-  file:
-    path: "{{ ssl_cert_path | default('/etc/ssl/certs/wildcard.devops.example.com.pem') }}"
-    owner: root
-    group: haproxy
-    mode: '0640'
-  become: yes
-  when: ssl_enabled | default(false) and ssl_cert_path is defined
-  tags: ['ha', 'ssl']
+# Container deployment
+- name: Import container management tasks
+  import_tasks: containers.yml
+  tags: ['container', 'deploy']
 
-- name: Set SSL key permissions for container access
-  file:
-    path: "{{ ssl_key_path | default('/etc/ssl/private/wildcard.devops.example.com.key') }}"
-    owner: root
-    group: haproxy
-    mode: '0640'
-  become: yes
-  when: ssl_enabled | default(false) and ssl_key_path is defined and ssl_key_path != ssl_cert_path
-  tags: ['ha', 'ssl']
-
-- name: Create combined SSL certificate for HAProxy container
-  shell: |
-    cat "{{ ssl_cert_path | default('/etc/ssl/certs/wildcard.devops.example.com.pem') }}" > /etc/haproxy/ssl/combined.pem
-    {% if ssl_key_path is defined and ssl_key_path != ssl_cert_path %}
-    cat "{{ ssl_key_path }}" >> /etc/haproxy/ssl/combined.pem
-    {% endif %}
-    chmod 640 /etc/haproxy/ssl/combined.pem
-    chown root:haproxy /etc/haproxy/ssl/combined.pem
-  become: yes
-  when: ssl_enabled | default(false)
-  notify: restart haproxy container
-  tags: ['ha', 'ssl']
-
-- name: Validate team configuration
-  assert:
-    that:
-      - jenkins_teams is defined
-      - jenkins_teams | length > 0
-      - jenkins_domain is defined
-      - jenkins_domain | length > 0
-    fail_msg: "Multi-team configuration requires jenkins_teams and jenkins_domain to be defined"
-    success_msg: "Team configuration validated - {{ jenkins_teams | length }} team(s) configured"
-  when: team_routing_enabled | default(true)
-  tags: ['ha', 'validation']
-
-- name: Generate HAProxy configuration for multi-team setup
-  template:
-    src: haproxy.cfg.j2
-    dest: /etc/haproxy/haproxy.cfg
-    backup: yes
-    validate: haproxy -f %s -c
-    owner: root
-    group: haproxy
-    mode: '0644'
-  become: yes
-  notify: restart haproxy
-  tags: ['ha', 'config']
-  vars:
-    # Pass team configuration to template
-    jenkins_teams: "{{ jenkins_teams | default([]) }}"
-    jenkins_domain: "{{ jenkins_domain | default('devops.example.com') }}"
-
-- name: Create team-specific HAProxy backend configurations
-  template:
-    src: haproxy-team-backend.cfg.j2
-    dest: "/etc/haproxy/conf.d/{{ item.team_name }}-backend.cfg"
-    owner: root
-    group: haproxy
-    mode: '0644'
-  loop: "{{ jenkins_teams | default([]) }}"
-  loop_control:
-    label: "{{ item.team_name }}"
-  become: yes
-  notify: restart haproxy
-  when: jenkins_teams is defined and jenkins_teams | length > 0
-  tags: ['ha', 'config', 'teams']
-
+# Keepalived VIP management
 - name: Install keepalived for VIP management
   package:
     name: keepalived
@@ -175,78 +63,6 @@
   when: jenkins_vip is defined and jenkins_vip != ""
   tags: ['ha', 'vip']
 
-- name: Create Jenkins HA health check script
-  template:
-    src: jenkins-ha-healthcheck.sh.j2
-    dest: /usr/local/bin/jenkins-ha-healthcheck.sh
-    mode: '0755'
-  become: yes
-  tags: ['ha', 'healthcheck']
-
-- name: Configure firewall for HA services
-  ansible.posix.firewalld:
-    service: "{{ item }}"
-    permanent: yes
-    state: enabled
-    immediate: yes
-  loop:
-    - http
-    - https
-  when: ansible_os_family == "RedHat"
-  become: yes
-  tags: ['ha', 'firewall']
-
-- name: Configure UFW for HA services
-  community.general.ufw:
-    rule: allow
-    port: "{{ item }}"
-    proto: tcp
-  loop:
-    - "80"
-    - "443"
-    - "8404"  # HAProxy stats
-  when: ansible_os_family == "Debian"
-  become: yes
-  tags: ['ha', 'firewall']
-
-- name: Create HAProxy Docker Compose configuration
-  template:
-    src: haproxy-docker-compose.yml.j2
-    dest: /etc/haproxy/docker-compose.yml
-    owner: root
-    group: haproxy
-    mode: '0644'
-  become: yes
-  notify: restart haproxy container
-  tags: ['ha', 'container']
-
-- name: Pull HAProxy Docker image
-  docker_image:
-    name: "{{ haproxy_docker_image | default('haproxy:2.8-alpine') }}"
-    source: pull
-  become: yes
-  tags: ['ha', 'container']
-
-- name: Create HAProxy systemd service
-  template:
-    src: jenkins-haproxy.service.j2
-    dest: /etc/systemd/system/jenkins-haproxy.service
-    owner: root
-    group: root
-    mode: '0644'
-  become: yes
-  notify: restart haproxy container
-  tags: ['ha', 'systemd']
-
-- name: Enable and start HAProxy systemd service
-  systemd:
-    name: jenkins-haproxy.service
-    state: started
-    enabled: yes
-    daemon_reload: yes
-  become: yes
-  tags: ['ha', 'service']
-
 - name: Start and enable keepalived
   systemd:
     name: keepalived
@@ -257,6 +73,7 @@
   when: jenkins_vip is defined and jenkins_vip != ""
   tags: ['ha', 'service']
 
+# Monitoring and management scripts
 - name: Create HA monitoring and management scripts
   template:
     src: "{{ item }}.j2"
@@ -281,7 +98,7 @@
 - name: Display multi-team HA configuration status
   debug:
     msg: |
-      🎯 Jenkins Multi-Team High Availability Configuration:
+      🎯 Jenkins Multi-Team High Availability Configuration (Containerized):
       
       🌐 Domain Configuration:
       Primary Domain: {{ jenkins_domain | default('devops.example.com') }}
@@ -289,7 +106,9 @@
       SSL Enabled: {{ ssl_enabled | default(false) }}
       
       🐳 Containerized Load Balancer (HAProxy):
-      Container: jenkins-haproxy ({{ haproxy_docker_image | default('haproxy:2.8-alpine') }})
+      Container: jenkins-haproxy ({{ haproxy_image_registry }}/{{ haproxy_image_name }}:{{ haproxy_image_tag }})
+      Container Runtime: {{ haproxy_container_runtime }}
+      Network Mode: {{ haproxy_network_mode }}
       {% if ssl_enabled | default(false) %}
       HTTPS: https://{{ jenkins_domain }}
       HTTP: http://{{ jenkins_domain }} (redirects to HTTPS)
@@ -316,7 +135,7 @@
         - Active Environment: {{ team.active_environment | default('blue') }}
       {% endfor %}
       {% else %}
-      Default teams configured (dev, staging, prod)
+      Single team configuration
       {% endif %}
       
       🔍 Health Monitoring:
@@ -331,4 +150,5 @@
       {% endfor %}
       {% endif %}
       - HAProxy Stats: http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port | default(8404) }}/stats
+      - Container Management: /usr/local/bin/haproxy-container-manager.sh status
   tags: ['ha', 'info']

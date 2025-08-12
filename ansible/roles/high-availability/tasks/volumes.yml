@@ -1,0 +1,6 @@
+---
+# HAProxy High Availability - Volume Management
+
+- name: Create HAProxy volumes
+  include_tasks: "volumes/{{ haproxy_container_runtime }}.yml"
+  tags: ['volumes', 'container']

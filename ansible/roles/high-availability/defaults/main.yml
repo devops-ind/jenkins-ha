@@ -71,3 +71,45 @@ monitoring_enabled: true
 monitoring_interval: 120  # seconds
 monitoring_log_file: "/var/log/jenkins-ha-monitor.log"
 monitoring_alert_enabled: false
+monitoring_alert_threshold: 3
+
+# HAProxy Container Configuration (matching jenkins-master pattern)
+haproxy_container_runtime: "docker"  # docker or podman
+haproxy_restart_policy: "unless-stopped"
+haproxy_startup_wait_time: 15
+
+# HAProxy Image Configuration
+haproxy_image_registry: "docker.io"
+haproxy_image_name: "haproxy"
+haproxy_image_tag: "2.8-alpine"
+
+# HAProxy Network Configuration
+haproxy_network_name: "jenkins-network"
+haproxy_network_mode: "host"  # Required for VIP functionality
+
+# HAProxy Container Resources
+haproxy_memory_limit: "512M"
+haproxy_cpu_limit: "0.5"
+haproxy_memory_reservation: "256M"
+haproxy_cpu_reservation: "0.25"
+
+# HAProxy Logging Configuration
+haproxy_log_driver: "journald"
+haproxy_log_max_size: "10m"
+haproxy_log_max_files: "3"
+
+# HAProxy Container Environment Variables
+haproxy_env_vars:
+  TZ: "{{ common_timezone | default('UTC') }}"
+
+# HAProxy Container Labels
+haproxy_labels:
+  service: "haproxy"
+  managed_by: "ansible"
+  role: "load-balancer"
+  jenkins_service: "true"
+
+# HAProxy Container User/Group
+haproxy_user: "haproxy"
+haproxy_uid: 1000
+haproxy_gid: 1000

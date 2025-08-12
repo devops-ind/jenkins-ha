@@ -1,0 +1,58 @@
+---
+# HAProxy High Availability - Network Configuration
+
+- name: Configure firewall for HAProxy services (RedHat-based)
+  ansible.posix.firewalld:
+    service: "{{ item }}"
+    permanent: yes
+    state: enabled
+    immediate: yes
+  loop:
+    - http
+    - https
+  when: ansible_os_family == "RedHat"
+  become: yes
+  tags: ['network', 'firewall', 'redhat']
+
+- name: Configure firewall for HAProxy services (Debian-based)
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - "80"
+    - "443"
+    - "{{ haproxy_stats_port | default(8404) }}"
+  when: ansible_os_family == "Debian"
+  become: yes
+  tags: ['network', 'firewall', 'debian']
+
+- name: Open custom ports for teams
+  community.general.ufw:
+    rule: allow
+    port: "{{ item.ports.web | default(8080) }}"
+    proto: tcp
+    comment: "Jenkins {{ item.team_name }} team web port"
+  loop: "{{ jenkins_teams | default([]) }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  when: 
+    - ansible_os_family == "Debian"
+    - jenkins_teams is defined
+  become: yes
+  tags: ['network', 'firewall', 'teams', 'debian']
+
+- name: Open custom ports for teams (RedHat-based)
+  ansible.posix.firewalld:
+    port: "{{ item.ports.web | default(8080) }}/tcp"
+    permanent: yes
+    state: enabled
+    immediate: yes
+  loop: "{{ jenkins_teams | default([]) }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  when: 
+    - ansible_os_family == "RedHat"
+    - jenkins_teams is defined
+  become: yes
+  tags: ['network', 'firewall', 'teams', 'redhat']

@@ -1,0 +1,156 @@
+---
+# HAProxy High Availability - System Configuration
+
+- name: Ensure Docker is installed for HAProxy container
+  package:
+    name: "{{ 'docker.io' if ansible_os_family == 'Debian' else 'docker' }}"
+    state: present
+  become: yes
+  when: haproxy_container_runtime == 'docker'
+  tags: ['config', 'docker']
+
+- name: Ensure Podman is installed for HAProxy container
+  package:
+    name: podman
+    state: present
+  become: yes
+  when: haproxy_container_runtime == 'podman'
+  tags: ['config', 'podman']
+
+- name: Ensure container runtime is running
+  systemd:
+    name: "{{ 'docker' if haproxy_container_runtime == 'docker' else 'podman' }}"
+    state: started
+    enabled: yes
+  become: yes
+  tags: ['config', 'service']
+
+- name: Create HAProxy user
+  user:
+    name: "{{ haproxy_user }}"
+    uid: "{{ haproxy_uid }}"
+    gid: "{{ haproxy_gid }}"
+    system: yes
+    shell: /bin/false
+    home: /var/lib/haproxy
+    create_home: no
+  become: yes
+  tags: ['config', 'user']
+
+- name: Create HAProxy configuration directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: "{{ haproxy_user }}"
+  loop:
+    - /etc/haproxy
+    - /etc/haproxy/conf.d
+    - /var/lib/haproxy
+    - /var/log/haproxy
+    - /etc/haproxy/errors
+  become: yes
+  tags: ['config', 'directories']
+
+- name: Create SSL certificate directories for containers
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: "{{ haproxy_user }}"
+  loop:
+    - /etc/ssl/certs
+    - /etc/ssl/private
+    - /etc/haproxy/ssl
+  become: yes
+  when: ssl_enabled | default(false)
+  tags: ['config', 'ssl']
+
+- name: Create HAProxy error pages
+  copy:
+    dest: "/etc/haproxy/errors/{{ item.code }}.http"
+    content: |
+      HTTP/1.1 {{ item.code }} {{ item.message }}
+      Content-Type: text/html
+      Cache-Control: no-cache
+      Connection: close
+      Content-Length: {{ item.body | length }}
+      
+      {{ item.body }}
+    mode: '0644'
+  loop:
+    - { code: 400, message: "Bad Request", body: "<html><body><h1>400 Bad Request</h1><p>Your browser sent a request that this server could not understand.</p></body></html>" }
+    - { code: 403, message: "Forbidden", body: "<html><body><h1>403 Forbidden</h1><p>You don't have permission to access this resource.</p></body></html>" }
+    - { code: 408, message: "Request Timeout", body: "<html><body><h1>408 Request Timeout</h1><p>The server timed out waiting for the request.</p></body></html>" }
+    - { code: 500, message: "Internal Server Error", body: "<html><body><h1>500 Internal Server Error</h1><p>The server encountered an internal error.</p></body></html>" }
+    - { code: 502, message: "Bad Gateway", body: "<html><body><h1>502 Bad Gateway</h1><p>Jenkins service is temporarily unavailable.</p></body></html>" }
+    - { code: 503, message: "Service Unavailable", body: "<html><body><h1>503 Service Unavailable</h1><p>Jenkins service is temporarily unavailable. Please try again later.</p></body></html>" }
+    - { code: 504, message: "Gateway Timeout", body: "<html><body><h1>504 Gateway Timeout</h1><p>Jenkins service did not respond in time.</p></body></html>" }
+  become: yes
+  tags: ['config', 'error-pages']
+
+- name: Set SSL certificate permissions for container access
+  file:
+    path: "{{ ssl_cert_path | default('/etc/ssl/certs/wildcard.devops.example.com.pem') }}"
+    owner: root
+    group: "{{ haproxy_user }}"
+    mode: '0640'
+  become: yes
+  when: ssl_enabled | default(false) and ssl_cert_path is defined
+  tags: ['config', 'ssl', 'permissions']
+
+- name: Set SSL key permissions for container access
+  file:
+    path: "{{ ssl_key_path | default('/etc/ssl/private/wildcard.devops.example.com.key') }}"
+    owner: root
+    group: "{{ haproxy_user }}"
+    mode: '0640'
+  become: yes
+  when: ssl_enabled | default(false) and ssl_key_path is defined and ssl_key_path != ssl_cert_path
+  tags: ['config', 'ssl', 'permissions']
+
+- name: Create combined SSL certificate for HAProxy container
+  shell: |
+    cat "{{ ssl_cert_path | default('/etc/ssl/certs/wildcard.devops.example.com.pem') }}" > /etc/haproxy/ssl/combined.pem
+    {% if ssl_key_path is defined and ssl_key_path != ssl_cert_path %}
+    cat "{{ ssl_key_path }}" >> /etc/haproxy/ssl/combined.pem
+    {% endif %}
+    chmod 640 /etc/haproxy/ssl/combined.pem
+    chown root:{{ haproxy_user }} /etc/haproxy/ssl/combined.pem
+  become: yes
+  when: ssl_enabled | default(false)
+  notify: restart haproxy container
+  tags: ['config', 'ssl', 'certificate']
+
+- name: Generate HAProxy configuration for multi-team setup
+  template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    backup: yes
+    owner: root
+    group: "{{ haproxy_user }}"
+    mode: '0644'
+  become: yes
+  notify: restart haproxy container
+  tags: ['config', 'haproxy-config']
+  vars:
+    # Pass team configuration to template
+    jenkins_teams: "{{ haproxy_effective_teams | default([]) }}"
+    jenkins_domain: "{{ jenkins_domain | default('devops.example.com') }}"
+
+- name: Create team-specific HAProxy backend configurations
+  template:
+    src: haproxy-team-backend.cfg.j2
+    dest: "/etc/haproxy/conf.d/{{ item.team_name }}-backend.cfg"
+    owner: root
+    group: "{{ haproxy_user }}"
+    mode: '0644'
+  loop: "{{ haproxy_effective_teams | default([]) }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  become: yes
+  notify: restart haproxy container
+  when: haproxy_effective_teams is defined and haproxy_effective_teams | length > 0
+  tags: ['config', 'teams', 'backends']
