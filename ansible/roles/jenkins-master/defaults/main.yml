@@ -48,10 +48,11 @@ jenkins_master_labels:
 # Health Check Configuration
 jenkins_master_health_check_retries: 30
 jenkins_master_health_check_delay: 10
-jenkins_master_health_check_timeout: 60
 
-# HAProxy Integration
-jenkins_master_haproxy_enabled: true
+# HAProxy Integration (disabled by default - managed by high-availability role)
+jenkins_master_haproxy_enabled: false
+jenkins_master_haproxy_stats_enabled: false
+jenkins_master_health_check_timeout: 60
 
 # Blue-Green Deployment Configuration
 jenkins_master_blue_green_enabled: true

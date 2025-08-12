@@ -201,13 +201,13 @@
       loop: "{{ jenkins_teams | default([{'ports': {'web': 8080}}]) }}"
       tags: ['jenkins', 'verify']
 
-- name: Configure High Availability
+- name: Configure High Availability (HAProxy Load Balancer + Multi-Team Routing)
   hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'load_balancers:jenkins_masters') }}"
   become: yes
   gather_facts: yes
   roles:
     - role: high-availability
-      tags: ['ha', 'cluster']
+      tags: ['ha', 'cluster', 'haproxy', 'loadbalancer']
       when: 
         - jenkins_ha_enabled | default(false)
         - groups['jenkins_masters'] | default([]) | length > 1

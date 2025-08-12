@@ -1,12 +1,6 @@
 ---
 # Jenkins Master Role - Event Handlers
-
-- name: reload haproxy
-  systemd:
-    name: haproxy
-    state: reloaded
-  become: yes
-  listen: "reload haproxy"
+# Note: HAProxy management is handled by the high-availability role
 
 - name: restart jenkins docker containers
   community.docker.docker_container:
@@ -34,17 +28,5 @@
   become: yes
   listen: "restart jenkins"
 
-- name: update haproxy backend
-  template:
-    src: haproxy-team-config.cfg.j2
-    dest: "/etc/haproxy/conf.d/jenkins-{{ item.team_name }}.cfg"
-    owner: root
-    group: root
-    mode: '0644'
-  notify: reload haproxy
-  loop: "{{ jenkins_effective_config | default([]) }}"
-  loop_control:
-    label: "jenkins-{{ item.team_name }}"
-  when: jenkins_effective_config is defined
-  become: yes
-  listen: "update haproxy backend"
+# HAProxy backend updates are handled by the high-availability role
+# The high-availability role manages the complete HAProxy configuration
