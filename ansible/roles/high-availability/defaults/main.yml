@@ -7,16 +7,26 @@ jenkins_ha_enabled: true
 jenkins_ha_mode: "active-passive"  # active-passive or active-active
 jenkins_master_count: 2
 
+# Multi-Team Configuration
+jenkins_domain: "devops.example.com"
+jenkins_wildcard_domain: "*.devops.example.com"
+jenkins_default_subdomain: "jenkins"
+team_routing_enabled: true
+
 # Load Balancer Configuration (HAProxy)
 haproxy_enabled: true
 haproxy_stats_enabled: true
 haproxy_stats_port: 8404
 haproxy_stats_uri: "/stats"
 haproxy_stats_user: "admin"
-haproxy_stats_password: "changeme"
-haproxy_check_interval: "2s"
+haproxy_stats_password: "{{ vault_haproxy_stats_password | default('changeme') }}"
+haproxy_check_interval: "5s"
 haproxy_check_fall: 3
 haproxy_check_rise: 2
+haproxy_timeout_connect: "5s"
+haproxy_timeout_client: "300s"
+haproxy_timeout_server: "300s"
+haproxy_maxconn: 8192
 
 # Virtual IP Configuration (keepalived)
 keepalived_enabled: false
@@ -40,11 +50,14 @@ failover_timeout: 60
 failover_max_attempts: 3
 failover_notification_enabled: false
 
-# SSL Configuration
-ssl_enabled: false
-ssl_cert_path: "/etc/ssl/certs/jenkins.crt"
-ssl_key_path: "/etc/ssl/private/jenkins.key"
+# SSL Configuration for Wildcard Domain
+ssl_enabled: true
+ssl_cert_path: "/etc/ssl/certs/wildcard.devops.example.com.pem"
+ssl_key_path: "/etc/ssl/private/wildcard.devops.example.com.key"
+ssl_ca_cert_path: "/etc/ssl/certs/ca-chain.pem"
 ssl_redirect_http: true
+ssl_protocols: "TLSv1.2 TLSv1.3"
+ssl_ciphers: "ECDH+AESGCM:DH+AESGCM:ECDH+AES256:DH+AES256:ECDH+AES128:DH+AES:RSA+AESGCM:RSA+AES:!aNULL:!MD5:!DSS"
 
 # Backend Server Configuration
 backend_check_enabled: true

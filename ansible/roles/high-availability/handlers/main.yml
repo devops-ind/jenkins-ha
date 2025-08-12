@@ -1,22 +1,47 @@
 ---
 # Handlers for high-availability role
-- name: restart high-availability service
-  systemd:
-    name: high-availability
-    state: restarted
-    enabled: yes
-  listen: "restart high-availability"
 
 - name: restart haproxy
   systemd:
     name: haproxy
     state: restarted
     enabled: yes
+    daemon_reload: yes
+  become: yes
   listen: "restart haproxy"
+
+- name: reload haproxy
+  systemd:
+    name: haproxy
+    state: reloaded
+  become: yes
+  listen: "reload haproxy"
 
 - name: restart keepalived
   systemd:
     name: keepalived
     state: restarted
     enabled: yes
+    daemon_reload: yes
+  become: yes
   listen: "restart keepalived"
+
+- name: validate haproxy config
+  command: haproxy -f /etc/haproxy/haproxy.cfg -c
+  become: yes
+  listen: "validate haproxy config"
+
+- name: reload ssl certificates
+  shell: |
+    # Reload HAProxy to pick up new certificates
+    systemctl reload haproxy || systemctl restart haproxy
+  become: yes
+  listen: "reload ssl certificates"
+
+- name: update haproxy stats
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port | default(8404) }}/stats"
+    method: GET
+    status_code: 200
+  ignore_errors: yes
+  listen: "update haproxy stats"

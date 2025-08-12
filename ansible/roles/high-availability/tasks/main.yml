@@ -16,15 +16,63 @@
   become: yes
   tags: ['ha', 'config']
 
-- name: Configure HAProxy for Jenkins HA
+- name: Create SSL certificate directory
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: haproxy
+    group: haproxy
+  loop:
+    - /etc/ssl/certs
+    - /etc/ssl/private
+  become: yes
+  when: ssl_enabled | default(false)
+  tags: ['ha', 'ssl']
+
+- name: Validate team configuration
+  assert:
+    that:
+      - jenkins_teams is defined
+      - jenkins_teams | length > 0
+      - jenkins_domain is defined
+      - jenkins_domain | length > 0
+    fail_msg: "Multi-team configuration requires jenkins_teams and jenkins_domain to be defined"
+    success_msg: "Team configuration validated - {{ jenkins_teams | length }} team(s) configured"
+  when: team_routing_enabled | default(true)
+  tags: ['ha', 'validation']
+
+- name: Generate HAProxy configuration for multi-team setup
   template:
     src: haproxy.cfg.j2
     dest: /etc/haproxy/haproxy.cfg
     backup: yes
     validate: haproxy -f %s -c
+    owner: root
+    group: haproxy
+    mode: '0644'
   become: yes
   notify: restart haproxy
   tags: ['ha', 'config']
+  vars:
+    # Pass team configuration to template
+    jenkins_teams: "{{ jenkins_teams | default([]) }}"
+    jenkins_domain: "{{ jenkins_domain | default('devops.example.com') }}"
+
+- name: Create team-specific HAProxy backend configurations
+  template:
+    src: haproxy-team-backend.cfg.j2
+    dest: "/etc/haproxy/conf.d/{{ item.team_name }}-backend.cfg"
+    owner: root
+    group: haproxy
+    mode: '0644'
+  loop: "{{ jenkins_teams | default([]) }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  become: yes
+  notify: restart haproxy
+  when: jenkins_teams is defined and jenkins_teams | length > 0
+  tags: ['ha', 'config', 'teams']
 
 - name: Install keepalived for VIP management
   package:
@@ -117,22 +165,54 @@
   become: yes
   tags: ['ha', 'monitoring']
 
-- name: Display HA configuration status
+- name: Display multi-team HA configuration status
   debug:
     msg: |
-      Jenkins High Availability Configuration:
+      🎯 Jenkins Multi-Team High Availability Configuration:
       
-      Load Balancer: HAProxy (http://{{ ansible_default_ipv4.address }}:80)
-      Stats: http://{{ ansible_default_ipv4.address }}:8404/stats
-      {% if jenkins_vip is defined and jenkins_vip != "" %}
-      Virtual IP: {{ jenkins_vip }}
-      VRRP: Enabled with keepalived
+      🌐 Domain Configuration:
+      Primary Domain: {{ jenkins_domain | default('devops.example.com') }}
+      Wildcard Support: {{ jenkins_wildcard_domain | default('*.devops.example.com') }}
+      SSL Enabled: {{ ssl_enabled | default(false) }}
+      
+      🔧 Load Balancer (HAProxy):
+      {% if ssl_enabled | default(false) %}
+      HTTPS: https://{{ jenkins_domain }}
+      HTTP: http://{{ jenkins_domain }} (redirects to HTTPS)
+      {% else %}
+      HTTP: http://{{ jenkins_domain }}
       {% endif %}
-      HA Mode: {{ jenkins_ha_mode }}
-      Master Count: {{ jenkins_master_count }}
+      Stats: http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port | default(8404) }}{{ haproxy_stats_uri | default('/stats') }}
       
-      Backend Servers:
-      {% for i in range(1, jenkins_master_count + 1) %}
-      - jenkins-master-{{ i }}: {{ ansible_default_ipv4.address }}:{{ jenkins_port + i - 1 }}
+      {% if jenkins_vip is defined and jenkins_vip != "" %}
+      🎯 Virtual IP Configuration:
+      VIP Address: {{ jenkins_vip }}
+      VRRP: Enabled with keepalived
+      Priority: {{ keepalived_priority | default(100) }}
+      {% endif %}
+      
+      👥 Team Configuration:
+      {% if jenkins_teams is defined and jenkins_teams | length > 0 %}
+      {% for team in jenkins_teams %}
+      • {{ team.team_name | title }} Team: https://{{ team.team_name }}.{{ jenkins_domain }}
+        - Port: {{ team.ports.web | default(8080) }}
+        - Blue-Green: {{ team.blue_green_enabled | default(true) }}
+        - Active Environment: {{ team.active_environment | default('blue') }}
       {% endfor %}
+      {% else %}
+      Default teams configured (dev, staging, prod)
+      {% endif %}
+      
+      🔍 Health Monitoring:
+      Check Interval: {{ haproxy_check_interval | default('5s') }}
+      Failure Threshold: {{ haproxy_check_fall | default(3) }}
+      Recovery Threshold: {{ haproxy_check_rise | default(2) }}
+      
+      📊 Access URLs:
+      {% if jenkins_teams is defined %}
+      {% for team in jenkins_teams %}
+      - {{ team.team_name | title }}: https://{{ team.team_name }}.{{ jenkins_domain }}
+      {% endfor %}
+      {% endif %}
+      - HAProxy Stats: http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port | default(8404) }}/stats
   tags: ['ha', 'info']

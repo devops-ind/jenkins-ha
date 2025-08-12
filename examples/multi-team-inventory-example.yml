@@ -1,0 +1,116 @@
+---
+# Multi-Team Jenkins HA Inventory Example
+# This demonstrates how to configure multiple teams with wildcard subdomain routing
+
+all:
+  vars:
+    # Global domain configuration
+    jenkins_domain: "devops.example.com"
+    jenkins_wildcard_domain: "*.devops.example.com"
+    
+    # SSL Configuration
+    ssl_enabled: true
+    ssl_cert_path: "/etc/ssl/certs/wildcard.devops.example.com.pem"
+    ssl_key_path: "/etc/ssl/private/wildcard.devops.example.com.key"
+    
+    # HAProxy Configuration
+    haproxy_stats_port: 8404
+    haproxy_stats_user: "admin"
+    haproxy_stats_password: "{{ vault_haproxy_stats_password }}"
+    
+    # Multi-team configuration
+    jenkins_teams:
+      - team_name: "jenkins"
+        description: "Core Jenkins team - Infrastructure and DevOps"
+        ports:
+          web: 8080
+          jnlp: 50000
+        blue_green_enabled: true
+        active_environment: "blue"
+        session_persistence: false
+        health_check_path: "/login"
+        timeout_connect: "5s"
+        timeout_server: "300s"
+        
+      - team_name: "dev"
+        description: "Development team - Feature development and testing"  
+        ports:
+          web: 8081
+          jnlp: 50001
+        blue_green_enabled: true
+        active_environment: "blue"
+        session_persistence: true
+        health_check_path: "/login"
+        
+      - team_name: "staging"
+        description: "Staging team - Pre-production testing and validation"
+        ports:
+          web: 8082
+          jnlp: 50002
+        blue_green_enabled: true
+        active_environment: "green"
+        session_persistence: false
+        
+      - team_name: "prod"
+        description: "Production team - Production deployments and releases"
+        ports:
+          web: 8083  
+          jnlp: 50003
+        blue_green_enabled: true
+        active_environment: "blue"
+        session_persistence: true
+        health_check_path: "/login"
+        timeout_connect: "10s"
+        timeout_server: "600s"
+        
+      - team_name: "platform"
+        description: "Platform team - Infrastructure as code and platform services"
+        ports:
+          web: 8084
+          jnlp: 50004
+        blue_green_enabled: false  # Single environment for platform team
+        session_persistence: false
+
+# Jenkins Masters - Physical servers hosting Jenkins instances
+jenkins_masters:
+  hosts:
+    jenkins-master-01:
+      ansible_host: 192.168.5.10
+      jenkins_master_role: "primary"
+      jenkins_master_priority: 100
+      
+    jenkins-master-02:
+      ansible_host: 192.168.5.11
+      jenkins_master_role: "secondary"
+      jenkins_master_priority: 90
+
+# HAProxy Load Balancers - Front-end proxies with wildcard routing
+load_balancers:
+  hosts:
+    haproxy-01:
+      ansible_host: 192.168.5.20
+      keepalived_priority: 110
+      keepalived_state: "MASTER"
+      jenkins_vip: "192.168.5.100"
+      
+    haproxy-02:
+      ansible_host: 192.168.5.21
+      keepalived_priority: 100
+      keepalived_state: "BACKUP"
+
+# Monitoring Stack
+monitoring:
+  hosts:
+    monitoring-01:
+      ansible_host: 192.168.5.30
+      prometheus_port: 9090
+      grafana_port: 3000
+      alertmanager_port: 9093
+
+# Shared Storage for team configurations
+shared_storage:
+  hosts:
+    storage-01:
+      ansible_host: 192.168.5.40
+      storage_type: "nfs"
+      storage_mount: "/shared/jenkins"
