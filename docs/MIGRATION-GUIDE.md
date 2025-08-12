@@ -2,11 +2,11 @@
 
 ## Overview
 
-This guide provides step-by-step instructions for migrating from the existing `jenkins-infrastructure` role to the new reusable `jenkins-master` role.
+**Migration Complete:** The `jenkins-infrastructure` role has been removed and replaced with the unified `jenkins-master` role. This document serves as historical reference for understanding the migration process.
 
 ## Benefits of the New Role
 
-### Before (jenkins-infrastructure)
+### Before (jenkins-infrastructure - REMOVED)
 - **Code Duplication**: 60% overlap between Docker/Podman implementations
 - **Monolithic Design**: Single 322-line main.yml file
 - **Team-Specific Configuration**: Hard-coded team settings in role logic
@@ -22,24 +22,24 @@ This guide provides step-by-step instructions for migrating from the existing `j
 
 ### Phase 1: Parallel Deployment (Recommended)
 
-1. **Keep Existing Role**: Maintain `jenkins-infrastructure` role during transition
+1. **Keep Existing Role**: Maintain `jenkins-master` role during transition
 2. **Deploy New Role**: Test `jenkins-master` role with one team in staging
 3. **Validate Functionality**: Ensure blue-green deployment works correctly
 4. **Gradual Migration**: Move teams one by one to new role
-5. **Archive Old Role**: Remove `jenkins-infrastructure` after successful migration
+5. **Archive Old Role**: Remove `jenkins-master` after successful migration
 
 ### Phase 2: Direct Migration (Advanced)
 
 1. **Backup Current Setup**: Export team configurations and data
-2. **Replace Role**: Switch from `jenkins-infrastructure` to `jenkins-master`
+2. **Replace Role**: Switch from `jenkins-master` to `jenkins-master`
 3. **Update Inventory**: Convert team configurations to new variable structure
 4. **Deploy and Test**: Validate all teams function correctly
 
 ## Variable Structure Changes
 
-### Old Configuration (jenkins-infrastructure)
+### Old Configuration (jenkins-master)
 ```yaml
-# ansible/roles/jenkins-infrastructure/defaults/main.yml
+# ansible/roles/jenkins-master/defaults/main.yml
 jenkins_teams:
   - name: "devops"
     port: 8080
@@ -108,7 +108,7 @@ jenkins_teams:
 mkdir -p migration-backup/$(date +%Y%m%d)
 
 # Backup current role
-cp -r ansible/roles/jenkins-infrastructure migration-backup/$(date +%Y%m%d)/
+cp -r ansible/roles/jenkins-master migration-backup/$(date +%Y%m%d)/
 
 # Backup current site.yml
 cp ansible/site.yml migration-backup/$(date +%Y%m%d)/site.yml.backup
@@ -182,14 +182,14 @@ jenkins_teams:
 
 ### Step 4: Update Site Playbook
 
-Replace the jenkins-infrastructure deployment section with individual team deployments:
+Replace the jenkins-master deployment section with individual team deployments:
 
 #### Before
 ```yaml
 - name: Deploy Jenkins Infrastructure
   hosts: jenkins_masters
   roles:
-    - role: jenkins-infrastructure
+    - role: jenkins-master
       tags: ['jenkins', 'deploy']
 ```
 
@@ -348,7 +348,7 @@ ansible-playbook -i ansible/inventories/production/hosts.yml \
 
 After successful migration:
 
-1. **Archive Old Role**: Move `jenkins-infrastructure` to archive directory
+1. **Archive Old Role**: Move `jenkins-master` to archive directory
 2. **Update Documentation**: Update team onboarding procedures
 3. **Train Teams**: Provide training on new management scripts
 4. **Monitor Performance**: Track resource usage and performance improvements

@@ -63,7 +63,7 @@ This document provides comprehensive security guidance for the Jenkins High Avai
 # Security Configuration
 /etc/jenkins/security-policies/                  # Security policy configurations
 /var/log/jenkins/security/                       # Security audit logs
-ansible/roles/jenkins-infrastructure/tasks/security-scanning.yml  # Security tasks
+ansible/roles/jenkins-master/tasks/security-scanning.yml  # Security tasks
 
 # Credential Management
 scripts/generate-credentials.sh                  # Secure credential generation

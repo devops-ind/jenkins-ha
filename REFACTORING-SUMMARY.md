@@ -20,22 +20,22 @@ This document summarizes the comprehensive refactoring performed to remove all s
 
 ### 2. Ansible Role Updates
 
-#### jenkins-infrastructure Role
-**File:** `ansible/roles/jenkins-infrastructure/tasks/agent-containers.yml`
+#### jenkins-master Role (formerly jenkins-infrastructure)
+**File:** `ansible/roles/jenkins-master/tasks/agent-containers.yml`
 - ✅ Completely rewritten to support dynamic agents only
 - ✅ Removed static agent container deployments
 - ✅ Added dynamic agent volume and cache management
 - ✅ Created monitoring and logging for dynamic agents
 
-**File:** `ansible/roles/jenkins-infrastructure/tasks/systemd-services.yml`
+**File:** `ansible/roles/jenkins-master/tasks/systemd-services.yml`
 - ✅ Removed static agent systemd service generation
 - ✅ Removed static agent service startup tasks
 
-**File:** `ansible/roles/jenkins-infrastructure/tasks/main.yml`
+**File:** `ansible/roles/jenkins-master/tasks/main.yml`
 - ✅ Updated agent container tasks to run only on masters
 - ✅ Changed logic to setup dynamic agent support infrastructure
 
-**File:** `ansible/roles/jenkins-infrastructure/defaults/main.yml`
+**File:** `ansible/roles/jenkins-master/defaults/main.yml`
 - ✅ Replaced static agent variables with dynamic agent configuration
 - ✅ Added dynamic agent memory and resource settings
 - ✅ Added shared workspace configuration for dynamic agents
@@ -52,13 +52,13 @@ This document summarizes the comprehensive refactoring performed to remove all s
 
 ### 3. JCasC (Jenkins Configuration as Code) Updates
 
-**File:** `ansible/roles/jenkins-infrastructure/templates/jcasc/jenkins-config.yml.j2`
+**File:** `ansible/roles/jenkins-master/templates/jcasc/jenkins-config.yml.j2`
 - ✅ Removed "static" labels from all agent templates
 - ✅ Updated volume names to use dynamic cache volumes
 - ✅ Maintained proper Docker Cloud plugin configuration
 - ✅ Preserved all dynamic agent functionality
 
-**File:** `ansible/roles/jenkins-infrastructure/templates/jcasc/jenkins-jobs.yml.j2`
+**File:** `ansible/roles/jenkins-master/templates/jcasc/jenkins-jobs.yml.j2`
 - ✅ Removed "static" label references from job configurations
 - ✅ Updated job choice parameters to remove agent-specific options
 - ✅ Maintained seed job configurations for python agents
@@ -79,10 +79,10 @@ This document summarizes the comprehensive refactoring performed to remove all s
 
 ### 6. New Template Files Created
 
-**File:** `ansible/roles/jenkins-infrastructure/templates/jenkins-dynamic-agent-logrotate.j2`
+**File:** `ansible/roles/jenkins-master/templates/jenkins-dynamic-agent-logrotate.j2`
 - ✅ Created log rotation for dynamic agent logs
 
-**File:** `ansible/roles/jenkins-infrastructure/templates/jenkins-dynamic-agent-monitor.sh.j2`
+**File:** `ansible/roles/jenkins-master/templates/jenkins-dynamic-agent-monitor.sh.j2`
 - ✅ Created monitoring script for dynamic agent containers
 
 ### 7. Documentation Updates

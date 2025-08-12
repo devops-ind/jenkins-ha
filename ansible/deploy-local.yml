@@ -65,7 +65,7 @@
       tags: ['images', 'build']
       when: build_jenkins_images | default(false)
       
-    - role: jenkins-infrastructure
+    - role: jenkins-master
       tags: ['jenkins', 'infrastructure']
       
     - role: monitoring

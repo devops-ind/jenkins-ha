@@ -1,5 +1,6 @@
 ---
-# Jenkins Master - Configuration and Directory Setup
+# Unified Jenkins Master - Configuration and Directory Setup
+# Supports both single-team and multi-team deployments
 
 - name: Create Jenkins system user and group
   group:
@@ -21,25 +22,33 @@
   become: yes
   tags: ['config', 'user']
 
+# Create directories for all teams (single or multi-team)
 - name: Create team-specific Jenkins directories
   file:
-    path: "{{ jenkins_master_home_dir }}/{{ jenkins_master_config.team_name }}"
+    path: "{{ jenkins_master_home_dir }}/{{ item.team_name }}"
     state: directory
     owner: "{{ jenkins_master_user }}"
     group: "{{ jenkins_master_user }}"
     mode: '0755'
     recurse: yes
+  loop: "{{ jenkins_effective_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
   tags: ['config', 'directories']
 
-- name: Create blue-green environment directories
+- name: Create blue-green environment directories for all teams
   file:
-    path: "{{ jenkins_master_home_dir }}/{{ jenkins_master_config.team_name }}/{{ item }}"
+    path: "{{ jenkins_master_home_dir }}/{{ item.0.team_name }}/{{ item.1 }}"
     state: directory
     owner: "{{ jenkins_master_user }}"
     group: "{{ jenkins_master_user }}"
     mode: '0755'
     recurse: yes
-  loop: ['blue', 'green']
+  with_nested:
+    - "{{ jenkins_effective_config }}"
+    - ['blue', 'green']
+  loop_control:
+    label: "{{ item.0.team_name }}/{{ item.1 }}"
   tags: ['config', 'directories', 'blue-green']
 
 - name: Create Jenkins scripts directory
@@ -51,22 +60,34 @@
     mode: '0755'
   tags: ['config', 'directories', 'scripts']
 
-- name: Create Jenkins Configuration as Code directory
+- name: Create Jenkins Configuration as Code directories for all teams
   file:
-    path: "{{ jenkins_master_home_dir }}/{{ jenkins_master_config.team_name }}/{{ item }}/casc_configs"
+    path: "{{ jenkins_master_home_dir }}/{{ item.0.team_name }}/{{ item.1 }}/casc_configs"
     state: directory
     owner: "{{ jenkins_master_user }}"
     group: "{{ jenkins_master_user }}"
     mode: '0755'
-  loop: ['blue', 'green']
+  with_nested:
+    - "{{ jenkins_effective_config }}"
+    - ['blue', 'green']
+  loop_control:
+    label: "{{ item.0.team_name }}/{{ item.1 }}"
   tags: ['config', 'directories', 'jcasc']
 
-- name: Generate Jenkins Configuration as Code files
+- name: Generate Jenkins Configuration as Code files for all teams
   template:
     src: jcasc/jenkins-config.yml.j2
-    dest: "{{ jenkins_master_home_dir }}/{{ jenkins_master_config.team_name }}/{{ item }}/casc_configs/jenkins.yaml"
+    dest: "{{ jenkins_master_home_dir }}/{{ item.0.team_name }}/{{ item.1 }}/casc_configs/jenkins.yaml"
     owner: "{{ jenkins_master_user }}"
     group: "{{ jenkins_master_user }}"
     mode: '0644'
-  loop: ['blue', 'green']
+  with_nested:
+    - "{{ jenkins_effective_config }}"
+    - ['blue', 'green']
+  loop_control:
+    label: "{{ item.0.team_name }}/{{ item.1 }}"
+  vars:
+    # Pass current team context to template
+    jenkins_current_team: "{{ item.0 }}"
+    jenkins_current_environment: "{{ item.1 }}"
   tags: ['config', 'jcasc']

@@ -357,7 +357,7 @@ ansible-playbook -i ansible/inventories/production/hosts.yml \
 # Phase 4: Jenkins Infrastructure
 ansible-playbook -i ansible/inventories/production/hosts.yml \
   ansible/site.yml \
-  --tags jenkins-infrastructure \
+  --tags jenkins \
   --vault-password-file=environments/vault-passwords/.vault_pass_production
 
 # Phase 5: High Availability Setup
@@ -418,7 +418,7 @@ ansible jenkins_masters[0] -i ansible/inventories/production/hosts.yml \
 ```bash
 # Install additional plugins
 ansible-playbook -i ansible/inventories/production/hosts.yml \
-  ansible/roles/jenkins-infrastructure/tasks/bootstrap-jobs.yml \
+  ansible/roles/jenkins-master/tasks/bootstrap-jobs.yml \
   --vault-password-file=environments/vault-passwords/.vault_pass_production
 ```
 

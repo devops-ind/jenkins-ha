@@ -258,7 +258,7 @@ ansible-playbook -i ansible/inventories/production/hosts.yml \
 ansible-playbook -i ansible/inventories/production/hosts.yml \
   ansible/site.yml \
   -e jenkins_version=2.427.1 \
-  --tags jenkins-infrastructure
+  --tags jenkins
 ```
 
 #### Switch Environments for Deployment
@@ -297,7 +297,7 @@ ansible-playbook -i ansible/inventories/production/hosts.yml \
 ansible-playbook ansible/deploy-local.yml
 
 # Test configuration changes
-ansible-playbook ansible/deploy-local.yml --tags jenkins-infrastructure
+ansible-playbook ansible/deploy-local.yml --tags jenkins
 
 # Clean rebuild
 ansible-playbook ansible/deploy-local.yml -e force_rebuild=true

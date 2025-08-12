@@ -176,7 +176,7 @@ pipeline {
                         
                         # Check for security-related configurations
                         jcasc_files = []
-                        for root, dirs, files in os.walk('ansible/roles/jenkins-infrastructure/templates/jcasc/'):
+                        for root, dirs, files in os.walk('ansible/roles/jenkins-master/templates/jcasc/'):
                             for file in files:
                                 if file.endswith('.yml') or file.endswith('.yaml'):
                                     jcasc_files.append(os.path.join(root, file))

@@ -1,31 +1,64 @@
 ---
-# Jenkins Master Role - Reusable Blue-Green Multi-Team Configuration
-# Entry point with conditional includes for modular task organization
+# Unified Jenkins Master Role - Single/Multi-Team Blue-Green Deployment
+# Supports both single team and multi-team deployment modes
 
+# Detect deployment mode based on configuration
+- name: Determine deployment mode
+  set_fact:
+    jenkins_deployment_mode: "{{ 'multi-team' if jenkins_teams is defined and jenkins_teams | length > 0 else 'single-team' }}"
+    jenkins_effective_config: "{{ jenkins_teams if jenkins_teams is defined and jenkins_teams | length > 0 else [jenkins_master_config] }}"
+  tags: ['always']
+
+- name: Display deployment configuration
+  debug:
+    msg: |
+      Jenkins Deployment Mode: {{ jenkins_deployment_mode }}
+      Teams to Deploy: {{ jenkins_effective_config | map(attribute='team_name') | list | join(', ') }}
+      Container Runtime: {{ jenkins_master_container_runtime }}
+  tags: ['always']
+
+# Pre-deployment validation
 - name: Import validation tasks
   import_tasks: validate.yml
   tags: ['always', 'validate']
 
-- name: Import configuration tasks  
+# System configuration and setup
+- name: Import system configuration tasks
   import_tasks: configuration.yml
   tags: ['config', 'setup']
 
+# Network infrastructure setup
 - name: Import networking tasks
   import_tasks: networking.yml
   tags: ['network', 'setup']
 
+# Volume management (unified approach)
+- name: Import volume management tasks
+  import_tasks: volumes.yml
+  tags: ['volumes', 'setup']
+
+# Container deployment (supports both modes)
 - name: Import container management tasks
   import_tasks: container.yml
   tags: ['container', 'deploy']
 
+# Blue-green deployment management
 - name: Import blue-green deployment tasks
   import_tasks: blue-green.yml
   tags: ['blue-green', 'deploy']
 
+# HAProxy load balancer configuration
+- name: Import HAProxy configuration tasks
+  import_tasks: haproxy.yml
+  when: jenkins_master_haproxy_enabled | default(true)
+  tags: ['haproxy', 'load-balancer']
+
+# Health monitoring and verification
 - name: Import health check tasks
   import_tasks: health-check.yml
   tags: ['health', 'verify']
 
+# Optional cleanup tasks
 - name: Import cleanup tasks
   import_tasks: cleanup.yml
   when: jenkins_master_cleanup_enabled | default(false)

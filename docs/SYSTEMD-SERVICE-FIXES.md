@@ -8,7 +8,7 @@
 
 ## Fixed Components
 
-### 1. Task Execution Order (`ansible/roles/jenkins-infrastructure/tasks/systemd-services.yml`)
+### 1. Task Execution Order (`ansible/roles/jenkins-master/tasks/systemd-services.yml`)
 
 **Changes Made:**
 - ✅ Create required directories first (`{{ jenkins_home_dir }}/bin`, `{{ jenkins_home_dir }}/logs`)
@@ -18,7 +18,7 @@
 - ✅ Verify service file exists before attempting to enable/start
 - ✅ Add container verification step before systemd service startup
 
-### 2. Systemd Service Template (`ansible/roles/jenkins-infrastructure/templates/jenkins-master.service.j2`)
+### 2. Systemd Service Template (`ansible/roles/jenkins-master/templates/jenkins-master.service.j2`)
 
 **Improvements:**
 - ✅ Increased timeout values (600s start, 60s stop)
@@ -27,14 +27,14 @@
 - ✅ Added retry logic in health check scripts
 - ✅ Improved error handling and logging
 
-### 3. Main Task Order (`ansible/roles/jenkins-infrastructure/tasks/main.yml`)
+### 3. Main Task Order (`ansible/roles/jenkins-master/tasks/main.yml`)
 
 **Changes:**
 - ✅ Ensured containers are deployed before systemd services
 - ✅ Added wait time for containers to become operational
 - ✅ Added conditional execution for systemd tasks
 
-### 4. Handler Configuration (`ansible/roles/jenkins-infrastructure/handlers/main.yml`)
+### 4. Handler Configuration (`ansible/roles/jenkins-master/handlers/main.yml`)
 
 **Updates:**
 - ✅ Added `daemon_reload: yes` to jenkins-master restart handler
@@ -43,7 +43,7 @@
 ## New Scripts Created
 
 ### Container Verification Script
-**File**: `ansible/roles/jenkins-infrastructure/templates/jenkins-container-verify.sh.j2`
+**File**: `ansible/roles/jenkins-master/templates/jenkins-container-verify.sh.j2`
 - Verifies all team containers are running before systemd service activation
 - Provides detailed logging and retry logic
 - Prevents systemd service from starting with non-functional containers

@@ -14,11 +14,11 @@ The Jenkins infrastructure has been migrated from using manual job creation with
 ## JCasC Configuration Files
 
 ### Main Configuration
-- **Location**: `ansible/roles/jenkins-infrastructure/templates/jcasc/jenkins-config.yml.j2`
+- **Location**: `ansible/roles/jenkins-master/templates/jcasc/jenkins-config.yml.j2`
 - **Purpose**: Contains Jenkins system configuration, security settings, credentials, tools, and plugins
 
 ### Jobs Configuration
-- **Location**: `ansible/roles/jenkins-infrastructure/templates/jcasc/jenkins-jobs.yml.j2`
+- **Location**: `ansible/roles/jenkins-master/templates/jcasc/jenkins-jobs.yml.j2`
 - **Purpose**: Defines all Jenkins jobs using Job DSL syntax within JCasC
 
 ## Migrated Jobs
@@ -136,7 +136,7 @@ definition:
 ## Management Operations
 
 ### Configuration Updates
-1. **Modify JCasC templates** in `ansible/roles/jenkins-infrastructure/templates/jcasc/`
+1. **Modify JCasC templates** in `ansible/roles/jenkins-master/templates/jcasc/`
 2. **Run Ansible playbook** to deploy updated configuration
 3. **Jenkins automatically reloads** configuration on next restart
 

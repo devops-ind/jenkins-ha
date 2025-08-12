@@ -1,17 +1,33 @@
 ---
-# Jenkins Master - Podman Volume Management
+# Unified Jenkins Master - Podman Volume Management
+# Supports both single-team and multi-team deployments
 
 - name: Create Jenkins volumes for blue-green environments (Podman)
   containers.podman.podman_volume:
-    name: "jenkins-{{ jenkins_master_config.team_name }}-{{ item }}-home"
+    name: "jenkins-{{ item.0.team_name }}-{{ item.1 }}-home"
     driver: "local"
     state: present
-  loop: ['blue', 'green']
-  tags: ['volumes', 'podman', 'blue-green']
+    labels:
+      team: "{{ item.0.team_name }}"
+      environment: "{{ item.1 }}"
+      managed_by: "ansible"
+  with_nested:
+    - "{{ jenkins_effective_config }}"
+    - ['blue', 'green']
+  loop_control:
+    label: "jenkins-{{ item.0.team_name }}-{{ item.1 }}-home"
+  tags: ['volumes', 'podman']
 
-- name: Create Jenkins shared volume for team (Podman)
+- name: Create Jenkins shared volumes for teams (Podman)
   containers.podman.podman_volume:
-    name: "jenkins-{{ jenkins_master_config.team_name }}-shared"
+    name: "jenkins-{{ item.team_name }}-shared"
     driver: "local"
     state: present
-  tags: ['volumes', 'podman', 'shared']
+    labels:
+      team: "{{ item.team_name }}"
+      type: "shared"
+      managed_by: "ansible"
+  loop: "{{ jenkins_effective_config }}"
+  loop_control:
+    label: "jenkins-{{ item.team_name }}-shared"
+  tags: ['volumes', 'podman']

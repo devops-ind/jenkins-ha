@@ -367,7 +367,7 @@ The infrastructure is deployed and managed through a comprehensive set of Ansibl
   - jenkins-agent-python:latest
   - jenkins-agent-nodejs:latest
 
-#### 6. **jenkins-infrastructure** - Core Deployment
+#### 6. **jenkins-master** - Core Deployment
 - **Purpose**: Deploy and manage Jenkins masters and agents
 - **Features**:
   - Container orchestration without Docker Compose
@@ -432,7 +432,7 @@ Deployment Flow:
 1. common → docker → shared-storage
 2. harbor (parallel with step 3)
 3. security → jenkins-images
-4. jenkins-infrastructure → high-availability
+4. jenkins-master → high-availability
 5. monitoring → backup
 ```
 

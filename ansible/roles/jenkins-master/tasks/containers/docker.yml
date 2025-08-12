@@ -1,27 +1,28 @@
 ---
-# Jenkins Master - Docker Container Deployment
+# Unified Jenkins Master - Docker Container Deployment
+# Supports both single-team and multi-team deployments
 
-- name: Deploy Jenkins Blue Environment (Docker)
+- name: Deploy Jenkins Blue Environment containers for all teams (Docker)
   community.docker.docker_container:
-    name: "jenkins-{{ jenkins_master_config.team_name }}-blue"
+    name: "jenkins-{{ item.team_name }}-blue"
     image: "{{ jenkins_master_image_registry }}/{{ jenkins_master_image_name }}:{{ jenkins_master_image_tag }}"
-    state: "{{ 'started' if jenkins_master_config.active_environment == 'blue' else 'stopped' }}"
+    state: "{{ 'started' if item.active_environment == 'blue' else 'stopped' }}"
     restart_policy: "{{ jenkins_master_restart_policy }}"
     networks:
       - name: "{{ jenkins_master_network_name }}"
-    ports: "{{ jenkins_master_config.active_environment == 'blue' | ternary(_blue_ports, []) }}"
+    ports: "{{ item.active_environment == 'blue' | ternary(_blue_ports, []) }}"
     volumes:
-      - "jenkins-{{ jenkins_master_config.team_name }}-blue-home:{{ jenkins_master_container_home }}"
-      - "jenkins-{{ jenkins_master_config.team_name }}-shared:{{ jenkins_master_shared_path }}"
+      - "jenkins-{{ item.team_name }}-blue-home:{{ jenkins_master_container_home }}"
+      - "jenkins-{{ item.team_name }}-shared:{{ jenkins_master_shared_path }}"
       - "/var/run/docker.sock:/var/run/docker.sock"
-    env: "{{ _jenkins_env_vars | combine({'JENKINS_ENVIRONMENT': 'blue'}) }}"
-    memory: "{{ jenkins_master_config.resources.memory }}"
-    cpus: "{{ jenkins_master_config.resources.cpu }}"
+    env: "{{ _jenkins_env_vars | combine({'JENKINS_ENVIRONMENT': 'blue', 'JENKINS_TEAM': item.team_name}) }}"
+    memory: "{{ item.resources.memory }}"
+    cpus: "{{ item.resources.cpu }}"
     log_driver: "{{ jenkins_master_log_driver }}"
     log_options:
       max-size: "{{ jenkins_master_log_max_size }}"
       max-file: "{{ jenkins_master_log_max_files }}"
-    labels: "{{ _jenkins_labels | combine({'environment': 'blue', 'active': jenkins_master_config.active_environment == 'blue' | string}) }}"
+    labels: "{{ _jenkins_labels | combine({'environment': 'blue', 'active': item.active_environment == 'blue' | string, 'team': item.team_name}) }}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_master_port }}/login"]
       interval: 30s
@@ -30,34 +31,37 @@
       start_period: 60s
   vars:
     _blue_ports:
-      - "{{ jenkins_master_config.ports.web }}:{{ jenkins_master_port }}"
-      - "{{ jenkins_master_config.ports.agent }}:{{ jenkins_master_agent_port }}"
-    _jenkins_env_vars: "{{ jenkins_master_env_vars | combine(jenkins_master_config.env_vars | default({})) }}"
-    _jenkins_labels: "{{ jenkins_master_labels | combine(jenkins_master_config.labels | default({})) }}"
+      - "{{ item.ports.web }}:{{ jenkins_master_port }}"
+      - "{{ item.ports.agent }}:{{ jenkins_master_agent_port }}"
+    _jenkins_env_vars: "{{ jenkins_master_env_vars | combine(item.env_vars | default({})) }}"
+    _jenkins_labels: "{{ jenkins_master_labels | combine(item.labels | default({})) }}"
+  loop: "{{ jenkins_effective_config }}"
+  loop_control:
+    label: "jenkins-{{ item.team_name }}-blue"
   register: jenkins_blue_docker
   tags: ['containers', 'docker', 'blue']
 
-- name: Deploy Jenkins Green Environment (Docker)
+- name: Deploy Jenkins Green Environment containers for all teams (Docker)
   community.docker.docker_container:
-    name: "jenkins-{{ jenkins_master_config.team_name }}-green"
+    name: "jenkins-{{ item.team_name }}-green"
     image: "{{ jenkins_master_image_registry }}/{{ jenkins_master_image_name }}:{{ jenkins_master_image_tag }}"
-    state: "{{ 'started' if jenkins_master_config.active_environment == 'green' else 'stopped' }}"
+    state: "{{ 'started' if item.active_environment == 'green' else 'stopped' }}"
     restart_policy: "{{ jenkins_master_restart_policy }}"
     networks:
       - name: "{{ jenkins_master_network_name }}"
-    ports: "{{ jenkins_master_config.active_environment == 'green' | ternary(_green_ports, []) }}"
+    ports: "{{ item.active_environment == 'green' | ternary(_green_ports, []) }}"
     volumes:
-      - "jenkins-{{ jenkins_master_config.team_name }}-green-home:{{ jenkins_master_container_home }}"
-      - "jenkins-{{ jenkins_master_config.team_name }}-shared:{{ jenkins_master_shared_path }}"
+      - "jenkins-{{ item.team_name }}-green-home:{{ jenkins_master_container_home }}"
+      - "jenkins-{{ item.team_name }}-shared:{{ jenkins_master_shared_path }}"
       - "/var/run/docker.sock:/var/run/docker.sock"
-    env: "{{ _jenkins_env_vars | combine({'JENKINS_ENVIRONMENT': 'green'}) }}"
-    memory: "{{ jenkins_master_config.resources.memory }}"
-    cpus: "{{ jenkins_master_config.resources.cpu }}"
+    env: "{{ _jenkins_env_vars | combine({'JENKINS_ENVIRONMENT': 'green', 'JENKINS_TEAM': item.team_name}) }}"
+    memory: "{{ item.resources.memory }}"
+    cpus: "{{ item.resources.cpu }}"
     log_driver: "{{ jenkins_master_log_driver }}"
     log_options:
       max-size: "{{ jenkins_master_log_max_size }}"
       max-file: "{{ jenkins_master_log_max_files }}"
-    labels: "{{ _jenkins_labels | combine({'environment': 'green', 'active': jenkins_master_config.active_environment == 'green' | string}) }}"
+    labels: "{{ _jenkins_labels | combine({'environment': 'green', 'active': item.active_environment == 'green' | string, 'team': item.team_name}) }}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_master_port }}/login"]
       interval: 30s
@@ -66,9 +70,12 @@
       start_period: 60s
   vars:
     _green_ports:
-      - "{{ jenkins_master_config.ports.web }}:{{ jenkins_master_port }}"
-      - "{{ jenkins_master_config.ports.agent }}:{{ jenkins_master_agent_port }}"
-    _jenkins_env_vars: "{{ jenkins_master_env_vars | combine(jenkins_master_config.env_vars | default({})) }}"
-    _jenkins_labels: "{{ jenkins_master_labels | combine(jenkins_master_config.labels | default({})) }}"
+      - "{{ item.ports.web }}:{{ jenkins_master_port }}"
+      - "{{ item.ports.agent }}:{{ jenkins_master_agent_port }}"
+    _jenkins_env_vars: "{{ jenkins_master_env_vars | combine(item.env_vars | default({})) }}"
+    _jenkins_labels: "{{ jenkins_master_labels | combine(item.labels | default({})) }}"
+  loop: "{{ jenkins_effective_config }}"
+  loop_control:
+    label: "jenkins-{{ item.team_name }}-green"
   register: jenkins_green_docker  
   tags: ['containers', 'docker', 'green']

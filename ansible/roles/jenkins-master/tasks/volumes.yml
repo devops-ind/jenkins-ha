@@ -1,0 +1,27 @@
+---
+# Unified Jenkins Master - Volume Management
+# Runtime-agnostic volume management for single/multi-team deployments
+
+- name: Create Jenkins volumes for blue-green environments
+  include_tasks: "volumes/{{ jenkins_master_container_runtime }}.yml"
+  tags: ['volumes']
+
+- name: Display volume creation summary
+  debug:
+    msg: |
+      Jenkins Volume Management Summary:
+      
+      Container Runtime: {{ jenkins_master_container_runtime | upper }}
+      Deployment Mode: {{ jenkins_deployment_mode }}
+      
+      Created Volumes:
+      {% for team in jenkins_effective_config %}
+      Team: {{ team.team_name }}
+        - jenkins-{{ team.team_name }}-blue-home
+        - jenkins-{{ team.team_name }}-green-home
+        - jenkins-{{ team.team_name }}-shared
+      {% endfor %}
+      
+      Total Teams: {{ jenkins_effective_config | length }}
+      Total Volumes: {{ jenkins_effective_config | length * 3 }}
+  tags: ['volumes', 'info']

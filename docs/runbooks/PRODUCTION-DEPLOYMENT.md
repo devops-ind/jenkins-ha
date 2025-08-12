@@ -181,7 +181,7 @@ ansible load_balancers -i ansible/inventories/production/hosts.yml \
 # Deploy Jenkins masters (serial deployment for HA)
 ansible-playbook -i ansible/inventories/production/hosts.yml \
   ansible/site.yml \
-  --tags "jenkins-infrastructure" \
+  --tags "jenkins" \
   --limit "jenkins_masters" \
   --vault-password-file=environments/vault-passwords/.vault_pass_production
 
@@ -201,7 +201,7 @@ curl -I http://{{ jenkins_vip }}:8080/login
 # Deploy Jenkins agents
 ansible-playbook -i ansible/inventories/production/hosts.yml \
   ansible/site.yml \
-  --tags "jenkins-infrastructure" \
+  --tags "jenkins" \
   --limit "jenkins_agents" \
   --vault-password-file=environments/vault-passwords/.vault_pass_production
 

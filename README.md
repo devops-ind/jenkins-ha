@@ -318,7 +318,7 @@ make deploy-local
 # Deploy only Jenkins infrastructure
 ansible-playbook -i ansible/inventories/production/hosts.yml \
   ansible/site.yml \
-  --tags jenkins-infrastructure
+  --tags jenkins
 
 # Deploy monitoring stack
 ansible-playbook -i ansible/inventories/production/hosts.yml \

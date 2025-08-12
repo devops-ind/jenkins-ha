@@ -1,0 +1,61 @@
+---
+# Unified Jenkins Master - HAProxy Load Balancer Configuration
+# Supports both single-team and multi-team blue-green routing
+
+- name: Create HAProxy configuration directory
+  file:
+    path: /etc/haproxy/conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  become: yes
+  tags: ['haproxy', 'directories']
+
+- name: Create HAProxy team-specific configurations
+  template:
+    src: haproxy-team-config.cfg.j2
+    dest: "/etc/haproxy/conf.d/jenkins-{{ item.team_name }}.cfg"
+    owner: root
+    group: root
+    mode: '0644'
+    backup: yes
+  loop: "{{ jenkins_effective_config }}"
+  loop_control:
+    label: "jenkins-{{ item.team_name }}.cfg"
+  vars:
+    jenkins_current_team: "{{ item }}"
+  notify: reload haproxy
+  become: yes
+  tags: ['haproxy', 'config']
+
+- name: Verify HAProxy configuration syntax
+  shell: "haproxy -f /etc/haproxy/haproxy.cfg -f /etc/haproxy/conf.d/jenkins-{{ item.team_name }}.cfg -c"
+  loop: "{{ jenkins_effective_config }}"
+  loop_control:
+    label: "Validating jenkins-{{ item.team_name }}.cfg"
+  register: haproxy_syntax_check
+  failed_when: haproxy_syntax_check.rc != 0
+  changed_when: false
+  become: yes
+  tags: ['haproxy', 'validate']
+
+- name: Display HAProxy configuration summary
+  debug:
+    msg: |
+      HAProxy Configuration Summary:
+      
+      Deployment Mode: {{ jenkins_deployment_mode }}
+      Configuration Files Created:
+      {% for team in jenkins_effective_config %}
+      - /etc/haproxy/conf.d/jenkins-{{ team.team_name }}.cfg
+        Active Environment: {{ team.active_environment | upper }}
+        Web Port: {{ team.ports.web }}
+        Agent Port: {{ team.ports.agent }}
+      {% endfor %}
+      
+      Blue-Green Routing: Active environments expose external ports
+      Inactive environments: Internal network access only
+      
+      HAProxy Reload: {{ haproxy_syntax_check.results | selectattr('changed', 'equalto', true) | list | length > 0 | ternary('Required', 'Not needed') }}
+  tags: ['haproxy', 'info']

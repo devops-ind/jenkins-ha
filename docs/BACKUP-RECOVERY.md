@@ -512,7 +512,7 @@ fi
 echo "Starting Jenkins services..."
 ansible-playbook -i ansible/inventories/${RESTORE_ENV}/hosts.yml \
   ansible/site.yml \
-  --tags jenkins-infrastructure \
+  --tags jenkins \
   --limit jenkins_masters
 
 # Verify restoration
@@ -684,7 +684,7 @@ echo "Starting DR testing procedure..."
 # Deploy DR infrastructure
 ansible-playbook -i ansible/inventories/dr/hosts.yml \
   ansible/site.yml \
-  --tags jenkins-infrastructure
+  --tags jenkins
 
 # Restore test backup
 ./scripts/restore.sh /backup/test/jenkins-backup-test.tar.gz dr

@@ -174,7 +174,7 @@ curl -s "http://{{ jenkins_vip }}:8080/log/all" | grep -i "authentication failed
 ```bash
 # Daily vulnerability scan
 ./scripts/security-scanning.sh vulnerability-scan \
-  --target="jenkins-infrastructure" \
+  --target="jenkins" \
   --type="authenticated"
 
 # Container vulnerability scanning
@@ -518,7 +518,7 @@ ansible-playbook ansible/firewall.yml \
 
 # Conduct red team exercise
 ./scripts/security-training.sh red-team-exercise \
-  --scope="jenkins-infrastructure" \
+  --scope="jenkins" \
   --duration="4h"
 ```
 

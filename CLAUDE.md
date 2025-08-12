@@ -110,13 +110,14 @@ scripts/disaster-recovery.sh production --validate
 10. **Post-Deployment Verification**: Multi-layer health checks, security validation, and comprehensive deployment summary
 
 ### Key Ansible Roles
-- `jenkins-infrastructure`: Blue-green Jenkins deployment with secure multi-team container management, vulnerability scanning, and security constraints
+- `jenkins-master`: Unified Jenkins deployment supporting both single and multi-team configurations with blue-green deployment, secure container management, vulnerability scanning, and security constraints
 - `harbor`: Private registry integration with automated security scanning and authentication
 - `monitoring`: Enhanced Prometheus/Grafana stack with 26-panel dashboards, DORA metrics, SLI tracking, and automated alerting
 - `backup`: Enterprise-grade automated backup procedures with RTO/RPO compliance and disaster recovery automation
 - `security`: Comprehensive security hardening, container security constraints, vulnerability scanning, compliance validation, and audit logging
 - `common`: System bootstrap with pre-deployment validation framework
 - `high-availability`: Advanced HA configuration with automated rollback triggers
+
 
 ### Environment Configuration
 - **Production**: `environments/production.env` and `ansible/inventories/production/`
