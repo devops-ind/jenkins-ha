@@ -133,26 +133,35 @@ graph TD
 ```yaml
 # ansible/group_vars/all/jenkins.yml
 jenkins_teams:
-  - name: "devops"
-    port: 8080
-    agent_port: 50000
-    memory: "4g"
-    cpu_limit: "2.0"
+  - team_name: "devops"
     active_environment: "blue"
+    blue_green_enabled: true
+    ports:
+      web: 8080
+      agent: 50000
+    resources:
+      memory: "4g"
+      cpu: "2.0"
     
-  - name: "developer"
-    port: 8090
-    agent_port: 50010
-    memory: "3g"
-    cpu_limit: "1.5"
-    active_environment: "blue"
+  - team_name: "developer"
+    active_environment: "blue"  
+    blue_green_enabled: true
+    ports:
+      web: 8090
+      agent: 50010
+    resources:
+      memory: "3g"
+      cpu: "1.5"
     
-  - name: "qa"
-    port: 8100
-    agent_port: 50020
-    memory: "2g"
-    cpu_limit: "1.0"
+  - team_name: "qa"
     active_environment: "blue"
+    blue_green_enabled: true
+    ports:
+      web: 8100
+      agent: 50020
+    resources:
+      memory: "2g"
+      cpu: "1.0"
 ```
 
 ### Team-Specific Deployments

@@ -41,7 +41,7 @@
         - name: Get current active environments
           shell: |
             {% for team in jenkins_teams %}
-            echo "{{ team.name }}:$(docker ps --format 'table {{ '{{.Names}}' }}\t{{ '{{.Status}}' }}' | grep jenkins-{{ team.name }} | grep -v Exited || echo 'none')"
+            echo "{{ team.team_name }}:$(docker ps --format 'table {{ '{{.Names}}' }}\t{{ '{{.Status}}' }}' | grep jenkins-{{ team.team_name }} | grep -v Exited || echo 'none')"
             {% endfor %}
           register: environment_status
           changed_when: false
