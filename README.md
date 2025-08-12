@@ -398,32 +398,19 @@ ansible-playbook ansible/site.yml --tags ssl-certificates
 ## Documentation
 
 ### Core Documentation
+- **[Operations Guide](docs/OPERATIONS.md)**: Complete operations manual with troubleshooting, deployment commands, and emergency procedures
+- **[Deployment Guide](docs/DEPLOYMENT.md)**: Comprehensive deployment procedures and prerequisites
 - **[Architecture](docs/ARCHITECTURE.md)**: System design and component overview
+- **[Security Guide](docs/SECURITY.md)**: Security hardening, compliance, and incident response
 - **[Blue-Green Deployment](docs/BLUE-GREEN-DEPLOYMENT.md)**: Zero-downtime deployment strategy
-- **[Job DSL Management](docs/JOB-DSL-MANAGEMENT.md)**: Automated job creation and pipeline management
-- **[Playbook Organization](docs/PLAYBOOK-ORGANIZATION.md)**: Ansible playbook structure and usage
-- **[Deployment](docs/DEPLOYMENT.md)**: Complete deployment procedures
-- **[Security](docs/SECURITY.md)**: Security hardening and compliance
 - **[Backup & Recovery](docs/BACKUP-RECOVERY.md)**: Backup strategies and disaster recovery
 - **[Monitoring](docs/MONITORING.md)**: Observability and alerting setup
-- **[Troubleshooting](docs/TROUBLESHOOTING.md)**: Common issues and solutions
+- **[High Availability](docs/HIGH-AVAILABILITY.md)**: HA configuration and management
 
-### Operations Runbooks
-- **[Production Deployment](docs/runbooks/PRODUCTION-DEPLOYMENT.md)**: Step-by-step production deployment
-- **[Disaster Recovery](docs/runbooks/DISASTER-RECOVERY.md)**: Complete DR procedures
-- **[Security Operations](docs/runbooks/SECURITY-OPERATIONS.md)**: Security incident response
-- **[Monitoring Operations](docs/runbooks/MONITORING-OPERATIONS.md)**: Alert handling and escalation
-
-### Configuration Management
+### Development Documentation
+- **[Job DSL Management](docs/JOB-DSL-MANAGEMENT.md)**: Automated job creation and pipeline management
+- **[View Management](docs/VIEW-MANAGEMENT.md)**: Jenkins view configuration and management
 - **[Inventory Management](docs/config/INVENTORY-MANAGEMENT.md)**: Host and environment management
-- **[Variable Management](docs/config/VARIABLE-MANAGEMENT.md)**: Variable hierarchy and vault usage
-- **[SSL Certificate Management](docs/config/SSL-MANAGEMENT.md)**: Certificate lifecycle management
-- **[Secrets Management](docs/config/SECRETS-MANAGEMENT.md)**: Vault operations and password rotation
-
-### Reference Guides
-- **[Network Architecture](docs/reference/NETWORK-ARCHITECTURE.md)**: Network topology and security zones
-- **[Incident Response](docs/reference/INCIDENT-RESPONSE.md)**: Security incident procedures
-- **[Compliance Documentation](docs/reference/COMPLIANCE.md)**: Security compliance and auditing
 
 ## Support
 

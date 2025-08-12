@@ -2,34 +2,68 @@
 
 ## Overview
 
-This document provides comprehensive operational guidance for managing the Jenkins High Availability infrastructure. It covers day-to-day operations, troubleshooting, maintenance procedures, and the enhanced operational scripts.
+This document provides comprehensive operational guidance for managing the Jenkins High Availability infrastructure, including deployment operations, troubleshooting, maintenance procedures, and quick reference commands.
 
 ## Table of Contents
 
-- [Operational Scripts](#operational-scripts)
+- [Quick Reference Commands](#quick-reference-commands)
 - [Deployment Operations](#deployment-operations)
-- [Disaster Recovery](#disaster-recovery)
 - [Blue-Green Operations](#blue-green-operations)
-- [Security Operations](#security-operations)
+- [Disaster Recovery](#disaster-recovery)
 - [Monitoring Operations](#monitoring-operations)
-- [Maintenance Procedures](#maintenance-procedures)
 - [Troubleshooting Guide](#troubleshooting-guide)
+- [Maintenance Procedures](#maintenance-procedures)
 
-## Operational Scripts
+## Quick Reference Commands
 
-### Enhanced Automation Scripts
+### 🎯 Main Deployments
 
-#### HA Setup Script (`scripts/ha-setup.sh`)
-Comprehensive Jenkins HA infrastructure setup automation with 559 lines of enterprise-grade functionality.
+#### Full Infrastructure
+```bash
+# Production deployment
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml
 
-**Features:**
-- Multi-mode deployment (full, masters-only, monitoring-only, validate-only)
-- Comprehensive validation framework
-- Production confirmation prompts
-- Detailed reporting and logging
-- Error handling and rollback capabilities
+# Staging deployment  
+ansible-playbook -i ansible/inventories/staging/hosts.yml ansible/site.yml
 
-**Usage:**
+# Local development
+ansible-playbook ansible/deploy-local.yml
+```
+
+#### Component Deployments
+```bash
+# Backup system only
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/deploy-backup.yml
+
+# Monitoring stack only
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/deploy-monitoring.yml
+
+# Image building only
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/deploy-images.yml
+```
+
+### 🛡️ Safety Checks
+
+```bash
+# Syntax check
+ansible-playbook --syntax-check ansible/site.yml
+
+# Dry run
+ansible-playbook ansible/site.yml --check
+
+# Test connectivity
+ansible all -i ansible/inventories/production/hosts.yml -m ping
+
+# Verbose output
+ansible-playbook ansible/site.yml -vvv
+```
+
+## Deployment Operations
+
+### Enhanced HA Setup Script
+
+Use the comprehensive setup script for automated deployments:
+
 ```bash
 # Full production setup
 scripts/ha-setup.sh production full
@@ -44,547 +78,363 @@ scripts/ha-setup.sh production validate-only
 scripts/ha-setup.sh local monitoring-only
 ```
 
-**Command Line Options:**
-```bash
-scripts/ha-setup.sh [environment] [setup_mode]
+**Setup Modes:**
+- `full` - Complete infrastructure deployment
+- `masters-only` - Jenkins masters and agents only
+- `monitoring-only` - Monitoring stack only  
+- `validate-only` - Dry run validation
 
-Options:
-  --help                Show help message
-  --dry-run            Show execution plan without running
-  --verbose            Enable verbose output
-  --skip-validation    Skip environment validation (not recommended)
+### Manual Deployment Steps
 
-Examples:
-  scripts/ha-setup.sh production full              # Full production setup
-  scripts/ha-setup.sh staging masters-only         # Staging with Jenkins masters only
-  scripts/ha-setup.sh production validate-only     # Validate environment only
-  scripts/ha-setup.sh local monitoring-only        # Local monitoring setup
-```
+1. **Pre-deployment Validation**
+   ```bash
+   ansible-playbook ansible/site.yml --tags validation
+   ```
 
-#### Disaster Recovery Script (`scripts/disaster-recovery.sh`)
-Enterprise-grade automated disaster recovery with RTO/RPO compliance (508 lines).
+2. **Infrastructure Bootstrap**
+   ```bash
+   ansible-playbook ansible/site.yml --tags bootstrap
+   ```
 
-**Features:**
-- RTO/RPO compliance tracking (15-minute RTO, 5-minute RPO targets)
-- Automated backup validation and integrity checking
-- Infrastructure failover with health validation
-- DNS management and service orchestration
-- Comprehensive recovery reporting
+3. **Jenkins Deployment**
+   ```bash
+   ansible-playbook ansible/site.yml --tags jenkins
+   ```
 
-**Usage:**
-```bash
-# Execute production disaster recovery
-scripts/disaster-recovery.sh production secondary 15 5
-
-# Validate DR prerequisites
-scripts/disaster-recovery.sh production --validate
-
-# Simulate DR process
-scripts/disaster-recovery.sh production --simulate
-```
-
-**Parameters:**
-- `environment`: Target environment (production, staging)
-- `dr_site`: DR site identifier (secondary, dr-west, etc.)
-- `rto_minutes`: Recovery Time Objective in minutes (default: 15)
-- `rpo_minutes`: Recovery Point Objective in minutes (default: 5)
-
-#### Enhanced Security Scripts
-
-##### Security Scanning (`/usr/local/bin/jenkins-security-scan.sh`)
-Comprehensive vulnerability scanning with Trivy integration.
-
-```bash
-# Full security scan
-/usr/local/bin/jenkins-security-scan.sh --all
-
-# Scan specific image
-/usr/local/bin/jenkins-security-scan.sh jenkins:latest
-
-# Generate compliance report
-/usr/local/bin/jenkins-security-scan.sh --compliance
-
-# Scheduled scan (for cron)
-/usr/local/bin/jenkins-security-scan.sh --scheduled
-```
-
-##### Security Monitoring (`/usr/local/bin/jenkins-security-monitor.sh`)
-Real-time security monitoring and compliance validation.
-
-```bash
-# Full monitoring cycle
-/usr/local/bin/jenkins-security-monitor.sh monitor
-
-# Vulnerability scan only
-/usr/local/bin/jenkins-security-monitor.sh scan
-
-# Security compliance check
-/usr/local/bin/jenkins-security-monitor.sh compliance
-
-# Resource monitoring only
-/usr/local/bin/jenkins-security-monitor.sh resources
-```
-
-##### Secure Container Execution (`/usr/local/bin/jenkins-secure-run.sh`)
-Secure container execution with enterprise security constraints.
-
-```bash
-# Run container with security constraints
-/usr/local/bin/jenkins-secure-run.sh jenkins/master:latest
-
-# Debug mode
-/usr/local/bin/jenkins-secure-run.sh --debug jenkins/master:latest
-
-# Validate security configuration
-/usr/local/bin/jenkins-secure-run.sh --validate
-```
-
-#### Credential Management (`scripts/generate-credentials.sh`)
-Automated secure credential generation and management.
-
-```bash
-# Generate all credentials for environment
-scripts/generate-credentials.sh production
-
-# Generate specific credential type
-scripts/generate-credentials.sh production --type jenkins-admin
-
-# Rotate existing credentials
-scripts/generate-credentials.sh production --rotate
-
-# Validate credential strength
-scripts/generate-credentials.sh production --validate
-```
-
-## Deployment Operations
-
-### Standard Deployment Workflow
-
-#### 1. Pre-deployment Validation
-```bash
-# Validate environment configuration
-ansible-playbook ansible/site.yml --tags validation -e validation_mode=strict
-
-# Check infrastructure readiness
-scripts/ha-setup.sh production validate-only
-
-# Security compliance check
-/usr/local/bin/jenkins-security-scan.sh --compliance
-```
-
-#### 2. Deployment Execution
-```bash
-# Full production deployment
-make deploy-production
-
-# Or use enhanced HA setup script
-scripts/ha-setup.sh production full
-
-# Monitor deployment progress
-tail -f /var/log/jenkins/ha-setup-*.log
-```
-
-#### 3. Post-deployment Validation
-```bash
-# Health check
-ansible-playbook ansible/playbooks/health-check.yml -i ansible/inventories/production/hosts.yml
-
-# Blue-green validation
-ansible-playbook ansible/playbooks/blue-green-operations.yml -e blue_green_operation=status
-
-# Security validation
-/usr/local/bin/jenkins-security-monitor.sh compliance
-```
-
-### Enhanced Infrastructure Update Pipeline
-
-The infrastructure update pipeline now includes automated rollback triggers and SLI monitoring:
-
-#### Key Features
-- **SLI-based Rollback**: Automatic rollback on performance degradation
-- **Approval Gates**: Required approvals for production changes
-- **Health Monitoring**: Continuous monitoring during deployments
-- **Circuit Breaker**: Automatic deployment halting on failures
-
-#### Pipeline Stages
-1. **Pre-deployment Validation**: System readiness and security checks
-2. **Staging Deployment**: Deploy to staging environment first
-3. **Automated Testing**: Run comprehensive test suites
-4. **Production Approval**: Required approval for production deployment
-5. **Production Deployment**: Gradual rollout with monitoring
-6. **SLI Monitoring**: Real-time SLI threshold monitoring
-7. **Automated Rollback Assessment**: Trigger rollback if SLI thresholds exceeded
-8. **Post-deployment Validation**: Comprehensive health and security checks
-
-## Disaster Recovery
-
-### Automated Disaster Recovery Process
-
-#### Recovery Workflow
-1. **Backup Validation**: Find and validate backup within RPO window
-2. **Service Shutdown**: Graceful shutdown of existing services
-3. **Infrastructure Failover**: Deploy DR site infrastructure
-4. **Data Restoration**: Restore Jenkins data from validated backup
-5. **Service Startup**: Start services in correct dependency order
-6. **DNS Failover**: Update DNS to point to DR site
-7. **Health Validation**: Comprehensive recovery validation
-8. **Compliance Reporting**: Generate RTO/RPO compliance report
-
-#### RTO/RPO Monitoring
-- **RTO Target**: 15 minutes (configurable)
-- **RPO Target**: 5 minutes (configurable)
-- **Automated Reporting**: Real-time compliance tracking
-- **Alerting**: Notifications on SLA violations
-
-#### DR Testing
-```bash
-# Test DR prerequisites
-scripts/disaster-recovery.sh production --validate
-
-# Simulate full DR process
-scripts/disaster-recovery.sh production --simulate
-
-# Execute non-destructive DR test
-scripts/disaster-recovery.sh staging secondary 30 10
-```
+4. **Post-deployment Verification**
+   ```bash
+   ansible-playbook ansible/site.yml --tags verify
+   ```
 
 ## Blue-Green Operations
 
-### Enhanced Blue-Green Deployment
+### 🔄 Environment Management
 
-#### Pre-switch Validation
-The blue-green deployment now includes comprehensive pre-switch validation:
-
-- **Health Checks**: Validate target environment health
-- **Performance Testing**: Load testing and performance validation
-- **Security Scanning**: Security compliance validation
-- **Data Consistency**: Database and configuration consistency checks
-- **Integration Testing**: External service integration validation
-
-#### Blue-Green Commands
+#### Environment Status
 ```bash
-# Check current blue-green status
-ansible-playbook ansible/playbooks/blue-green-operations.yml -e blue_green_operation=status
-
-# Switch to green environment
-ansible-playbook ansible/playbooks/blue-green-operations.yml -e blue_green_operation=switch -e target_color=green
-
-# Rollback to blue environment
-ansible-playbook ansible/playbooks/blue-green-operations.yml -e blue_green_operation=rollback
-
-# Enhanced health check
-scripts/blue-green-healthcheck.sh production
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/blue-green-operations.yml \
+  -e blue_green_operation=status
 ```
 
-#### Automated Rollback Triggers
-- **Error Rate Threshold**: > 5% error rate triggers rollback
-- **Response Time Threshold**: > 2000ms average response time
-- **Resource Usage**: > 90% CPU or memory utilization
-- **Health Check Failures**: > 3 consecutive health check failures
-
-## Security Operations
-
-### Daily Security Operations
-
-#### Security Monitoring Dashboard
-Access the comprehensive security monitoring:
-- **Grafana Security Dashboard**: http://monitoring:3000/d/security
-- **Security Alerts**: tail -f /var/log/jenkins/security/alerts.log
-- **Compliance Status**: /usr/local/bin/jenkins-security-monitor.sh compliance
-
-#### Daily Security Tasks
+#### Environment Switching
 ```bash
-# Run daily security scan
-/usr/local/bin/jenkins-security-scan.sh --scheduled
+# Switch single team to green
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/blue-green-operations.yml \
+  -e blue_green_operation=switch -e environment=green -e team_filter=devops
 
-# Check security alerts
-tail -n 100 /var/log/jenkins/security/alerts.log
+# Switch all teams to green
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/blue-green-operations.yml \
+  -e batch_blue_green_operation=switch-all -e batch_target_environment=green
 
-# Validate security compliance
-/usr/local/bin/jenkins-security-monitor.sh compliance
-
-# Review failed login attempts
-grep "Failed login" /var/log/jenkins/security/audit.log | tail -20
+# Rollback team to previous environment
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/blue-green-operations.yml \
+  -e blue_green_operation=rollback -e team_filter=devops
 ```
 
-### Security Incident Response
-
-#### Automated Response Triggers
-The security monitoring system includes automated response capabilities:
-
+#### Health Checks
 ```bash
-# Security violation detected - automatic response
-if security_violation_detected; then
-    # Stop affected container
-    container_runtime stop $container
-    
-    # Generate incident report
-    generate_incident_report $container $violation_type
-    
-    # Alert security team
-    logger -t "jenkins-security" -p "user.crit" "SECURITY INCIDENT: $violation_type"
-fi
+# Health check single team
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/blue-green-operations.yml \
+  -e blue_green_operation=health-check -e team_filter=qa
+
+# Health check all teams  
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/blue-green-operations.yml \
+  -e batch_blue_green_operation=health-check-all
 ```
 
-#### Manual Incident Response
+### Manual Blue-Green Scripts
+
+Per-team scripts are available on Jenkins masters:
+
 ```bash
-# Isolate compromised system
-iptables -P INPUT DROP
-systemctl stop jenkins-master-*
+# Team-specific switching
+/var/jenkins/scripts/blue-green-switch-devops.sh
+/var/jenkins/scripts/blue-green-switch-qa.sh
 
-# Collect forensic evidence
-/usr/local/bin/forensic-collect.sh INCIDENT_ID
+# Team-specific health checks
+/var/jenkins/scripts/blue-green-healthcheck-devops.sh
+/var/jenkins/scripts/blue-green-healthcheck-qa.sh
+```
 
-# Generate incident report
-/usr/local/bin/incident-response.sh critical "Security breach detected"
+## Disaster Recovery
+
+### 🚨 Emergency Procedures
+
+#### Infrastructure Assessment
+```bash
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/disaster-recovery.yml \
+  -e dr_operation=assess
+```
+
+#### Backup Restoration
+```bash
+# Dry run restore (preview)
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/disaster-recovery.yml \
+  -e dr_operation=restore -e backup_timestamp=latest -e dr_dry_run=true
+
+# Actual restore (DESTRUCTIVE)
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/disaster-recovery.yml \
+  -e dr_operation=restore -e backup_timestamp=2024-01-15-14-30 -e dr_dry_run=false
+```
+
+#### Emergency Failover
+```bash
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/disaster-recovery.yml \
+  -e dr_operation=failover -e failover_environment=green
+```
+
+### Automated DR Script
+
+```bash
+# Full disaster recovery validation
+scripts/disaster-recovery.sh production --validate
+
+# Emergency failover with monitoring
+scripts/disaster-recovery.sh production --failover --monitor
 ```
 
 ## Monitoring Operations
 
-### Enhanced Grafana Dashboards
+### Access Monitoring Interfaces
 
-#### Comprehensive Monitoring
-The monitoring stack now includes a comprehensive 26-panel Grafana dashboard:
+- **Prometheus**: `http://monitoring-host:9090`
+- **Grafana**: `http://monitoring-host:3000`
+  - Username: `admin`
+  - Password: Check vault (`vault_grafana_admin_password`)
 
-**Dashboard Panels:**
-- **SLI Metrics**: Error rate, response time, availability
-- **DORA Metrics**: Deployment frequency, lead time, MTTR, change failure rate  
-- **Blue-Green Status**: Environment health and switch status
-- **Security Metrics**: Vulnerability counts, compliance status
-- **Container Resources**: CPU, memory, disk usage per container
-- **Jenkins Metrics**: Job success rates, queue depth, agent utilization
+### Monitoring Playbooks
 
-#### Accessing Monitoring
 ```bash
-# Grafana Dashboard
-http://monitoring:3000/d/jenkins-comprehensive
+# Deploy monitoring stack only
+ansible-playbook ansible/deploy-monitoring.yml
 
-# Prometheus Metrics
-http://monitoring:9090/graph
-
-# Direct metric queries
-curl "http://monitoring:9090/api/v1/query?query=jenkins:error_rate_5m"
+# Monitor deployment with SLI tracking
+scripts/monitor.sh production --sli-tracking
 ```
 
-### SLI/SLO Monitoring
+### Key Metrics to Monitor
 
-#### Service Level Indicators (SLIs)
-- **Availability**: 99.9% uptime target
-- **Error Rate**: < 0.1% error rate target  
-- **Response Time**: < 500ms 95th percentile target
-- **Deployment Success**: > 95% success rate target
-
-#### Automated Alerting Rules
-```yaml
-# Prometheus alerting rules
-groups:
-  - name: jenkins_sli_alerts
-    rules:
-      - alert: HighErrorRate
-        expr: jenkins:error_rate_5m > 0.05
-        for: 5m
-        annotations:
-          summary: "High error rate detected: {{ $value }}"
-          
-      - alert: HighResponseTime  
-        expr: jenkins:response_time_95p > 2000
-        for: 5m
-        annotations:
-          summary: "High response time: {{ $value }}ms"
-```
-
-## Maintenance Procedures
-
-### Scheduled Maintenance
-
-#### Daily Maintenance
-```bash
-# Automated via cron
-0 2 * * * /usr/local/bin/jenkins-security-scan.sh --scheduled
-0 3 * * * /usr/local/bin/backup.sh --automated
-0 4 * * * /usr/local/bin/cleanup-old-logs.sh
-```
-
-#### Weekly Maintenance
-```bash
-# System updates (with approval)
-ansible-playbook ansible/playbooks/system-update.yml
-
-# Security compliance audit
-/usr/local/bin/security-audit.sh
-
-# Performance optimization
-/usr/local/bin/performance-tune.sh
-```
-
-#### Monthly Maintenance
-```bash
-# Full infrastructure health check
-scripts/ha-setup.sh production validate-only --verbose
-
-# Disaster recovery testing
-scripts/disaster-recovery.sh staging --simulate
-
-# Security penetration testing
-/usr/local/bin/security-pentest.sh
-
-# Capacity planning review
-/usr/local/bin/capacity-analysis.sh
-```
-
-### Certificate Management
-
-#### SSL/TLS Certificate Operations
-```bash
-# Check certificate expiry
-openssl x509 -in /etc/ssl/certs/jenkins.crt -text -noout | grep "Not After"
-
-# Renew Let's Encrypt certificates
-certbot renew --dry-run
-
-# Update HAProxy certificate bundle
-cat /etc/letsencrypt/live/jenkins.company.com/{fullchain,privkey}.pem > /etc/ssl/certs/jenkins.pem
-systemctl reload haproxy
-```
+1. **Jenkins Health**: Response time, build success rates
+2. **Container Resources**: CPU, memory, storage usage
+3. **Blue-Green Status**: Environment health, switch success rates
+4. **Security Metrics**: Failed authentication attempts, vulnerability scans
 
 ## Troubleshooting Guide
 
 ### Common Issues and Solutions
 
-#### Deployment Issues
+#### 1. Jenkins Master Not Responding
 
-**Issue**: Deployment fails with validation errors
+**Symptoms:**
+- HTTP 500/503 errors
+- Timeouts on Jenkins URLs
+- Build queue not processing
+
+**Diagnosis:**
 ```bash
-# Solution: Run detailed validation
-scripts/ha-setup.sh production validate-only --verbose
+# Check container status
+docker ps | grep jenkins
+podman ps | grep jenkins
 
-# Check specific validation failures
-ansible-playbook ansible/site.yml --tags validation -e validation_mode=warn
+# Check logs
+docker logs jenkins-master-{team}-{environment}
 ```
 
-**Issue**: Container security constraints causing failures
+**Solutions:**
 ```bash
-# Solution: Check security constraints
-/usr/local/bin/jenkins-secure-run.sh --validate
+# Restart Jenkins container
+ansible-playbook ansible/site.yml --tags jenkins -e force_restart=true
 
-# Review security logs
-tail -f /var/log/jenkins/security/container.log
+# Switch to healthy blue-green environment
+scripts/blue-green-switch.sh {team} {healthy_environment}
 ```
 
-#### Security Issues
+#### 2. Dynamic Agents Not Connecting
 
-**Issue**: High number of security alerts
+**Symptoms:**
+- Builds stuck in queue
+- "Agent is offline" messages
+- Container spawn failures
+
+**Diagnosis:**
 ```bash
-# Solution: Review security monitoring
-/usr/local/bin/jenkins-security-monitor.sh compliance
+# Check Docker daemon
+docker info
 
-# Check specific violations
-grep "CRITICAL\|WARNING" /var/log/jenkins/security/alerts.log
+# Check agent templates in Jenkins
+curl -u admin:password http://jenkins:8080/computer/api/json
 ```
 
-**Issue**: Vulnerability scan failures
+**Solutions:**
 ```bash
-# Solution: Update Trivy database
-trivy image --download-db-only
+# Restart Docker/Podman service
+sudo systemctl restart docker
+# or
+sudo systemctl restart podman
 
-# Re-run security scan
-/usr/local/bin/jenkins-security-scan.sh --all
+# Recreate agent templates
+ansible-playbook ansible/site.yml --tags jenkins -e recreate_agents=true
 ```
 
-#### Blue-Green Issues
+#### 3. Load Balancer Issues
 
-**Issue**: Blue-green switch fails validation
+**Symptoms:**
+- Inconsistent responses
+- SSL certificate errors
+- Health check failures
+
+**Diagnosis:**
 ```bash
-# Solution: Check pre-switch validation
-ansible-playbook ansible/playbooks/blue-green-operations.yml -e blue_green_operation=validate -e target_color=green
+# Check HAProxy status
+sudo systemctl status haproxy
 
-# Review health check logs
-tail -f /var/log/jenkins/blue-green-health.log
+# Check backend health
+curl -s http://load-balancer:8404/stats
 ```
 
-#### Disaster Recovery Issues
-
-**Issue**: DR backup not found within RPO window
+**Solutions:**
 ```bash
-# Solution: Check backup status
-ls -la /backup/jenkins/jenkins-backup-*.tar.gz
+# Reconfigure HAProxy
+ansible-playbook ansible/site.yml --tags ha
 
-# Extend RPO window temporarily
-scripts/disaster-recovery.sh production secondary 15 30
+# Force SSL certificate renewal
+ansible-playbook ansible/site.yml --tags security -e force_cert_renewal=true
 ```
 
-### Log File Locations
+#### 4. Storage/Backup Issues
 
-#### Application Logs
+**Symptoms:**
+- Disk space warnings
+- Backup failures
+- Performance degradation
+
+**Diagnosis:**
 ```bash
-/var/log/jenkins/ha-setup-*.log          # HA setup logs
-/var/log/jenkins/disaster-recovery-*.log # DR execution logs
-/opt/jenkins/logs/jenkins.log            # Jenkins application logs
+# Check disk usage
+df -h /var/jenkins
+df -h /shared/jenkins
+
+# Check backup status
+ansible-playbook ansible/deploy-backup.yml --tags verify
 ```
 
-#### Security Logs
+**Solutions:**
 ```bash
-/var/log/jenkins/security/alerts.log     # Security alerts
-/var/log/jenkins/security/audit.log      # Security audit log
-/var/log/jenkins/security/container.log  # Container security log
-/var/log/jenkins/security/scan-results/  # Vulnerability scan results
-```
+# Clean up old artifacts
+scripts/cleanup.sh production --remove-old-builds
 
-#### System Logs
-```bash
-/var/log/syslog                          # System logs
-/var/log/auth.log                        # Authentication logs
-/var/log/haproxy.log                     # Load balancer logs
-```
-
-### Performance Monitoring
-
-#### Key Performance Metrics
-```bash
-# Jenkins performance
-curl -s "http://monitoring:9090/api/v1/query?query=jenkins_job_duration_seconds"
-
-# System resources
-curl -s "http://monitoring:9090/api/v1/query?query=node_memory_MemAvailable_bytes"
-
-# Container metrics
-docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}"
-```
-
-#### Performance Tuning
-```bash
-# JVM tuning for Jenkins masters
-export JAVA_OPTS="-Xms2g -Xmx4g -XX:+UseG1GC -XX:MaxGCPauseMillis=100"
-
-# Container resource optimization
-docker update --memory=4g --cpus=2.0 jenkins-master-blue
-
-# Database performance tuning
-postgresql-tune /etc/postgresql/13/main/postgresql.conf
+# Force backup rotation
+ansible-playbook ansible/deploy-backup.yml -e force_rotation=true
 ```
 
 ### Emergency Procedures
 
-#### Emergency Contacts
-- **Security Team**: security@company.com
-- **DevOps Team**: devops@company.com  
-- **On-call Engineer**: +1-555-JENKINS
+#### Complete System Recovery
 
-#### Emergency Response
+1. **Assessment Phase**
+   ```bash
+   ansible-playbook ansible/playbooks/disaster-recovery.yml -e dr_operation=assess
+   ```
+
+2. **Service Isolation**
+   ```bash
+   # Stop all services
+   ansible all -i ansible/inventories/production/hosts.yml -m service -a "name=jenkins-master state=stopped"
+   ```
+
+3. **Data Recovery**
+   ```bash
+   # Restore from latest backup
+   ansible-playbook ansible/playbooks/disaster-recovery.yml \
+     -e dr_operation=restore -e backup_timestamp=latest
+   ```
+
+4. **Service Restart**
+   ```bash
+   # Full redeployment
+   ansible-playbook ansible/site.yml -e skip_validation=true
+   ```
+
+#### Rollback Procedures
+
 ```bash
-# Emergency shutdown
-systemctl stop jenkins-master-*
-systemctl stop haproxy
+# Rollback to previous deployment
+ansible-playbook ansible/playbooks/blue-green-operations.yml \
+  -e batch_blue_green_operation=rollback-all
 
-# Emergency recovery
-scripts/disaster-recovery.sh production secondary --emergency
-
-# Emergency security isolation
-iptables -P INPUT DROP
-iptables -P OUTPUT DROP
-iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+# Emergency rollback with force
+scripts/blue-green-switch.sh all previous --force
 ```
 
----
+## Maintenance Procedures
 
-For additional operational support or to report operational issues, contact the DevOps team or create an operational ticket.
+### Regular Maintenance Tasks
+
+#### Weekly Tasks
+- Monitor disk usage and clean up old builds
+- Review security scan results
+- Validate backup integrity
+- Check for system updates
+
+#### Monthly Tasks  
+- Rotate credentials and certificates
+- Performance optimization review
+- Capacity planning assessment
+- Disaster recovery testing
+
+### Maintenance Commands
+
+```bash
+# System updates
+ansible all -i ansible/inventories/production/hosts.yml -m package -a "name=* state=latest" --become
+
+# Security updates only
+ansible all -i ansible/inventories/production/hosts.yml -m package -a "name=* state=latest security=yes" --become
+
+# Certificate renewal
+scripts/generate-credentials.sh production --rotate-certs
+
+# Backup testing
+scripts/disaster-recovery.sh production --test-backup
+```
+
+### Variable Patterns
+
+```bash
+# Team filtering
+-e team_filter=devops          # Single team
+-e team_filter=all             # All teams
+
+# Environment targeting
+-e environment=blue            # Blue environment
+-e environment=green           # Green environment
+
+# Operation modes
+-e blue_green_operation=switch # Switch environments
+-e dr_operation=restore        # Disaster recovery restore
+-e batch_blue_green_operation=switch-all # Batch switch all teams
+
+# Safety controls
+-e dr_dry_run=true            # Disaster recovery dry run
+-e skip_health_checks=false   # Health check control
+-e validate_recovery=true     # Recovery validation
+-e force_rebuild=true         # Force complete rebuild
+```
+
+## Support Resources
+
+### Log Locations
+- **Jenkins Logs**: `/var/jenkins/logs/`
+- **Container Logs**: `docker logs` or `podman logs`
+- **System Logs**: `/var/log/jenkins/`
+- **Ansible Logs**: `ansible/logs/`
+
+### Configuration Files
+- **Main Inventory**: `ansible/inventories/production/hosts.yml`
+- **Team Configuration**: `ansible/group_vars/all/jenkins_teams.yml`
+- **Vault Secrets**: `ansible/inventories/*/group_vars/all/vault.yml`
+
+### Emergency Contacts
+- **Operations Team**: ops@company.com
+- **Security Team**: security@company.com  
+- **On-call Engineer**: +1-555-0123

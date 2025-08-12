@@ -1,6 +1,6 @@
 ---
 # Main Jenkins Infrastructure Orchestration Playbook
-# Production-grade deployment with unified jenkins-master role
+# Production-grade deployment with native container management
 
 # Dynamic host selection based on deployment_mode
 - name: Set target hosts based on deployment mode
@@ -101,7 +101,21 @@
 
         - name: Validate container runtime availability
           block:
-            - name: Check container runtime
+            - name: Check Docker availability
+              shell: docker --version
+              register: docker_check
+              failed_when: false
+              changed_when: false
+              when: jenkins_container_runtime | default('docker') == 'docker'
+              
+            - name: Check Podman availability  
+              shell: podman --version
+              register: podman_check
+              failed_when: false
+              changed_when: false
+              when: jenkins_container_runtime | default('docker') == 'podman'
+              
+            - name: Validate container runtime is functional
               shell: |
                 {% if jenkins_container_runtime | default('docker') == 'docker' %}
                 docker info >/dev/null 2>&1
@@ -112,15 +126,181 @@
               failed_when: runtime_functional.rc != 0
               changed_when: false
 
+        - name: Check for conflicting services
+          block:
+            - name: Check if ports are already in use
+              wait_for:
+                port: "{{ item }}"
+                host: "{{ ansible_default_ipv4.address }}"
+                timeout: 1
+                state: started
+              register: port_check
+              failed_when: false
+              loop:
+                - 8080  # Jenkins default
+                - 9090  # Prometheus
+                - 3000  # Grafana
+                - 5432  # PostgreSQL
+                - 6379  # Redis
+              
+            - name: Report port conflicts
+              debug:
+                msg: |
+                  ⚠️ Port conflicts detected:
+                  {% for result in port_check.results %}
+                  {% if result.failed is not defined or not result.failed %}
+                  - Port {{ result.item }} is already in use
+                  {% endif %}
+                  {% endfor %}
+              when: port_check.results | selectattr('failed', 'undefined') | list | length > 0 or
+                    port_check.results | selectattr('failed', 'equalto', false) | list | length > 0
+
+        - name: Validate SSH connectivity between hosts
+          block:
+            - name: Test SSH connectivity to other Jenkins masters
+              wait_for:
+                port: 22
+                host: "{{ hostvars[item]['ansible_default_ipv4']['address'] | default(item) }}"
+                timeout: 10
+              loop: "{{ groups['jenkins_masters'] | default([]) }}"
+              when: 
+                - groups['jenkins_masters'] | default([]) | length > 1
+                - item != inventory_hostname
+              register: ssh_connectivity
+              failed_when: false
+              
+            - name: Report SSH connectivity issues
+              debug:
+                msg: |
+                  ⚠️ SSH connectivity issues to Jenkins masters:
+                  {% for result in ssh_connectivity.results | default([]) %}
+                  {% if result.failed %}
+                  - {{ result.item }}: Connection failed
+                  {% endif %}
+                  {% endfor %}
+              when: 
+                - ssh_connectivity is defined
+                - ssh_connectivity.results | selectattr('failed', 'equalto', true) | list | length > 0
+
+        - name: Check available disk space for Jenkins data
+          block:
+            - name: Create Jenkins directories for space check
+              file:
+                path: "{{ item }}"
+                state: directory
+                mode: '0755'
+              loop:
+                - "{{ jenkins_home_dir | default('/var/jenkins') }}"
+                - "{{ jenkins_shared_workspace | default('/shared/jenkins/workspace') }}"
+              register: dir_creation
+              
+            - name: Check disk space requirements
+              shell: |
+                # Check available space in Jenkins home
+                jenkins_avail=$(df {{ jenkins_home_dir | default('/var/jenkins') }} | tail -1 | awk '{print $4}')
+                jenkins_avail_gb=$((jenkins_avail / 1024 / 1024))
+                
+                # Check available space in shared workspace
+                workspace_avail=$(df {{ jenkins_shared_workspace | default('/shared/jenkins/workspace') }} | tail -1 | awk '{print $4}')
+                workspace_avail_gb=$((workspace_avail / 1024 / 1024))
+                
+                echo "jenkins_home:${jenkins_avail_gb}GB,workspace:${workspace_avail_gb}GB"
+                
+                # Validate minimum space requirements (20GB for Jenkins home, 50GB for workspace)
+                if [[ $jenkins_avail_gb -lt 20 ]]; then
+                  echo "ERROR: Insufficient disk space for Jenkins home: ${jenkins_avail_gb}GB < 20GB" >&2
+                  exit 1
+                fi
+                
+                if [[ $workspace_avail_gb -lt 50 ]]; then
+                  echo "WARNING: Low disk space for workspace: ${workspace_avail_gb}GB < 50GB recommended" >&2
+                  exit 2
+                fi
+              register: disk_space_check
+              failed_when: disk_space_check.rc == 1
+              changed_when: false
+
+        - name: Validate system security configuration
+          block:
+            - name: Check if SELinux/AppArmor is properly configured
+              shell: |
+                if command -v getenforce >/dev/null 2>&1; then
+                  selinux_status=$(getenforce)
+                  echo "SELinux: $selinux_status"
+                  if [[ "$selinux_status" == "Disabled" ]]; then
+                    echo "WARNING: SELinux is disabled"
+                    exit 1
+                  fi
+                elif command -v aa-status >/dev/null 2>&1; then
+                  apparmor_status=$(aa-status --enabled && echo "enabled" || echo "disabled")
+                  echo "AppArmor: $apparmor_status"
+                else
+                  echo "No mandatory access control system found"
+                  exit 2
+                fi
+              register: mac_check
+              failed_when: false
+              changed_when: false
+              
+            - name: Check for critical security updates
+              package_facts:
+                manager: auto
+              register: package_facts_result
+              
+            - name: Validate firewall configuration
+              shell: |
+                if systemctl is-active --quiet firewalld; then
+                  echo "firewalld: active"
+                elif systemctl is-active --quiet ufw; then
+                  echo "ufw: active"  
+                elif systemctl is-active --quiet iptables; then
+                  echo "iptables: active"
+                else
+                  echo "No active firewall detected"
+                  exit 1
+                fi
+              register: firewall_check
+              failed_when: false
+              changed_when: false
+
+        - name: Generate validation report
+          template:
+            src: validation-report.json.j2
+            dest: "/tmp/jenkins-validation-{{ ansible_date_time.epoch }}.json"
+            mode: '0644'
+          vars:
+            system_info:
+              hostname: "{{ inventory_hostname }}"
+              memory_mb: "{{ ansible_memtotal_mb }}"
+              cpu_cores: "{{ ansible_processor_vcpus }}"
+              disk_space: "{{ disk_space_check.stdout | default('unknown') }}"
+              os: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
+              runtime: "{{ jenkins_container_runtime | default('docker') }}"
+            connectivity: "{{ connectivity_check.results | default([]) }}"
+            ports: "{{ port_check.results | default([]) }}"
+            security: 
+              mac_system: "{{ mac_check.stdout | default('unknown') }}"
+              firewall: "{{ firewall_check.stdout | default('unknown') }}"
+            validation_timestamp: "{{ ansible_date_time.iso8601 }}"
+            validation_mode: "{{ validation_mode }}"
+          delegate_to: localhost
+          run_once: true
+
         - name: Display validation summary
           debug:
             msg: |
               🔍 Pre-deployment Validation Summary for {{ inventory_hostname }}:
               ✅ System Requirements: PASSED
               ✅ Container Runtime: {{ jenkins_container_runtime | default('docker') | upper }} available
-              ✅ Network Connectivity: {{ connectivity_check.results | selectattr('status', 'eq', 200) | list | length }}/{{ connectivity_check.results | length }} services reachable
+              ✅ Disk Space: Jenkins={{ disk_space_check.stdout.split(',')[0] | default('unknown') }}, Workspace={{ disk_space_check.stdout.split(',')[1] | default('unknown') }}
+              ✅ Security: MAC={{ mac_check.stdout.split(':')[1] | default('unknown') | trim }}, Firewall={{ firewall_check.stdout.split(':')[1] | default('unknown') | trim }}
+              
+              {% if connectivity_check.results | selectattr('status', 'ne', 200) | list | length > 0 %}
+              ⚠️  Network Issues: {{ connectivity_check.results | selectattr('status', 'ne', 200) | list | length }} connectivity problems
+              {% endif %}
               
               Validation Mode: {{ validation_mode | upper }}
+              Report: /tmp/jenkins-validation-{{ ansible_date_time.epoch }}.json
 
       rescue:
         - name: Handle validation failures
@@ -208,16 +388,15 @@
     - role: jenkins-master
       tags: ['jenkins', 'deploy']
   post_tasks:
-    - name: Wait for Jenkins teams to be ready
+    - name: Wait for Jenkins to be ready
       uri:
-        url: "http://{{ ansible_default_ipv4.address }}:{{ item.ports.web | default(8080) }}/login"
+        url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/login"
         method: GET
         status_code: [200, 403]
       register: jenkins_ready
       until: jenkins_ready is succeeded
       retries: 60
       delay: 10
-      loop: "{{ jenkins_teams | default([{'ports': {'web': 8080}}]) }}"
       tags: ['jenkins', 'verify']
 
 - name: Configure High Availability
@@ -230,6 +409,8 @@
       when: 
         - jenkins_ha_enabled | default(false)
         - groups['jenkins_masters'] | default([]) | length > 1
+
+# Dynamic Jenkins Agents are configured via JCasC - no separate deployment needed
 
 - name: Setup Monitoring Stack
   hosts: "{{ (deployment_mode | default('devcontainer') == 'devcontainer') | ternary('localhost', 'monitoring') }}"
@@ -254,16 +435,14 @@
   become: no
   gather_facts: yes
   tasks:
-    - name: Verify Jenkins teams accessibility
+    - name: Verify Jenkins master accessibility
       uri:
-        url: "http://{{ ansible_default_ipv4.address }}:{{ item.ports.web | default(8080) }}/api/json"
+        url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/api/json"
         method: GET
         user: "{{ jenkins_admin_user }}"
         password: "{{ jenkins_admin_password }}"
         force_basic_auth: yes
-        status_code: [200, 403]
-      register: jenkins_team_checks
-      loop: "{{ jenkins_teams | default([{'team_name': 'default', 'ports': {'web': 8080}}]) }}"
+      register: jenkins_api_check
       ignore_errors: yes
       tags: ['verify', 'api']
 
@@ -283,16 +462,12 @@
         msg: |
           🎉 Jenkins Infrastructure Deployment Completed!
           
-          📋 Team Access Information:
+          📋 Access Information:
           {% if deployment_mode | default('devcontainer') == 'devcontainer' %}
-          {% for team in jenkins_teams | default([{'team_name': 'default', 'ports': {'web': 8080}}]) %}
-          {{ team.team_name | title }} Team: http://localhost:{{ team.ports.web | default(8080) }}
-          {% endfor %}
+          Jenkins Masters: http://localhost:{{ jenkins_master_port | default(8080) }}
           {% else %}
           {% for host in groups['jenkins_masters'] | default([]) %}
-          {% for team in jenkins_teams | default([{'team_name': 'default', 'ports': {'web': 8080}}]) %}
-          {{ team.team_name | title }} Team: http://{{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }}
-          {% endfor %}
+          Jenkins Master {{ loop.index }}: http://{{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ jenkins_master_port }}
           {% endfor %}
           {% endif %}
           {% if jenkins_ha_enabled | default(false) %}
@@ -312,26 +487,13 @@
           Username: {{ jenkins_admin_user }}
           Password: [ENCRYPTED - Check vault]
           
-          🔧 Management Scripts (per team):
-          {% for team in jenkins_teams | default([{'team_name': 'default'}]) %}
-          • {{ team.team_name | title }} Blue-Green Switch: /var/jenkins/scripts/blue-green-switch-{{ team.team_name }}.sh
-          • {{ team.team_name | title }} Health Check: /var/jenkins/scripts/blue-green-healthcheck-{{ team.team_name }}.sh
-          {% endfor %}
-          
-          🏷️ Available Agent Labels (per team):
-          {% for team in jenkins_teams | default([{'team_name': 'default'}]) %}
-          • {{ team.team_name }}-maven (Java/Maven builds)
-          • {{ team.team_name }}-python (Python builds) 
-          • {{ team.team_name }}-nodejs (Node.js/Frontend builds)
-          • {{ team.team_name }}-dind (Docker-in-Docker builds)
-          {% endfor %}
+          🏷️ Available Agent Labels:
+          • dind docker-manager privileged (dynamic)
+          • maven java-build (dynamic)
+          • python python-build (dynamic)
+          • nodejs frontend-build (dynamic)
           
           📊 Monitoring Status: {{ monitoring_enabled | default(true) and 'Enabled' or 'Disabled' }}
           💾 Backup Status: {{ backup_enabled | default(true) and 'Enabled' or 'Disabled' }}
           🏔️ HA Status: {{ jenkins_ha_enabled | default(false) and 'Active' or 'Single Node' }}
-          
-          📊 Blue-Green Status:
-          • All teams start with BLUE environment active
-          • Use switch scripts for zero-downtime deployments
-          • HAProxy provides load balancing and health checks
       tags: ['verify', 'summary']
