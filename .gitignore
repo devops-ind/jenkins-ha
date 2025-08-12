@@ -1,0 +1,101 @@
+# Claude Code related files and folders
+.claude/
+.claude*
+claude/
+claude*
+CLAUDE_*
+.CLAUDE_*
+
+# Claude session files
+claude-session*
+claude_session*
+.claude-session*
+.claude_session*
+
+# Claude cache and temporary files
+.claude-cache/
+.claude-tmp/
+claude-cache/
+claude-tmp/
+
+# Claude logs
+claude*.log
+.claude*.log
+
+# Claude configuration
+claude.json
+.claude.json
+claude.yaml
+.claude.yaml
+claude.yml
+.claude.yml
+claude.toml
+.claude.toml
+
+# Claude workspace files
+.claude-workspace/
+claude-workspace/
+
+# Claude backup and history files
+.claude-history
+claude-history
+.claude-backup/
+claude-backup/
+
+# Ansible vault passwords (security)
+.vault_pass*
+vault_pass*
+*.vault_pass
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Runtime data
+pids
+*.pid
+*.seed
+
+# Coverage directory used by tools like istanbul
+coverage/
+
+# Dependency directories
+node_modules/
+
+# Optional npm cache directory
+.npm
+
+# Optional REPL history
+.node_repl_history
+
+# Build outputs
+build/
+dist/
+*.build
+
+# Environment variables
+.env
+.env.local
+.env.*.local
