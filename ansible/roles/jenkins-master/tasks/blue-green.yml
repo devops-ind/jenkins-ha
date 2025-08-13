@@ -23,17 +23,7 @@
     mode: '0644'
   tags: ['blue-green', 'state']
 
-- name: Create HAProxy configuration for blue-green routing
-  template:
-    src: haproxy-team-config.cfg.j2
-    dest: "/etc/haproxy/conf.d/jenkins-{{ jenkins_master_config.team_name }}.cfg"
-    owner: root
-    group: root
-    mode: '0644'
-    backup: yes
-  notify: reload haproxy
-  when: jenkins_master_haproxy_enabled | default(true)
-  tags: ['blue-green', 'haproxy']
+# HAProxy configuration is managed by the high-availability role
 
 - name: Verify active environment is running
   uri:

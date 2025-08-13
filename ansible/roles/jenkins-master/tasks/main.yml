@@ -47,13 +47,7 @@
   import_tasks: blue-green.yml
   tags: ['blue-green', 'deploy']
 
-# HAProxy load balancer configuration 
-# NOTE: HAProxy is now managed by the high-availability role for multi-team deployments
-# This legacy HAProxy integration is disabled by default
-- name: Import HAProxy configuration tasks (LEGACY - use high-availability role instead)
-  import_tasks: haproxy.yml
-  when: jenkins_master_haproxy_enabled | default(false)
-  tags: ['haproxy', 'load-balancer', 'legacy']
+# HAProxy is managed by the high-availability role for multi-team deployments
 
 # Health monitoring and verification
 - name: Import health check tasks

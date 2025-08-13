@@ -31,6 +31,10 @@ vault_email_smtp_password: ""
 vault_ssl_private_key: ""
 vault_ssl_certificate: ""
 
+# Git credentials for teams
+vault_git_username: "admin"
+vault_git_password: "git123"
+
 # Docker registry tokens
 vault_docker_hub_token: ""
 vault_github_registry_token: ""

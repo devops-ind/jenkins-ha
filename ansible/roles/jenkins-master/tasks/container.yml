@@ -1,9 +1,7 @@
 ---
 # Jenkins Master - Universal Container Management
 
-- name: Create Jenkins volumes for blue-green environments
-  include_tasks: "volumes/{{ jenkins_master_container_runtime }}.yml"
-  tags: ['container', 'volumes']
+# Volumes are managed by the main volume management tasks (volumes.yml)
 
 - name: Deploy Jenkins containers for blue-green environments
   include_tasks: "containers/{{ jenkins_master_container_runtime }}.yml"
