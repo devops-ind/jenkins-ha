@@ -44,6 +44,20 @@
   import_tasks: containers.yml
   tags: ['container', 'deploy']
 
+# Monitoring and management scripts (must be deployed before keepalived)
+- name: Create HA monitoring and management scripts
+  template:
+    src: "{{ item }}.j2"
+    dest: "/usr/local/bin/{{ item }}"
+    mode: '0755'
+  loop:
+    - jenkins-ha-monitor.sh
+    - jenkins-failover.sh
+    - haproxy-container-manager.sh
+    - keepalived-haproxy-check.sh
+  become: yes
+  tags: ['ha', 'monitoring']
+
 # Keepalived VIP management
 - name: Install keepalived for VIP management
   package:
@@ -73,17 +87,11 @@
   when: jenkins_vip is defined and jenkins_vip != ""
   tags: ['ha', 'service']
 
-# Monitoring and management scripts
-- name: Create HA monitoring and management scripts
-  template:
-    src: "{{ item }}.j2"
-    dest: "/usr/local/bin/{{ item }}"
-    mode: '0755'
-  loop:
-    - jenkins-ha-monitor.sh
-    - jenkins-failover.sh
-    - haproxy-container-manager.sh
-  become: yes
+- name: Check if crontab is available
+  command: which crontab
+  register: crontab_check
+  failed_when: false
+  changed_when: false
   tags: ['ha', 'monitoring']
 
 - name: Setup HA monitoring cron job
@@ -93,6 +101,13 @@
     minute: "*/2"
     user: root
   become: yes
+  when: crontab_check.rc == 0
+  tags: ['ha', 'monitoring']
+
+- name: Skip cron job setup (crontab not available)
+  debug:
+    msg: "Skipping HA monitoring cron job - crontab not installed (development environment)"
+  when: crontab_check.rc != 0
   tags: ['ha', 'monitoring']
 
 - name: Display multi-team HA configuration status

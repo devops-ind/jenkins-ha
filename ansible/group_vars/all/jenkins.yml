@@ -38,6 +38,7 @@ jenkins_plugins:
   - gradle
 
 # Default container configuration
+jenkins_container_runtime: "docker"  # Global container runtime for all roles
 jenkins_master_memory: "2g"
 jenkins_master_java_opts: "-Djenkins.install.runSetupWizard=false"
 
@@ -104,3 +105,13 @@ jenkins_rollback_timeout: 120           # Time to wait before automatic rollback
 jenkins_blue_network_alias: "jenkins-blue"
 jenkins_green_network_alias: "jenkins-green"
 jenkins_active_network_alias: "jenkins-active"  # DNS alias pointing to active environment
+
+# Image Building Configuration
+jenkins_images_build_dir: "/tmp/jenkins-images-build"  # Used by jenkins-images role
+jenkins_images_force_rebuild: false
+jenkins_images_push: false
+jenkins_images_cleanup: true
+
+# Jenkins Version Configuration
+jenkins_master_image_tag: "{{ jenkins_version }}"
+jenkins_agent_image_tag: "{{ jenkins_dynamic_agent_version }}"

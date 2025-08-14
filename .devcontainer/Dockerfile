@@ -11,7 +11,7 @@ RUN set -eux; \
     python3-urllib3 python3-cryptography python3-venv python3-packaging \
     ansible openssh-client openssh-server sshpass git curl wget vim nano jq tree htop \
     net-tools iputils-ping telnet unzip ca-certificates gnupg lsb-release \
-    podman podman-compose sudo \
+    docker.io docker-compose sudo \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -39,8 +39,8 @@ USER ansible
 
 # Shell aliases
 RUN echo 'alias ll="ls -la"' >> ~/.bashrc \
-    && echo 'alias p="podman"' >> ~/.bashrc \
-    && echo 'alias pc="podman-compose"' >> ~/.bashrc \
+    && echo 'alias d="docker"' >> ~/.bashrc \
+    && echo 'alias dc="docker-compose"' >> ~/.bashrc \
     && echo 'alias ap="ansible-playbook"' >> ~/.bashrc
 
 SHELL ["/bin/bash", "-c"]

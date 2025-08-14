@@ -1,10 +1,10 @@
 ---
-# Jenkins Master - Universal Container Management
+# Jenkins Master - Docker Container Management
 
 # Volumes are managed by the main volume management tasks (volumes.yml)
 
 - name: Deploy Jenkins containers for blue-green environments
-  include_tasks: "containers/{{ jenkins_master_container_runtime }}.yml"
+  include_tasks: "containers/docker.yml"
   tags: ['container', 'deploy']
 
 - name: Wait for containers to be operational

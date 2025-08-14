@@ -27,20 +27,15 @@
     owner: "{{ monitoring_user }}"
     group: "{{ monitoring_group }}"
     mode: '0755'
-  loop:
-    - "{{ monitoring_home_dir }}"
-    - "{{ monitoring_home_dir }}/prometheus"
-    - "{{ monitoring_home_dir }}/prometheus/data"
-    - "{{ monitoring_home_dir }}/prometheus/config"
-    - "{{ monitoring_home_dir }}/prometheus/rules"
-    - "{{ monitoring_home_dir }}/grafana"
-    - "{{ monitoring_home_dir }}/grafana/data"
-    - "{{ monitoring_home_dir }}/grafana/dashboards"
-    - "{{ monitoring_home_dir }}/grafana/provisioning"
-    - "{{ monitoring_home_dir }}/grafana/provisioning/dashboards"
-    - "{{ monitoring_home_dir }}/grafana/provisioning/datasources"
-    - "{{ monitoring_home_dir }}/alertmanager"
-    - "{{ monitoring_home_dir }}/exporters"
+  loop: "{{ monitoring_directories }}"
+  become: yes
+
+- name: Create monitoring network
+  community.docker.docker_network:
+    name: "{{ monitoring_network_name }}"
+    driver: bridge
+    ipam_config:
+      - subnet: "{{ monitoring_network_subnet }}"
 
 - name: Include Prometheus setup tasks
   include_tasks: prometheus.yml
@@ -58,13 +53,6 @@
 - name: Include Exporters setup tasks
   include_tasks: exporters.yml
   tags: ['exporters']
-
-- name: Create monitoring network
-  community.docker.docker_network:
-    name: "{{ monitoring_network_name }}"
-    driver: bridge
-    ipam_config:
-      - subnet: "{{ monitoring_network_subnet }}"
 
 - name: Generate monitoring stack systemd services
   template:
@@ -144,6 +132,16 @@
     - "{{ monitoring_home_dir }}/grafana/dashboards/jenkins-builds.json"
     - "{{ monitoring_home_dir }}/grafana/dashboards/infrastructure-health.json"
     - "{{ monitoring_home_dir }}/grafana/dashboards/security-metrics.json"
+  ignore_errors: yes  # Don't fail deployment if dashboard import fails
+
+- name: Create monitoring bin directory
+  file:
+    path: "{{ monitoring_home_dir }}/bin"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  become: yes
 
 - name: Create monitoring health check script
   template:
@@ -152,6 +150,7 @@
     owner: "{{ monitoring_user }}"
     group: "{{ monitoring_group }}"
     mode: '0755'
+  become: yes
 
 - name: Setup monitoring health check cron job
   cron:

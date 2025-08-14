@@ -1,0 +1,33 @@
+global:
+  smtp_smarthost: 'localhost:587'
+  smtp_from: 'alerts@{{ inventory_hostname | default("jenkins-infrastructure") }}'
+
+route:
+  group_by: ['alertname', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'default-receiver'
+  routes:
+  - match:
+      severity: critical
+    receiver: 'critical-receiver'
+
+receivers:
+- name: 'default-receiver'
+  webhook_configs:
+  - url: 'http://localhost:5001/webhook'
+    send_resolved: true
+
+- name: 'critical-receiver'
+  webhook_configs:
+  - url: 'http://localhost:5001/webhook'
+    send_resolved: true
+  # Add email or other notification methods here as needed
+
+inhibit_rules:
+- source_match:
+    severity: 'critical'
+  target_match:
+    severity: 'warning'
+  equal: ['alertname', 'service']

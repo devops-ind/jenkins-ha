@@ -4,7 +4,7 @@ global_defs {
      {{ email }}
 {% endfor %}
    }
-   notification_email_from {{ keepalived_notification_from | default('keepalived@' + ansible_fqdn) }}
+   notification_email_from {{ keepalived_notification_from | default('keepalived@' + (ansible_fqdn | default(ansible_hostname | default('localhost')))) }}
    smtp_server {{ keepalived_smtp_server | default('localhost') }}
    smtp_connect_timeout 30
    router_id {{ ansible_hostname | upper }}
@@ -15,11 +15,12 @@ global_defs {
 }
 
 vrrp_script chk_haproxy {
-    script "/bin/curl -f http://localhost:{{ jenkins_port | default('8080') }}/login || exit 1"
-    interval 2
+    script "/usr/local/bin/keepalived-haproxy-check.sh"
+    interval 3
     weight -2
     fall 3
     rise 2
+    timeout 10
 }
 
 vrrp_instance VI_1 {

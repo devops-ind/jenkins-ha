@@ -1,18 +1,13 @@
 ---
 # Jenkins Master Role - Reusable Default Variables
 
-# Core Jenkins Configuration
-jenkins_master_user: "jenkins"
-jenkins_master_gid: 1000
-jenkins_master_uid: 1000
-jenkins_master_home_dir: "/var/jenkins"
-jenkins_master_port: 8080
-jenkins_master_agent_port: 50000
+# Core Jenkins Configuration (uses group_vars values)
+# jenkins_user, jenkins_uid, jenkins_gid, jenkins_home_dir, jenkins_master_port, jenkins_jnlp_port defined in group_vars
 jenkins_master_container_home: "/var/jenkins_home"
 jenkins_master_shared_path: "/shared/jenkins"
 
 # Container Runtime Configuration
-jenkins_master_container_runtime: "podman"  # docker or podman
+jenkins_master_container_runtime: "{{ jenkins_container_runtime | default('docker') }}"
 jenkins_master_restart_policy: "unless-stopped"
 jenkins_master_startup_wait_time: 20
 
@@ -28,9 +23,9 @@ jenkins_master_network_subnet: "172.20.0.0/16"
 jenkins_master_network_gateway: "172.20.0.1"
 
 # Logging Configuration
-jenkins_master_log_driver: "journald"
-jenkins_master_log_max_size: "10m"
-jenkins_master_log_max_files: "3"
+jenkins_master_log_driver: "json-file"  # Options: json-file, journald, syslog, etc.
+jenkins_master_log_max_size: "10m"      # Only applies to json-file driver
+jenkins_master_log_max_files: "3"       # Only applies to json-file driver
 
 # Default Environment Variables
 jenkins_master_env_vars:
@@ -51,6 +46,9 @@ jenkins_master_health_check_delay: 10
 
 # HAProxy is managed by the high-availability role
 jenkins_master_health_check_timeout: 60
+
+# Verification host (use host.docker.internal for devcontainer, localhost for local)
+jenkins_verification_host: "{{ 'host.docker.internal' if ansible_virtualization_type | default('') == 'docker' else ('localhost' if deployment_mode | default('') in ['local', 'devcontainer'] else ansible_default_ipv4.address | default('localhost')) }}"
 
 # Blue-Green Deployment Configuration
 jenkins_master_blue_green_enabled: true
@@ -112,6 +110,34 @@ jenkins_master_casc_config_path: "{{ jenkins_master_container_home }}/casc_confi
 jenkins_master_dynamic_agents_enabled: true
 jenkins_master_dynamic_agent_image_tag: "latest"
 
+# Docker Socket Configuration
+jenkins_master_docker_in_docker_enabled: true  # Enable Docker-in-Docker functionality
+jenkins_master_socket_mount_enabled: true      # Enable Docker socket mounting
+jenkins_master_socket_path_docker: "/var/run/docker.sock"
+
 # Monitoring Integration
 jenkins_master_monitoring_enabled: true
 jenkins_master_prometheus_metrics: true
+
+# Custom Image Building Configuration
+jenkins_master_build_custom_images: true
+jenkins_master_base_image_from_jenkins_images: true
+jenkins_master_custom_image_prefix: "jenkins-custom"
+jenkins_master_custom_build_dir: "/tmp/jenkins-custom-build"
+
+# Base image configuration (flexible source)
+jenkins_master_base_image_name: "jenkins/jenkins-master"  # Preferred: from jenkins-images role
+jenkins_master_base_image_tag: "{{ jenkins_master_image_tag }}"
+jenkins_master_fallback_base_image: "jenkins/jenkins"     # Fallback: official Jenkins
+jenkins_master_fallback_base_tag: "{{ jenkins_master_image_tag }}"
+jenkins_master_auto_fallback_enabled: true               # Auto-fallback to official Jenkins
+
+# Team customization options
+jenkins_master_team_seed_jobs_enabled: true
+jenkins_master_team_plugins_enabled: true
+jenkins_master_team_configs_enabled: true
+jenkins_master_force_custom_rebuild: false
+
+# Custom image registry settings
+jenkins_master_custom_image_registry: "{{ jenkins_master_image_registry }}"
+jenkins_master_custom_image_push: false

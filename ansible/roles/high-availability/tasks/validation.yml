@@ -4,8 +4,8 @@
 - name: Validate HAProxy container runtime
   assert:
     that:
-      - haproxy_container_runtime in ['docker', 'podman']
-    fail_msg: "haproxy_container_runtime must be 'docker' or 'podman'"
+      - haproxy_container_runtime == 'docker'
+    fail_msg: "haproxy_container_runtime must be 'docker'"
     success_msg: "HAProxy container runtime validated: {{ haproxy_container_runtime }}"
   tags: ['validation', 'config']
 

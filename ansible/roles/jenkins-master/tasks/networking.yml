@@ -1,7 +1,7 @@
 ---
 # Jenkins Master - Network Configuration
 
-- name: Create Jenkins network (Docker)
+- name: Create Jenkins network
   community.docker.docker_network:
     name: "{{ jenkins_master_network_name }}"
     driver: "{{ jenkins_master_network_driver }}"
@@ -9,18 +9,7 @@
       - subnet: "{{ jenkins_master_network_subnet }}"
         gateway: "{{ jenkins_master_network_gateway }}"
     state: present
-  when: jenkins_master_container_runtime == 'docker'
   tags: ['network', 'docker']
-
-- name: Create Jenkins network (Podman)
-  containers.podman.podman_network:
-    name: "{{ jenkins_master_network_name }}"
-    driver: "{{ jenkins_master_network_driver }}"
-    subnet: "{{ jenkins_master_network_subnet }}"
-    gateway: "{{ jenkins_master_network_gateway }}"
-    state: present
-  when: jenkins_master_container_runtime == 'podman'
-  tags: ['network', 'podman']
 
 - name: Check if ports are available
   wait_for:

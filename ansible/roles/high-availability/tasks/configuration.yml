@@ -1,39 +1,57 @@
 ---
 # HAProxy High Availability - System Configuration
 
-- name: Ensure Docker is installed for HAProxy container
-  package:
-    name: "{{ 'docker.io' if ansible_os_family == 'Debian' else 'docker' }}"
-    state: present
-  become: yes
-  when: haproxy_container_runtime == 'docker'
+- name: Check if Docker is available for HAProxy container
+  command: docker --version
+  register: docker_check
+  failed_when: false
+  changed_when: false
   tags: ['config', 'docker']
 
-- name: Ensure Podman is installed for HAProxy container
-  package:
-    name: podman
+- name: Validate Docker installation
+  fail:
+    msg: |
+      Docker is not installed or not available in PATH.
+      Please install Docker first using the appropriate role or package manager.
+      HAProxy containers require Docker to be installed and running.
+  when: docker_check.rc != 0
+  tags: ['config', 'docker']
+
+- name: Check if Docker service is running
+  command: docker info
+  register: docker_info_check
+  failed_when: false
+  changed_when: false
+  tags: ['config', 'service']
+
+- name: Validate Docker daemon is running
+  fail:
+    msg: |
+      Docker daemon is not running.
+      Please start the Docker service: sudo systemctl start docker
+      HAProxy containers require Docker daemon to be running.
+  when: docker_info_check.rc != 0
+  tags: ['config', 'service']
+
+- name: Create HAProxy group
+  group:
+    name: "{{ haproxy_user }}"
+    gid: "{{ haproxy_gid }}"
+    system: yes
     state: present
   become: yes
-  when: haproxy_container_runtime == 'podman'
-  tags: ['config', 'podman']
-
-- name: Ensure container runtime is running
-  systemd:
-    name: "{{ 'docker' if haproxy_container_runtime == 'docker' else 'podman' }}"
-    state: started
-    enabled: yes
-  become: yes
-  tags: ['config', 'service']
+  tags: ['config', 'user']
 
 - name: Create HAProxy user
   user:
     name: "{{ haproxy_user }}"
     uid: "{{ haproxy_uid }}"
-    gid: "{{ haproxy_gid }}"
+    group: "{{ haproxy_user }}"
     system: yes
     shell: /bin/false
     home: /var/lib/haproxy
     create_home: no
+    state: present
   become: yes
   tags: ['config', 'user']
 
@@ -138,7 +156,6 @@
   vars:
     # Pass team configuration to template
     jenkins_teams: "{{ haproxy_effective_teams | default([]) }}"
-    jenkins_domain: "{{ jenkins_domain | default('devops.example.com') }}"
 
 - name: Create team-specific HAProxy backend configurations
   template:

@@ -5,24 +5,28 @@
 - name: Deploy Jenkins Blue Environment containers for all teams (Docker)
   community.docker.docker_container:
     name: "jenkins-{{ item.team_name }}-blue"
-    image: "{{ jenkins_master_image_registry }}/{{ jenkins_master_image_name }}:{{ jenkins_master_image_tag }}"
+    image: "{{ _jenkins_blue_image }}"
     state: "{{ 'started' if item.active_environment == 'blue' else 'stopped' }}"
     restart_policy: "{{ jenkins_master_restart_policy }}"
     networks:
       - name: "{{ jenkins_master_network_name }}"
-    ports: "{{ item.active_environment == 'blue' | ternary(_blue_ports, []) }}"
-    volumes:
-      - "jenkins-{{ item.team_name }}-blue-home:{{ jenkins_master_container_home }}"
-      - "jenkins-{{ item.team_name }}-shared:{{ jenkins_master_shared_path }}"
-      - "/var/run/docker.sock:/var/run/docker.sock"
+    ports: "{{ _blue_ports if item.active_environment == 'blue' else [] }}"
+    volumes: "{{ _blue_volumes }}"
     env: "{{ _jenkins_env_vars | combine({'JENKINS_ENVIRONMENT': 'blue', 'JENKINS_TEAM': item.team_name}) }}"
     memory: "{{ item.resources.memory }}"
     cpus: "{{ item.resources.cpu }}"
     log_driver: "{{ jenkins_master_log_driver }}"
-    log_options:
-      max-size: "{{ jenkins_master_log_max_size }}"
-      max-file: "{{ jenkins_master_log_max_files }}"
-    labels: "{{ _jenkins_labels | combine({'environment': 'blue', 'active': item.active_environment == 'blue' | string, 'team': item.team_name}) }}"
+    log_options: "{{ _log_options }}"
+    labels:
+      service: "{{ jenkins_master_labels.service | default('jenkins-master') }}"
+      managed_by: "{{ jenkins_master_labels.managed_by | default('ansible') }}"
+      role: "{{ jenkins_master_labels.role | default('jenkins-master') }}"
+      team: "{{ item.team_name }}"
+      tier: "{{ item.labels.tier | default('production') | string }}"
+      environment: "blue"
+      deployment_mode: "{{ item.labels.environment | default('devcontainer') | string }}"
+      active: "{{ (item.active_environment == 'blue') | string }}"
+      blue_green_enabled: "{{ item.blue_green_enabled | default(true) | string }}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_master_port }}/login"]
       interval: 30s
@@ -30,11 +34,21 @@
       retries: 3
       start_period: 60s
   vars:
-    _blue_ports:
-      - "{{ item.ports.web }}:{{ jenkins_master_port }}"
-      - "{{ item.ports.agent }}:{{ jenkins_master_agent_port }}"
     _jenkins_env_vars: "{{ jenkins_master_env_vars | combine(item.env_vars | default({})) }}"
-    _jenkins_labels: "{{ jenkins_master_labels | combine(item.labels | default({})) }}"
+    _jenkins_blue_image: "{{ _jenkins_team_custom_image if (_jenkins_team_custom_image_available | default(false)) else (_jenkins_fallback_image) }}"
+    _jenkins_team_custom_image: "{{ jenkins_master_custom_image_prefix }}-{{ item.team_name }}:{{ jenkins_master_base_image_tag }}"
+    _jenkins_team_custom_image_available: "{{ jenkins_custom_image_registry is defined and item.team_name in jenkins_custom_image_registry }}"
+    _jenkins_fallback_image: "{{ jenkins_master_image_registry }}/{{ jenkins_master_image_name }}:{{ jenkins_master_image_tag }}"
+    _blue_ports:
+      - "{{ item.ports.web | string }}:{{ jenkins_master_port | string }}"
+      - "{{ item.ports.agent | string }}:{{ jenkins_jnlp_port | string }}"
+    _blue_volumes: "{{ _base_blue_volumes + (_socket_volume if jenkins_socket_available | default(false) else []) }}"
+    _base_blue_volumes:
+      - "jenkins-{{ item.team_name }}-blue-home:{{ jenkins_master_container_home }}"
+      - "jenkins-{{ item.team_name }}-shared:{{ jenkins_master_shared_path }}"
+    _socket_volume:
+      - "{{ jenkins_socket_mount_string }}"
+    _log_options: "{{ {'max-size': jenkins_master_log_max_size, 'max-file': jenkins_master_log_max_files} if jenkins_master_log_driver == 'json-file' else {} }}"
   loop: "{{ jenkins_effective_config }}"
   loop_control:
     label: "jenkins-{{ item.team_name }}-blue"
@@ -44,24 +58,28 @@
 - name: Deploy Jenkins Green Environment containers for all teams (Docker)
   community.docker.docker_container:
     name: "jenkins-{{ item.team_name }}-green"
-    image: "{{ jenkins_master_image_registry }}/{{ jenkins_master_image_name }}:{{ jenkins_master_image_tag }}"
+    image: "{{ _jenkins_green_image }}"
     state: "{{ 'started' if item.active_environment == 'green' else 'stopped' }}"
     restart_policy: "{{ jenkins_master_restart_policy }}"
     networks:
       - name: "{{ jenkins_master_network_name }}"
-    ports: "{{ item.active_environment == 'green' | ternary(_green_ports, []) }}"
-    volumes:
-      - "jenkins-{{ item.team_name }}-green-home:{{ jenkins_master_container_home }}"
-      - "jenkins-{{ item.team_name }}-shared:{{ jenkins_master_shared_path }}"
-      - "/var/run/docker.sock:/var/run/docker.sock"
+    ports: "{{ _green_ports if item.active_environment == 'green' else [] }}"
+    volumes: "{{ _green_volumes }}"
     env: "{{ _jenkins_env_vars | combine({'JENKINS_ENVIRONMENT': 'green', 'JENKINS_TEAM': item.team_name}) }}"
     memory: "{{ item.resources.memory }}"
     cpus: "{{ item.resources.cpu }}"
     log_driver: "{{ jenkins_master_log_driver }}"
-    log_options:
-      max-size: "{{ jenkins_master_log_max_size }}"
-      max-file: "{{ jenkins_master_log_max_files }}"
-    labels: "{{ _jenkins_labels | combine({'environment': 'green', 'active': item.active_environment == 'green' | string, 'team': item.team_name}) }}"
+    log_options: "{{ _log_options }}"
+    labels:
+      service: "{{ jenkins_master_labels.service | default('jenkins-master') }}"
+      managed_by: "{{ jenkins_master_labels.managed_by | default('ansible') }}"
+      role: "{{ jenkins_master_labels.role | default('jenkins-master') }}"
+      team: "{{ item.team_name }}"
+      tier: "{{ item.labels.tier | default('production') | string }}"
+      environment: "green"
+      deployment_mode: "{{ item.labels.environment | default('devcontainer') | string }}"
+      active: "{{ (item.active_environment == 'green') | string }}"
+      blue_green_enabled: "{{ item.blue_green_enabled | default(true) | string }}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_master_port }}/login"]
       interval: 30s
@@ -69,11 +87,21 @@
       retries: 3
       start_period: 60s
   vars:
-    _green_ports:
-      - "{{ item.ports.web }}:{{ jenkins_master_port }}"
-      - "{{ item.ports.agent }}:{{ jenkins_master_agent_port }}"
     _jenkins_env_vars: "{{ jenkins_master_env_vars | combine(item.env_vars | default({})) }}"
-    _jenkins_labels: "{{ jenkins_master_labels | combine(item.labels | default({})) }}"
+    _jenkins_green_image: "{{ _jenkins_team_custom_image if (_jenkins_team_custom_image_available | default(false)) else (_jenkins_fallback_image) }}"
+    _jenkins_team_custom_image: "{{ jenkins_master_custom_image_prefix }}-{{ item.team_name }}:{{ jenkins_master_base_image_tag }}"
+    _jenkins_team_custom_image_available: "{{ jenkins_custom_image_registry is defined and item.team_name in jenkins_custom_image_registry }}"
+    _jenkins_fallback_image: "{{ jenkins_master_image_registry }}/{{ jenkins_master_image_name }}:{{ jenkins_master_image_tag }}"
+    _green_ports:
+      - "{{ (item.ports.web + 100) | string }}:{{ jenkins_master_port | string }}"
+      - "{{ (item.ports.agent + 100) | string }}:{{ jenkins_jnlp_port | string }}"
+    _green_volumes: "{{ _base_green_volumes + (_socket_volume if jenkins_socket_available | default(false) else []) }}"
+    _base_green_volumes:
+      - "jenkins-{{ item.team_name }}-green-home:{{ jenkins_master_container_home }}"
+      - "jenkins-{{ item.team_name }}-shared:{{ jenkins_master_shared_path }}"
+    _socket_volume:
+      - "{{ jenkins_socket_mount_string }}"
+    _log_options: "{{ {'max-size': jenkins_master_log_max_size, 'max-file': jenkins_master_log_max_files} if jenkins_master_log_driver == 'json-file' else {} }}"
   loop: "{{ jenkins_effective_config }}"
   loop_control:
     label: "jenkins-{{ item.team_name }}-green"

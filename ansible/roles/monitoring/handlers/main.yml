@@ -11,3 +11,25 @@
   systemd:
     daemon_reload: yes
   listen: "reload systemd"
+
+- name: restart prometheus
+  community.docker.docker_container:
+    name: prometheus-{{ deployment_environment | default('local') }}
+    state: started
+    restart: yes
+  listen: "restart prometheus"
+
+- name: restart grafana
+  community.docker.docker_container:
+    name: grafana-{{ deployment_environment | default('local') }}
+    state: started
+    restart: yes
+  listen: "restart grafana"
+
+- name: restart alertmanager
+  community.docker.docker_container:
+    name: alertmanager-{{ deployment_environment | default('local') }}
+    state: started
+    restart: yes
+  listen: "restart alertmanager"
+  when: alertmanager_enabled | default(false)

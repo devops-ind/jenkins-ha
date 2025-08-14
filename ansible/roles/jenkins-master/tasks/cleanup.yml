@@ -1,7 +1,7 @@
 ---
 # Jenkins Master - Cleanup and Maintenance Tasks
 
-- name: Stop and remove old Jenkins containers (Docker)
+- name: Stop and remove old Jenkins containers
   block:
     - name: Get list of old Jenkins containers
       shell: "docker ps -aq --filter 'name=jenkins-*' --filter 'status=exited'"
@@ -13,29 +13,10 @@
       when: old_containers.stdout_lines | length > 0
       register: container_removal
       changed_when: container_removal.rc == 0
-  when: 
-    - jenkins_master_cleanup_containers | default(false)
-    - jenkins_master_container_runtime == 'docker'
+  when: jenkins_master_cleanup_containers | default(false)
   tags: ['cleanup', 'containers']
 
-- name: Stop and remove old Jenkins containers (Podman)
-  block:
-    - name: Get list of old Jenkins containers
-      shell: "podman ps -aq --filter 'name=jenkins-*' --filter 'status=exited'"
-      register: old_containers
-      changed_when: false
-    
-    - name: Remove old Jenkins containers
-      shell: "podman rm -f {{ old_containers.stdout_lines | join(' ') }}"
-      when: old_containers.stdout_lines | length > 0
-      register: container_removal
-      changed_when: container_removal.rc == 0
-  when: 
-    - jenkins_master_cleanup_containers | default(false)
-    - jenkins_master_container_runtime == 'podman'
-  tags: ['cleanup', 'containers']
-
-- name: Clean up unused volumes (Docker)
+- name: Clean up unused volumes
   block:
     - name: Get list of unused Jenkins volumes
       shell: "docker volume ls --filter 'dangling=true' --filter 'name=jenkins-*' -q"
@@ -47,30 +28,11 @@
       when: unused_volumes.stdout_lines | length > 0
       register: volume_removal
       changed_when: volume_removal.rc == 0
-  when: 
-    - jenkins_master_cleanup_volumes | default(false)
-    - jenkins_master_container_runtime == 'docker'
-  tags: ['cleanup', 'volumes']
-
-- name: Clean up unused volumes (Podman)
-  block:
-    - name: Get list of unused Jenkins volumes
-      shell: "podman volume ls --filter 'dangling=true' --filter 'name=jenkins-*' -q"
-      register: unused_volumes
-      changed_when: false
-    
-    - name: Remove unused Jenkins volumes
-      shell: "podman volume rm {{ unused_volumes.stdout_lines | join(' ') }}"
-      when: unused_volumes.stdout_lines | length > 0
-      register: volume_removal
-      changed_when: volume_removal.rc == 0
-  when: 
-    - jenkins_master_cleanup_volumes | default(false)
-    - jenkins_master_container_runtime == 'podman'
+  when: jenkins_master_cleanup_volumes | default(false)
   tags: ['cleanup', 'volumes']
 
 - name: Remove old Jenkins images
-  command: "{{ jenkins_master_container_runtime }} image prune -f"
+  command: "docker image prune -f"
   when: jenkins_master_cleanup_images | default(false)
   register: image_cleanup
   changed_when: "'Total reclaimed space' in image_cleanup.stdout"
@@ -78,7 +40,7 @@
 
 - name: Clean up old log files for each team
   find:
-    paths: "{{ jenkins_master_home_dir }}/{{ item.team_name }}"
+    paths: "{{ jenkins_home_dir }}/{{ item.team_name }}"
     patterns: "*.log*"
     age: "{{ jenkins_master_log_retention_days | default(30) }}d"
     recurse: yes

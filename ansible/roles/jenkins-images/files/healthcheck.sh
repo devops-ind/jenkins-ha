@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Jenkins Health Check Script
-# Used by Docker/Podman health checks
+# Used by Docker health checks
 
 set -e
 

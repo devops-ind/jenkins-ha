@@ -11,6 +11,26 @@
     deployment_environment: "local"
     local_deployment: true
     
+    # Monitoring variables (backup in case role defaults don't load)
+    monitoring_user: "monitoring"
+    monitoring_group: "monitoring"
+    monitoring_uid: 1004
+    monitoring_gid: 1004
+    prometheus_port: 9090
+    grafana_port: 3000
+    grafana_admin_user: "admin"
+    grafana_admin_password: "admin123"
+    alertmanager_port: 9093
+    grafana_prometheus_datasource: "http://localhost:9090"
+    
+    # HAProxy/SSL configuration for local development
+    ssl_enabled: false
+    enable_ssl: false
+    jenkins_domain: "localhost"
+    keepalived_enabled: false
+    haproxy_stats_enabled: true
+    haproxy_stats_port: 8404
+    
   pre_tasks:
     - name: Display local deployment information
       debug:
@@ -31,7 +51,7 @@
           • Backup System (if enabled)
 
     - name: Check Docker availability
-      command: podman info
+      command: docker info
       register: docker_check
       failed_when: docker_check.rc != 0
       changed_when: false
@@ -62,14 +82,17 @@
       
     - role: jenkins-master
       tags: ['jenkins', 'infrastructure']
+    
+    - role: high-availability
+      tags: ['ha', 'high-availability']
       
-    - role: monitoring
-      tags: ['monitoring', 'prometheus', 'grafana']
-      when: monitoring_enabled | default(true)
+    # - role: monitoring
+    #   tags: ['monitoring', 'prometheus', 'grafana']
+    #   when: monitoring_enabled | default(true)
       
-    - role: backup
-      tags: ['backup', 'storage']
-      when: backup_enabled | default(false)
+    # - role: backup
+    #   tags: ['backup', 'storage']
+    #   when: backup_enabled | default(false)
 
   post_tasks:
     - name: Wait for Jenkins to be ready

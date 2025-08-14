@@ -94,12 +94,7 @@
         - name: Validate container runtime availability
           block:
             - name: Check container runtime
-              shell: |
-                {% if jenkins_container_runtime | default('docker') == 'docker' %}
-                docker info >/dev/null 2>&1
-                {% else %}
-                podman info >/dev/null 2>&1
-                {% endif %}
+              shell: docker info >/dev/null 2>&1
               register: runtime_functional
               failed_when: runtime_functional.rc != 0
               changed_when: false
@@ -109,7 +104,7 @@
             msg: |
               🔍 Pre-deployment Validation Summary for {{ inventory_hostname }}:
               ✅ System Requirements: PASSED
-              ✅ Container Runtime: {{ jenkins_container_runtime | default('docker') | upper }} available
+              ✅ Container Runtime: DOCKER available
               ✅ Network Connectivity: {{ connectivity_check.results | selectattr('status', 'eq', 200) | list | length }}/{{ connectivity_check.results | length }} services reachable
               
               Validation Mode: {{ validation_mode | upper }}
@@ -210,7 +205,7 @@
       tags: ['ha', 'cluster', 'haproxy', 'loadbalancer']
       when: 
         - jenkins_ha_enabled | default(false)
-        - groups['jenkins_masters'] | default([]) | length > 1
+        - (groups['jenkins_masters'] | default([]) | length > 1) or (jenkins_teams | default([]) | length > 1)
 
 - name: Setup Monitoring Stack
   hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'monitoring') }}"

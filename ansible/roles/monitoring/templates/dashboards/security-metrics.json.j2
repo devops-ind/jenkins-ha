@@ -1,0 +1,52 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Security Metrics - {{ deployment_environment | default('local') | title }}",
+    "tags": ["security", "compliance"],
+    "style": "dark",
+    "timezone": "browser",
+    "refresh": "1m",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Security Events",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "jenkins_security_events_total",
+            "legendFormat": "Security Events"
+          }
+        ],
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 0,
+          "y": 0
+        }
+      },
+      {
+        "id": 2,
+        "title": "Failed Login Attempts",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(jenkins_login_failures_total[5m])",
+            "legendFormat": "Failed Logins/sec"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 4
+        }
+      }
+    ],
+    "version": 1
+  },
+  "overwrite": true
+}

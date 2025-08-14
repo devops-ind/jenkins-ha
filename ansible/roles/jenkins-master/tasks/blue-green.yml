@@ -1,60 +1,80 @@
 ---
 # Jenkins Master - Blue-Green Deployment Management
 
-- name: Create blue-green management scripts
+- name: Create blue-green management scripts for all teams
   template:
-    src: "{{ item.src }}"
-    dest: "{{ jenkins_master_home_dir }}/scripts/{{ item.dest }}"
-    owner: "{{ jenkins_master_user }}"
-    group: "{{ jenkins_master_user }}"
+    src: "{{ team_script.script }}"
+    dest: "{{ jenkins_home_dir }}/scripts/{{ team_script.script | regex_replace('\\.j2$', '') | regex_replace('(.*)', '\\1-' + team_script.team.team_name + '.sh') }}"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_user }}"
     mode: '0755'
-  loop:
-    - { src: 'blue-green-switch.sh.j2', dest: 'blue-green-switch-{{ jenkins_master_config.team_name }}.sh' }
-    - { src: 'blue-green-healthcheck.sh.j2', dest: 'blue-green-healthcheck-{{ jenkins_master_config.team_name }}.sh' }
-    - { src: 'blue-green-monitor.sh.j2', dest: 'blue-green-monitor-{{ jenkins_master_config.team_name }}.sh' }
+  vars:
+    item: "{{ team_script.team }}"  # Set context for template (templates expect 'item')
+  loop: >-
+    {%- set scripts = ['blue-green-switch.sh.j2', 'blue-green-healthcheck.sh.j2', 'blue-green-monitor.sh.j2'] -%}
+    {%- set result = [] -%}
+    {%- for team in jenkins_effective_config -%}
+      {%- for script in scripts -%}
+        {%- set _ = result.append({'team': team, 'script': script}) -%}
+      {%- endfor -%}
+    {%- endfor -%}
+    {{ result }}
+  loop_control:
+    loop_var: team_script
+    label: "{{ team_script.team.team_name }}-{{ team_script.script | regex_replace('\\.j2$', '') }}"
   tags: ['blue-green', 'scripts']
 
-- name: Create blue-green state tracking file
+- name: Create blue-green state tracking file for each team
   template:
     src: blue-green-state.json.j2
-    dest: "{{ jenkins_master_home_dir }}/{{ jenkins_master_config.team_name }}/blue-green-state.json"
-    owner: "{{ jenkins_master_user }}"
-    group: "{{ jenkins_master_user }}"
+    dest: "{{ jenkins_home_dir }}/{{ item.team_name }}/blue-green-state.json"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_user }}"
     mode: '0644'
+  vars:
+    jenkins_master_config: "{{ item }}"  # Keep this for the JSON template
+  loop: "{{ jenkins_effective_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
   tags: ['blue-green', 'state']
 
 # HAProxy configuration is managed by the high-availability role
 
-- name: Verify active environment is running
+- name: Verify active environment is running for all teams
   uri:
-    url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_config.ports.web }}/login"
+    url: "http://{{ jenkins_verification_host | default(ansible_default_ipv4.address | default('localhost')) }}:{{ item.ports.web }}/login"
     method: GET
     status_code: [200, 403]  # 403 is acceptable for initial setup
   register: active_env_check
   retries: 10
   delay: 30
-  when: jenkins_master_config.active_environment is defined
+  loop: "{{ jenkins_effective_config }}"
+  loop_control:
+    label: "{{ item.team_name }}-{{ item.active_environment }}"
+  when: item.active_environment is defined
   tags: ['blue-green', 'verify']
 
-- name: Display blue-green deployment status
+- name: Display blue-green deployment status for all teams
   debug:
     msg: |
-      Jenkins Blue-Green Deployment Status for {{ jenkins_master_config.team_name | upper }}:
+      Jenkins Blue-Green Deployment Status:
       
-      Team: {{ jenkins_master_config.team_name }}
-      Active Environment: {{ jenkins_master_config.active_environment | upper }}
-      Web URL: http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_config.ports.web }}
-      Agent Port: {{ jenkins_master_config.ports.agent }}
+      Deployment Mode: {{ jenkins_deployment_mode }}
+      Total Teams: {{ jenkins_effective_config | length }}
       
-      Blue Container: jenkins-{{ jenkins_master_config.team_name }}-blue ({{ 'RUNNING' if jenkins_master_config.active_environment == 'blue' else 'STOPPED' }})
-      Green Container: jenkins-{{ jenkins_master_config.team_name }}-green ({{ 'RUNNING' if jenkins_master_config.active_environment == 'green' else 'STOPPED' }})
+      {% for team in jenkins_effective_config %}
+      === {{ team.team_name | upper }} TEAM ===
+      Active Environment: {{ team.active_environment | upper }}
+      Web URL: http://{{ jenkins_verification_host | default(ansible_default_ipv4.address | default('localhost')) }}:{{ team.ports.web }}
+      Agent Port: {{ team.ports.agent }}
+      Blue Container: jenkins-{{ team.team_name }}-blue ({{ 'RUNNING' if team.active_environment == 'blue' else 'STOPPED' }})
+      Green Container: jenkins-{{ team.team_name }}-green ({{ 'RUNNING' if team.active_environment == 'green' else 'STOPPED' }})
+      Resources: {{ team.resources.memory }} RAM, {{ team.resources.cpu }} CPU
+      Management Scripts:
+      - Switch: {{ jenkins_home_dir }}/scripts/blue-green-switch-{{ team.team_name }}.sh
+      - Health: {{ jenkins_home_dir }}/scripts/blue-green-healthcheck-{{ team.team_name }}.sh
       
+      {% endfor %}
       Container Runtime: {{ jenkins_master_container_runtime }}
       Network: {{ jenkins_master_network_name }}
-      Resources: {{ jenkins_master_config.resources.memory }} RAM, {{ jenkins_master_config.resources.cpu }} CPU
-      
-      Management Scripts:
-      - Switch Environment: {{ jenkins_master_home_dir }}/scripts/blue-green-switch-{{ jenkins_master_config.team_name }}.sh
-      - Health Check: {{ jenkins_master_home_dir }}/scripts/blue-green-healthcheck-{{ jenkins_master_config.team_name }}.sh
-      - Monitor: {{ jenkins_master_home_dir }}/scripts/blue-green-monitor-{{ jenkins_master_config.team_name }}.sh
   tags: ['blue-green', 'info']

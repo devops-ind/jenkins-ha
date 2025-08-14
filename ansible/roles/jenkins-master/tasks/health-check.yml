@@ -3,7 +3,7 @@
 
 - name: Wait for active Jenkins environment to be ready
   uri:
-    url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_config.ports.web }}/login"
+    url: "http://{{ jenkins_verification_host | default(ansible_default_ipv4.address | default('localhost')) }}:{{ jenkins_master_config.ports.web }}/login"
     method: GET
     status_code: [200, 403]
   retries: "{{ jenkins_master_health_check_retries }}"
@@ -14,13 +14,13 @@
 - name: Check Jenkins agent port connectivity
   wait_for:
     port: "{{ jenkins_master_config.ports.agent }}"
-    host: "{{ ansible_default_ipv4.address }}"
+    host: "{{ jenkins_verification_host | default(ansible_default_ipv4.address | default('localhost')) }}"
     timeout: "{{ jenkins_master_health_check_timeout }}"
   tags: ['health', 'agent']
 
 - name: Verify Jenkins API accessibility
   uri:
-    url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_config.ports.web }}/api/json"
+    url: "http://{{ jenkins_verification_host | default(ansible_default_ipv4.address | default('localhost')) }}:{{ jenkins_master_config.ports.web }}/api/json"
     method: GET
     status_code: [200, 403]
   register: jenkins_api_check
@@ -52,8 +52,8 @@
 - name: Create health check monitoring script
   template:
     src: health-monitor.sh.j2
-    dest: "{{ jenkins_master_home_dir }}/scripts/health-monitor-{{ jenkins_master_config.team_name }}.sh"
-    owner: "{{ jenkins_master_user }}"
-    group: "{{ jenkins_master_user }}"
+    dest: "{{ jenkins_home_dir }}/scripts/health-monitor-{{ jenkins_master_config.team_name }}.sh"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_user }}"
     mode: '0755'
   tags: ['health', 'monitoring']

@@ -11,7 +11,7 @@ jenkins_teams:
       cpu: "2.0"
     env_vars:
       JENKINS_TEAM: "devops"
-      JENKINS_ADMIN_PASSWORD: "{{ vault_jenkins_admin_password | default('admin123') }}"
+      JENKINS_ADMIN_PASSWORD: "admin123"
     labels:
       team: "devops"
       tier: "production"
@@ -19,8 +19,8 @@ jenkins_teams:
     credentials:
       - type: "usernamePassword"
         id: "devops-git-credentials"
-        username: "{{ vault_git_username | default('admin') }}"
-        password: "{{ vault_git_password | default('git123') }}"
+        username: "admin"
+        password: "git123"
         description: "DevOps Team Git Credentials"
 
   - team_name: developer
@@ -34,7 +34,7 @@ jenkins_teams:
       cpu: "1.5"
     env_vars:
       JENKINS_TEAM: "developer"
-      JENKINS_ADMIN_PASSWORD: "{{ vault_jenkins_admin_password | default('admin123') }}"
+      JENKINS_ADMIN_PASSWORD: "admin123"
     labels:
       team: "developer"
       tier: "production"
@@ -42,29 +42,29 @@ jenkins_teams:
     credentials:
       - type: "usernamePassword"
         id: "developer-git-credentials"
-        username: "{{ vault_git_username | default('admin') }}"
-        password: "{{ vault_git_password | default('git123') }}"
+        username: "admin"
+        password: "git123"
         description: "Developer Team Git Credentials"
 
-  - team_name: qa
-    active_environment: green
-    blue_green_enabled: true
-    ports:
-      web: 8082
-      agent: 50002
-    resources:
-      memory: "2g"
-      cpu: "1.0"
-    env_vars:
-      JENKINS_TEAM: "qa"
-      JENKINS_ADMIN_PASSWORD: "{{ vault_jenkins_admin_password | default('admin123') }}"
-    labels:
-      team: "qa"
-      tier: "production"
-      environment: "{{ deployment_mode | default('local') }}"
-    credentials:
-      - type: "usernamePassword"
-        id: "qa-git-credentials"
-        username: "{{ vault_git_username | default('admin') }}"
-        password: "{{ vault_git_password | default('git123') }}"
-        description: "QA Team Git Credentials"
+  # - team_name: qa
+  #   active_environment: green
+  #   blue_green_enabled: true
+  #   ports:
+  #     web: 8082
+  #     agent: 50002
+  #   resources:
+  #     memory: "2g"
+  #     cpu: "1.0"
+  #   env_vars:
+  #     JENKINS_TEAM: "qa"
+  #     JENKINS_ADMIN_PASSWORD: "admin123"
+  #   labels:
+  #     team: "qa"
+  #     tier: "production"
+  #     environment: "{{ deployment_mode | default('local') }}"
+  #   credentials:
+  #     - type: "usernamePassword"
+  #       id: "qa-git-credentials"
+  #       username: "admin"
+  #       password: "git123"
+  #       description: "QA Team Git Credentials"

@@ -1,15 +1,34 @@
 ---
 # HAProxy High Availability - Docker Container Management
+#
+# TROUBLESHOOTING: /proc/sys/net/ipv4/ip_unprivileged_port_start errors
+# =====================================================================
+# The error "unable to start container process: error during container init: 
+# open /proc/sys/net/ipv4/ip_unprivileged_port_start: no such file or directory"
+# occurs when HAProxy Alpine images try to access kernel network parameters 
+# that aren't available in containerized environments.
+#
+# SOLUTIONS IMPLEMENTED:
+# 1. Use Debian-based HAProxy image (2.8) instead of Alpine (2.8-alpine) in devcontainer/local modes
+# 2. Enable privileged mode for devcontainer environments
+# 3. Add NET_BIND_SERVICE and NET_ADMIN capabilities
+# 4. Set security options: seccomp=unconfined, apparmor=unconfined
+# 5. Configure sysctls: net.ipv4.ip_unprivileged_port_start=80
+# 6. Dual deployment strategy: try standard first, fallback to compatibility mode
+#
+# ENVIRONMENT DETECTION:
+# - deployment_mode: 'devcontainer' or 'local' triggers compatibility mode
+# - _is_devcontainer fact detects REMOTE_CONTAINERS or CODESPACES environment variables
 
-- name: Deploy HAProxy container (Docker)
+- name: Attempt to deploy HAProxy container with standard configuration
   community.docker.docker_container:
     name: "jenkins-haproxy"
-    image: "{{ haproxy_image_registry }}/{{ haproxy_image_name }}:{{ haproxy_image_tag }}"
+    image: "{{ _haproxy_image }}"
     state: started
     restart_policy: "{{ haproxy_restart_policy }}"
     network_mode: "{{ haproxy_network_mode }}"
     ports: "{{ _haproxy_ports }}"
-    volumes: "{{ _haproxy_volumes }}"
+    volumes: "{{ _haproxy_volumes | select() | list }}"
     env: "{{ haproxy_env_vars }}"
     memory: "{{ haproxy_memory_limit }}"
     cpus: "{{ haproxy_cpu_limit }}"
@@ -18,14 +37,15 @@
       max-size: "{{ haproxy_log_max_size }}"
       max-file: "{{ haproxy_log_max_files }}"
     labels: "{{ haproxy_labels | combine(_haproxy_dynamic_labels) }}"
+    user: "{{ _haproxy_container_user }}"
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:{{ haproxy_stats_port | default(8404) }}/stats", "||", "exit", "1"]
+      test: ["CMD-SHELL", "{{ _haproxy_health_check_command }}"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
-    user: "{{ haproxy_uid }}:{{ haproxy_gid }}"
   vars:
+    _haproxy_image: "{{ haproxy_image_registry }}/{{ haproxy_image_name }}:{{ haproxy_image_tag }}"
     _haproxy_ports: "{{ [] if haproxy_network_mode == 'host' else _haproxy_port_mappings }}"
     _haproxy_port_mappings:
       - "80:80"
@@ -35,7 +55,7 @@
       # HAProxy configuration
       - "/etc/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro"
       - "/etc/haproxy/conf.d:/usr/local/etc/haproxy/conf.d:ro"
-      # SSL certificates
+      # SSL certificates (only if SSL enabled)
       - "{{ ssl_enabled | ternary('/etc/haproxy/ssl/combined.pem:/usr/local/etc/haproxy/ssl/combined.pem:ro', '') }}"
       # Error pages
       - "/etc/haproxy/errors:/etc/haproxy/errors:ro"
@@ -45,12 +65,134 @@
       - "/var/lib/haproxy:/var/lib/haproxy:rw"
       # Admin socket (volume)
       - "haproxy-admin-socket:/run/haproxy:rw"
+    _haproxy_container_user: "{{ '' if deployment_mode in ['devcontainer', 'local'] else (haproxy_uid ~ ':' ~ haproxy_gid) }}"
+    _haproxy_health_check_command: >-
+      curl -f http://localhost:{{ haproxy_stats_port | default(8404) }}/stats || wget --quiet --tries=1 --spider http://localhost:{{ haproxy_stats_port | default(8404) }}/stats || exit 1
     _haproxy_dynamic_labels:
       teams: "{{ jenkins_teams | default([]) | map(attribute='team_name') | join(',') }}"
       ssl_enabled: "{{ ssl_enabled | default(false) | string }}"
       version: "{{ haproxy_image_tag }}"
-  register: haproxy_container_docker
+      deployment_mode: "{{ deployment_mode }}"
+  register: haproxy_container_standard
+  ignore_errors: true
+  when: not (_is_devcontainer | default(false))
   tags: ['containers', 'docker', 'deploy']
+
+- name: Deploy HAProxy container with DevContainer compatibility (Docker)
+  community.docker.docker_container:
+    name: "jenkins-haproxy"
+    image: "{{ _haproxy_image }}"
+    state: started
+    restart_policy: "{{ haproxy_restart_policy }}"
+    network_mode: "{{ haproxy_network_mode }}"
+    ports: "{{ _haproxy_ports }}"
+    volumes: "{{ _haproxy_volumes | select() | list }}"
+    env: "{{ haproxy_env_vars }}"
+    memory: "{{ haproxy_memory_limit }}"
+    cpus: "{{ haproxy_cpu_limit }}"
+    log_driver: "{{ haproxy_log_driver }}"
+    log_options:
+      max-size: "{{ haproxy_log_max_size }}"
+      max-file: "{{ haproxy_log_max_files }}"
+    labels: "{{ haproxy_labels | combine(_haproxy_dynamic_labels) }}"
+    # DevContainer compatibility settings - essential for /proc/sys access
+    security_opts: "{{ _haproxy_security_opts }}"
+    sysctls: "{{ _haproxy_sysctls }}"
+    user: "{{ _haproxy_container_user }}"
+    privileged: "{{ _haproxy_privileged }}"
+    capabilities: "{{ _haproxy_capabilities }}"
+    healthcheck:
+      test: ["CMD-SHELL", "{{ _haproxy_health_check_command }}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+  vars:
+    _haproxy_image: "{{ haproxy_image_registry }}/{{ haproxy_image_name }}:{{ _haproxy_tag }}"
+    _haproxy_tag: "{{ haproxy_image_alternatives[deployment_mode] | default(haproxy_image_tag) }}"
+    _haproxy_ports: "{{ [] if haproxy_network_mode == 'host' else _haproxy_port_mappings }}"
+    _haproxy_port_mappings:
+      - "80:80"
+      - "443:443"
+      - "{{ haproxy_stats_port | default(8404) }}:{{ haproxy_stats_port | default(8404) }}"
+    _haproxy_volumes:
+      # HAProxy configuration
+      - "/etc/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro"
+      - "/etc/haproxy/conf.d:/usr/local/etc/haproxy/conf.d:ro"
+      # SSL certificates (only if SSL enabled)
+      - "{{ ssl_enabled | ternary('/etc/haproxy/ssl/combined.pem:/usr/local/etc/haproxy/ssl/combined.pem:ro', '') }}"
+      # Error pages
+      - "/etc/haproxy/errors:/etc/haproxy/errors:ro"
+      # Logs (host directory)
+      - "/var/log/haproxy:/var/log/haproxy:rw"
+      # Runtime files
+      - "/var/lib/haproxy:/var/lib/haproxy:rw"
+      # Admin socket (volume)
+      - "haproxy-admin-socket:/run/haproxy:rw"
+    # DevContainer compatibility configurations - addresses /proc/sys/net/ipv4/ip_unprivileged_port_start issue
+    _haproxy_privileged: "{{ deployment_mode in ['devcontainer', 'local'] }}"
+    _haproxy_container_user: "{{ '' if deployment_mode in ['devcontainer', 'local'] else (haproxy_uid ~ ':' ~ haproxy_gid) }}"
+    _haproxy_capabilities: "{{ _haproxy_devcontainer_caps if deployment_mode in ['devcontainer', 'local'] else [] }}"
+    _haproxy_devcontainer_caps:
+      - "NET_BIND_SERVICE"
+      - "NET_ADMIN"
+    _haproxy_security_opts: "{{ _haproxy_devcontainer_security_opts if deployment_mode in ['devcontainer', 'local'] else [] }}"
+    _haproxy_devcontainer_security_opts:
+      - "seccomp=unconfined"
+      - "apparmor=unconfined"
+    _haproxy_sysctls: "{{ _haproxy_devcontainer_sysctls if deployment_mode in ['devcontainer', 'local'] else {} }}"
+    _haproxy_devcontainer_sysctls:
+      net.ipv4.ip_unprivileged_port_start: "80"
+    _haproxy_health_check_command: >-
+      {% if _haproxy_tag.endswith('-alpine') %}
+      wget --quiet --tries=1 --spider http://localhost:{{ haproxy_stats_port | default(8404) }}/stats || exit 1
+      {% else %}
+      curl -f http://localhost:{{ haproxy_stats_port | default(8404) }}/stats || exit 1
+      {% endif %}
+    _haproxy_dynamic_labels:
+      teams: "{{ jenkins_teams | default([]) | map(attribute='team_name') | join(',') }}"
+      ssl_enabled: "{{ ssl_enabled | default(false) | string }}"
+      version: "{{ _haproxy_tag }}"
+      deployment_mode: "{{ deployment_mode }}"
+  register: haproxy_container_devcontainer
+  when: _is_devcontainer | default(false) or haproxy_container_standard is failed
+  tags: ['containers', 'docker', 'deploy']
+
+- name: Set deployment result from successful container launch
+  set_fact:
+    haproxy_container_docker: "{{ haproxy_container_standard if haproxy_container_standard is succeeded else haproxy_container_devcontainer }}"
+
+- name: Debug HAProxy container configuration (DevContainer)
+  debug:
+    msg: |
+      HAProxy Container Configuration:
+      Image: {{ _haproxy_image }}
+      Deployment Mode: {{ deployment_mode }}
+      Container State: {{ haproxy_container_docker.container.State.Status | default('Unknown') }}
+      Privileged: {{ _haproxy_privileged }}
+      User: {{ _haproxy_container_user }}
+      Security Opts: {{ _haproxy_security_opts }}
+      Sysctls: {{ _haproxy_sysctls }}
+      Capabilities: {{ _haproxy_capabilities }}
+  when: deployment_mode in ['devcontainer', 'local'] and ansible_verbosity >= 1
+  tags: ['containers', 'docker', 'debug']
+
+- name: Fail if both container deployment attempts failed
+  fail:
+    msg: |
+      Failed to deploy HAProxy container with both standard and devcontainer compatibility modes.
+      Standard deployment error: {{ haproxy_container_standard.msg | default('N/A') }}
+      DevContainer deployment error: {{ haproxy_container_devcontainer.msg | default('N/A') }}
+      
+      Common solutions:
+      1. Use Debian-based HAProxy image: docker.io/haproxy:2.8
+      2. Run with privileged mode in devcontainer environments
+      3. Add NET_BIND_SERVICE and NET_ADMIN capabilities
+      4. Set security options: seccomp=unconfined, apparmor=unconfined
+  when: 
+    - haproxy_container_standard is failed
+    - haproxy_container_devcontainer is failed
+  tags: ['containers', 'docker', 'error']
 
 - name: Wait for HAProxy container to be ready (Docker)
   pause:
@@ -73,5 +215,5 @@
       Health: {{ haproxy_container_info.container.State.Health.Status | default('N/A') }}
       Image: {{ haproxy_container_info.container.Config.Image | default('N/A') }}
       Network Mode: {{ haproxy_container_info.container.HostConfig.NetworkMode | default('N/A') }}
-  when: haproxy_container_info.exists
+  when: haproxy_container_info is defined and haproxy_container_info.exists | default(false)
   tags: ['containers', 'docker', 'info']

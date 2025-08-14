@@ -14,6 +14,14 @@
   become: yes
   tags: ['network', 'firewall', 'redhat']
 
+- name: Check if ufw is available
+  command: which ufw
+  register: ufw_check
+  failed_when: false
+  changed_when: false
+  when: ansible_os_family == "Debian"
+  tags: ['network', 'firewall', 'debian']
+
 - name: Configure firewall for HAProxy services (Debian-based)
   community.general.ufw:
     rule: allow
@@ -23,8 +31,18 @@
     - "80"
     - "443"
     - "{{ haproxy_stats_port | default(8404) }}"
-  when: ansible_os_family == "Debian"
+  when: 
+    - ansible_os_family == "Debian"
+    - ufw_check.rc == 0
   become: yes
+  tags: ['network', 'firewall', 'debian']
+
+- name: Skip firewall configuration (ufw not available)
+  debug:
+    msg: "Skipping firewall configuration - ufw not installed (development environment)"
+  when: 
+    - ansible_os_family == "Debian"
+    - ufw_check.rc != 0
   tags: ['network', 'firewall', 'debian']
 
 - name: Open custom ports for teams
@@ -39,6 +57,7 @@
   when: 
     - ansible_os_family == "Debian"
     - jenkins_teams is defined
+    - ufw_check.rc == 0
   become: yes
   tags: ['network', 'firewall', 'teams', 'debian']
 

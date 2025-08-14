@@ -36,33 +36,50 @@
 - name: Validate container runtime
   assert:
     that:
-      - jenkins_master_container_runtime in ['docker', 'podman']
-    fail_msg: "Container runtime must be 'docker' or 'podman'"
+      - jenkins_master_container_runtime == 'docker'
+    fail_msg: "Container runtime must be 'docker'"
     success_msg: "Container runtime validation passed"
   tags: ['validate']
 
-- name: Validate resource configuration
+- name: Validate resource configuration for all teams
   assert:
     that:
-      - jenkins_master_config.resources.memory is defined
-      - jenkins_master_config.resources.cpu is defined
-      - jenkins_master_config.resources.memory | regex_search('[0-9]+[gm]')
-      - jenkins_master_config.resources.cpu | string | float > 0
-    fail_msg: "Resource configuration must include valid memory (e.g., '2g') and CPU (e.g., '1.0')"
-    success_msg: "Resource configuration validation passed"
+      - item.resources.memory is defined
+      - item.resources.cpu is defined
+      - item.resources.memory | regex_search('[0-9]+[gm]')
+      - item.resources.cpu | string | float > 0
+    fail_msg: "Resource configuration for {{ item.team_name }} must include valid memory (e.g., '2g') and CPU (e.g., '1.0')"
+    success_msg: "Resource configuration validation passed for {{ item.team_name }}"
+  loop: "{{ jenkins_effective_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
   tags: ['validate']
 
-- name: Check container runtime availability
-  command: "{{ jenkins_master_container_runtime }} --version"
-  register: container_runtime_check
+- name: Validate port conflicts between teams
+  assert:
+    that:
+      - jenkins_effective_config | map(attribute='ports.web') | list | unique | length == jenkins_effective_config | length
+      - jenkins_effective_config | map(attribute='ports.agent') | list | unique | length == jenkins_effective_config | length
+    fail_msg: |
+      Port conflicts detected between teams:
+      Web ports: {{ jenkins_effective_config | map(attribute='ports.web') | list }}
+      Agent ports: {{ jenkins_effective_config | map(attribute='ports.agent') | list }}
+      All ports must be unique across teams.
+    success_msg: "No port conflicts detected between teams"
+  when: jenkins_effective_config | length > 1
+  tags: ['validate']
+
+- name: Check Docker availability
+  command: "docker --version"
+  register: docker_check
   failed_when: false
   changed_when: false
   tags: ['validate']
 
-- name: Validate container runtime is available
+- name: Validate Docker is available
   assert:
     that:
-      - container_runtime_check.rc == 0
-    fail_msg: "Container runtime {{ jenkins_master_container_runtime }} is not available"
-    success_msg: "Container runtime {{ jenkins_master_container_runtime }} is available"
+      - docker_check.rc == 0
+    fail_msg: "Docker is not available"
+    success_msg: "Docker is available"
   tags: ['validate']

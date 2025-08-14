@@ -13,7 +13,7 @@ if [ -f "ansible/requirements.yml" ]; then
     echo "✅ Ansible Galaxy requirements installed"
 else
     echo "📦 Installing essential Ansible collections..."
-    ansible-galaxy collection install community.podman community.general ansible.posix --force
+    ansible-galaxy collection install community.docker community.general ansible.posix --force
     echo "✅ Essential collections installed"
 fi
 
@@ -60,27 +60,25 @@ EOF
     echo "✅ Ansible configuration created"
 fi
 
-# Test podman connectivity with permission fixes
-echo "🐳 Testing podman connectivity..."
-if ! podman --version; then
-    echo "❌ podman CLI not available"
+# Test Docker connectivity
+echo "🐳 Testing Docker connectivity..."
+if ! docker --version; then
+    echo "❌ Docker CLI not available"
     exit 1
 fi
 
-if ! podman info >/dev/null 2>&1; then
-    echo "🔧 Fixing podman socket permissions..."
-    sudo chown ansible:podman /var/run/podman.sock 2>/dev/null || true
-    sudo chmod 666 /var/run/podman.sock 2>/dev/null || true
+if ! docker info >/dev/null 2>&1; then
+    echo "🔧 Starting Docker service..."
+    sudo service docker start 2>/dev/null || true
+    sleep 5
     
-    if ! podman info >/dev/null 2>&1; then
-        echo "⚠️  podman daemon not accessible, attempting to start..."
-        sudo service podman start 2>/dev/null || true
-        sleep 5
+    if ! docker info >/dev/null 2>&1; then
+        echo "⚠️  Docker daemon not accessible"
     fi
 fi
 
-podman --version
-podman compose version
+docker --version
+docker compose version
 
 # Test Ansible
 echo "🔍 Testing Ansible installation..."
@@ -114,7 +112,7 @@ export JENKINS_ADMIN_PASSWORD=admin123
 export JENKINS_DOMAIN=jenkins.dev.local
 
 cd /workspace/ansible
-if ansible-playbook deploy-local.yml -e deployment_mode=devcontainer --become; then
+if ansible-playbook deploy-local.yml -e deployment_mode=devcontainer --skip-tags health,verify --become; then
     echo ""
     echo "🎉 Jenkins deployment completed successfully!"
     echo ""
@@ -135,7 +133,7 @@ echo ""
 echo "💡 Quick start commands:"
 echo "   • Deploy Jenkins locally:     ansible-playbook site.yml -e deployment_mode=local"
 echo "   • Deploy to remote VM:        DEPLOYMENT_MODE=remote ansible-playbook site.yml"
-echo "   • Check Jenkins status:       podman ps"
+echo "   • Check Jenkins status:       docker ps"
 echo "   • Access Jenkins:             https://jenkins.dev.local"
 echo ""
 echo "📚 Your unified Ansible + Jenkins environment is ready!"

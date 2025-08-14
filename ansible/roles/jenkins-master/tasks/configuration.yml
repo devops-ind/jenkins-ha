@@ -4,18 +4,18 @@
 
 - name: Create Jenkins system user and group
   group:
-    name: "{{ jenkins_master_user }}"
-    gid: "{{ jenkins_master_gid }}"
+    name: "{{ jenkins_user }}"
+    gid: "{{ jenkins_gid }}"
     state: present
   become: yes
   tags: ['config', 'user']
 
 - name: Create Jenkins system user
   user:
-    name: "{{ jenkins_master_user }}"
-    uid: "{{ jenkins_master_uid }}"
-    group: "{{ jenkins_master_user }}"
-    home: "{{ jenkins_master_home_dir }}"
+    name: "{{ jenkins_user }}"
+    uid: "{{ jenkins_uid }}"
+    group: "{{ jenkins_user }}"
+    home: "{{ jenkins_home_dir }}"
     shell: /bin/bash
     system: yes
     create_home: yes
@@ -25,20 +25,20 @@
 # Create Jenkins initialization script directory
 - name: Create Jenkins init.groovy.d directory
   file:
-    path: "{{ jenkins_master_home_dir }}/init.groovy.d"
+    path: "{{ jenkins_home_dir }}/init.groovy.d"
     state: directory
-    owner: "{{ jenkins_master_user }}"
-    group: "{{ jenkins_master_user }}"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_user }}"
     mode: '0755'
   tags: ['config', 'directories']
 
 # Create directories for all teams (single or multi-team)
 - name: Create team-specific Jenkins directories
   file:
-    path: "{{ jenkins_master_home_dir }}/{{ item.team_name }}"
+    path: "{{ jenkins_home_dir }}/{{ item.team_name }}"
     state: directory
-    owner: "{{ jenkins_master_user }}"
-    group: "{{ jenkins_master_user }}"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_user }}"
     mode: '0755'
     recurse: yes
   loop: "{{ jenkins_effective_config }}"
@@ -48,10 +48,10 @@
 
 - name: Create blue-green environment directories for all teams
   file:
-    path: "{{ jenkins_master_home_dir }}/{{ item.0.team_name }}/{{ item.1 }}"
+    path: "{{ jenkins_home_dir }}/{{ item.0.team_name }}/{{ item.1 }}"
     state: directory
-    owner: "{{ jenkins_master_user }}"
-    group: "{{ jenkins_master_user }}"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_user }}"
     mode: '0755'
     recurse: yes
   with_nested:
@@ -63,19 +63,19 @@
 
 - name: Create Jenkins scripts directory
   file:
-    path: "{{ jenkins_master_home_dir }}/scripts"
+    path: "{{ jenkins_home_dir }}/scripts"
     state: directory
-    owner: "{{ jenkins_master_user }}"
-    group: "{{ jenkins_master_user }}"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_user }}"
     mode: '0755'
   tags: ['config', 'directories', 'scripts']
 
 - name: Create Jenkins Configuration as Code directories for all teams
   file:
-    path: "{{ jenkins_master_home_dir }}/{{ item.0.team_name }}/{{ item.1 }}/casc_configs"
+    path: "{{ jenkins_home_dir }}/{{ item.0.team_name }}/{{ item.1 }}/casc_configs"
     state: directory
-    owner: "{{ jenkins_master_user }}"
-    group: "{{ jenkins_master_user }}"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_user }}"
     mode: '0755'
   with_nested:
     - "{{ jenkins_effective_config }}"
@@ -87,9 +87,9 @@
 - name: Generate Jenkins Configuration as Code files for all teams
   template:
     src: jcasc/jenkins-config.yml.j2
-    dest: "{{ jenkins_master_home_dir }}/{{ item.0.team_name }}/{{ item.1 }}/casc_configs/jenkins.yaml"
-    owner: "{{ jenkins_master_user }}"
-    group: "{{ jenkins_master_user }}"
+    dest: "{{ jenkins_home_dir }}/{{ item.0.team_name }}/{{ item.1 }}/casc_configs/jenkins.yaml"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_user }}"
     mode: '0644'
   with_nested:
     - "{{ jenkins_effective_config }}"
@@ -106,9 +106,9 @@
 - name: Copy DSL script approval initialization script
   copy:
     src: init-scripts/setup-dsl-approval.groovy
-    dest: "{{ jenkins_master_home_dir }}/init.groovy.d/01-setup-dsl-approval.groovy"
-    owner: "{{ jenkins_master_user }}"
-    group: "{{ jenkins_master_user }}"
+    dest: "{{ jenkins_home_dir }}/init.groovy.d/01-setup-dsl-approval.groovy"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_user }}"
     mode: '0644'
   tags: ['config', 'init-scripts', 'dsl']
   notify: restart jenkins

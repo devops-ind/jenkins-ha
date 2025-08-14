@@ -32,10 +32,21 @@
   import_tasks: networking.yml
   tags: ['network', 'setup']
 
+# Container socket detection and validation
+- name: Import socket detection tasks
+  import_tasks: socket-detection.yml
+  tags: ['socket', 'setup']
+
 # Volume management (unified approach)
 - name: Import volume management tasks
   import_tasks: volumes.yml
   tags: ['volumes', 'setup']
+
+# Custom team image building (NEW STEP)
+- name: Import custom image building tasks
+  import_tasks: custom-image-build.yml
+  when: jenkins_master_build_custom_images | default(true)
+  tags: ['custom-images', 'build']
 
 # Container deployment (supports both modes)
 - name: Import container management tasks

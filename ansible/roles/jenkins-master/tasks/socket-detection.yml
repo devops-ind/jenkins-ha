@@ -1,0 +1,39 @@
+---
+# Docker Socket Detection and Validation
+# Determines available Docker socket paths for Docker-in-Docker functionality
+
+- name: Check if Docker-in-Docker functionality is enabled
+  set_fact:
+    jenkins_socket_mount_needed: "{{ jenkins_master_docker_in_docker_enabled | default(true) and jenkins_master_socket_mount_enabled | default(true) }}"
+  tags: ['socket', 'detection']
+
+- name: Check Docker socket availability
+  stat:
+    path: "{{ jenkins_master_socket_path_docker }}"
+  register: jenkins_docker_socket_check
+  when: jenkins_socket_mount_needed | bool
+  tags: ['socket', 'detection']
+
+- name: Set socket mount status
+  set_fact:
+    jenkins_socket_available: "{{ jenkins_docker_socket_check.stat.exists | default(false) and jenkins_socket_mount_needed | bool }}"
+    jenkins_socket_mount_string: "{{ jenkins_master_socket_path_docker }}:/var/run/docker.sock"
+  tags: ['socket', 'detection']
+
+- name: Display socket detection results
+  debug:
+    msg: |
+      Docker Socket Detection Results:
+      - Docker-in-Docker Enabled: {{ jenkins_master_docker_in_docker_enabled | default(true) }}
+      - Socket Mount Enabled: {{ jenkins_master_socket_mount_enabled | default(true) }}
+      - Docker Socket Path: {{ jenkins_master_socket_path_docker }}
+      - Docker Socket Exists: {{ jenkins_docker_socket_check.stat.exists | default(false) }}
+      - Socket Available: {{ jenkins_socket_available | default(false) }}
+      {% if not jenkins_socket_available | default(false) and jenkins_socket_mount_needed | bool %}
+      
+      ⚠️  WARNING: Docker socket not found!
+      - Docker-in-Docker functionality will be disabled
+      - Container builds from Jenkins will not work
+      - Ensure Docker service is running
+      {% endif %}
+  tags: ['socket', 'detection']

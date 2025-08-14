@@ -5,7 +5,7 @@
 # Environment identification
 deployment_environment: "local"
 environment_tier: "dev"
-deployment_mode: "local"
+deployment_mode: "devcontainer"  # Changed to devcontainer for better container compatibility
 
 # Local development versions
 jenkins_version: "2.426.1"
@@ -30,6 +30,7 @@ jenkins_enable_security: true
 jenkins_security_realm: "local"  # Keep default local auth
 jenkins_authorization_strategy: "logged_in_users_can_do_anything"
 enable_ssl: false  # Disabled for local development
+ssl_enabled: false  # Disable SSL for HAProxy
 jenkins_enable_csrf: false  # Disabled for easier local development
 jenkins_admin_password: "admin123"  # Simple password for local dev
 
@@ -44,19 +45,115 @@ backup_storage_type: "local"
 # Local monitoring settings
 jenkins_monitoring_enabled: true
 monitoring_enabled: true
+
+# Monitoring user configuration
+monitoring_user: "monitoring"
+monitoring_group: "monitoring"
+monitoring_uid: 1004
+monitoring_gid: 1004
+monitoring_home_dir: "/opt/monitoring"
+
+# Monitoring service configuration
 prometheus_enabled: true
+prometheus_port: 9090
+prometheus_version: "latest"
+prometheus_data_retention: "15d"
+prometheus_scrape_interval: "30s"
+prometheus_evaluation_interval: "30s"
+
 grafana_enabled: true
+grafana_port: 3000
+grafana_version: "latest"
+grafana_admin_user: "admin"
+grafana_admin_password: "admin123"
+grafana_allow_sign_up: false
+grafana_disable_gravatar: true
+
 alertmanager_enabled: false  # Disabled for local dev
+alertmanager_port: 9093
+alertmanager_version: "latest"
+
+node_exporter_enabled: true
+node_exporter_port: 9100
+node_exporter_version: "latest"
+
+cadvisor_enabled: true
+cadvisor_port: 8080
+
+# Grafana datasource configuration
+grafana_prometheus_datasource:
+  name: "Prometheus"
+  type: "prometheus"
+  access: "proxy"
+  url: "http://localhost:9090"
+  isDefault: true
+
+# Prometheus targets for local development
+prometheus_targets:
+  - job: "prometheus"
+    targets:
+      - "localhost:9090"
+  - job: "node-exporter"
+    targets:
+      - "localhost:9100"
+  - job: "jenkins"
+    targets:
+      - "localhost:8080"
+      - "localhost:8081"
 
 # Local resource limits (lighter for development)
 jenkins_master_memory: "2g"  # Less memory for local dev
 jenkins_master_cpu_limit: "1"
 jenkins_agents_max: 4
 
-# Local HA settings (disabled for single-node development)
-jenkins_ha_enabled: false
+# Local HA settings (enabled for multi-team development)
+jenkins_ha_enabled: true
 jenkins_cluster_size: 1
-jenkins_load_balancer_enabled: false
+jenkins_load_balancer_enabled: true
+
+# Multi-team configuration for HAProxy load balancing
+jenkins_teams:
+  - team_name: "devops"
+    active_environment: "blue"
+    ports:
+      web: 8080
+      agent: 50000
+    resources:
+      memory: "2g"
+      cpu: "1.0"
+    env_vars: {}
+    labels:
+      tier: "production"
+      environment: "local"
+  - team_name: "developer"
+    active_environment: "blue"
+    ports:
+      web: 8081
+      agent: 50001
+    resources:
+      memory: "2g"
+      cpu: "1.0"
+    env_vars: {}
+    labels:
+      tier: "production"
+      environment: "local"
+
+# HAProxy configuration for local development
+jenkins_domain: "localhost"
+jenkins_wildcard_domain: "*.localhost"
+haproxy_enabled: true
+haproxy_stats_enabled: true
+haproxy_stats_port: 8404
+haproxy_stats_user: "admin"
+haproxy_stats_password: "admin123"
+keepalived_enabled: false  # Disabled for local dev
+jenkins_vip: ""  # No VIP for local dev
+
+# HAProxy DevContainer compatibility settings
+# Use Debian-based image to avoid Alpine Linux /proc/sys/net/ipv4/ip_unprivileged_port_start issue
+haproxy_image_tag: "2.8"  # Debian-based instead of 2.8-alpine
+haproxy_container_runtime: "docker"
+haproxy_devcontainer_mode: true
 
 # Local image settings
 jenkins_master_image_tag: "latest"
@@ -92,6 +189,10 @@ build_jenkins_images: false  # Use pre-built images for faster dev
 skip_firewall_config: true
 skip_selinux_config: true
 skip_system_hardening: true
+
+# Monitoring Docker configuration
+monitoring_restart_policy: "unless-stopped"
+monitoring_docker_network: "{{ monitoring_network_name }}"
 
 # Debugging and development settings
 ansible_verbosity: 2

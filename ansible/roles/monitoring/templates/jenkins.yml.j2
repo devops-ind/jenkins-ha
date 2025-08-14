@@ -1,0 +1,35 @@
+groups:
+- name: jenkins
+  rules:
+  - alert: JenkinsDown
+    expr: up{job="jenkins"} == 0
+    for: 5m
+    labels:
+      severity: critical
+      service: jenkins
+      environment: {{ deployment_environment | default('local') }}
+    annotations:
+      summary: "Jenkins instance is down"
+      description: "Jenkins instance {{ "{{ $labels.instance }}" }} has been down for more than 5 minutes."
+
+  - alert: JenkinsHighQueueSize
+    expr: jenkins_queue_size_value > 10
+    for: 10m
+    labels:
+      severity: warning
+      service: jenkins
+      environment: {{ deployment_environment | default('local') }}
+    annotations:
+      summary: "Jenkins queue size is high"
+      description: "Jenkins queue size is {{ "{{ $value }}" }}, which is above the threshold of 10."
+
+  - alert: JenkinsHighBuildFailureRate
+    expr: rate(jenkins_builds_total{result="FAILURE"}[15m]) / rate(jenkins_builds_total[15m]) > 0.3
+    for: 15m
+    labels:
+      severity: warning
+      service: jenkins
+      environment: {{ deployment_environment | default('local') }}
+    annotations:
+      summary: "High Jenkins build failure rate"
+      description: "Jenkins build failure rate is {{ "{{ $value | humanizePercentage }}" }} over the last 15 minutes."

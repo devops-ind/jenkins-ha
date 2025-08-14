@@ -1,0 +1,35 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Jenkins Builds - {{ deployment_environment | default('local') | title }}",
+    "tags": ["jenkins", "builds"],
+    "style": "dark",
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": {
+      "from": "now-6h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Build Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(jenkins_builds_total[5m])",
+            "legendFormat": "Builds per second"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 0
+        }
+      }
+    ],
+    "version": 1
+  },
+  "overwrite": true
+}

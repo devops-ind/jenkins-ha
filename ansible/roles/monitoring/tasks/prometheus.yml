@@ -1,0 +1,54 @@
+---
+# Prometheus setup tasks
+- name: Create Prometheus configuration
+  template:
+    src: prometheus.yml.j2
+    dest: "{{ monitoring_home_dir }}/prometheus/config/prometheus.yml"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  notify: restart prometheus
+
+- name: Create Prometheus rules directory
+  file:
+    path: "{{ monitoring_home_dir }}/prometheus/rules"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+
+- name: Deploy Prometheus alerting rules
+  template:
+    src: "{{ item }}.j2"
+    dest: "{{ monitoring_home_dir }}/prometheus/rules/{{ item }}"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  loop:
+    - jenkins.yml
+    - infrastructure.yml
+  notify: restart prometheus
+
+- name: Deploy Prometheus container
+  community.docker.docker_container:
+    name: prometheus-{{ deployment_environment | default('local') }}
+    image: "prom/prometheus:{{ prometheus_version }}"
+    state: started
+    restart_policy: "{{ monitoring_restart_policy }}"
+    ports:
+      - "{{ prometheus_port }}:9090"
+    volumes:
+      - "{{ monitoring_home_dir }}/prometheus/config:/etc/prometheus"
+      - "{{ monitoring_home_dir }}/prometheus/data:/prometheus"
+      - "{{ monitoring_home_dir }}/prometheus/rules:/etc/prometheus/rules"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time={{ prometheus_data_retention }}'
+      - '--web.enable-lifecycle'
+    networks:
+      - name: "{{ monitoring_docker_network }}"
+    user: "{{ monitoring_uid }}:{{ monitoring_gid }}"
+  when: prometheus_enabled | default(true)

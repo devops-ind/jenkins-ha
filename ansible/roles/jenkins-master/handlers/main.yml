@@ -2,29 +2,14 @@
 # Jenkins Master Role - Event Handlers
 # Note: HAProxy management is handled by the high-availability role
 
-- name: restart jenkins docker containers
+- name: restart jenkins containers
   community.docker.docker_container:
     name: "jenkins-{{ item.team_name }}-{{ item.active_environment }}"
     state: restarted
   loop: "{{ jenkins_effective_config | default([]) }}"
   loop_control:
     label: "jenkins-{{ item.team_name }}-{{ item.active_environment }}"
-  when: 
-    - jenkins_master_container_runtime == 'docker'
-    - jenkins_effective_config is defined
-  become: yes
-  listen: "restart jenkins"
-
-- name: restart jenkins podman containers
-  containers.podman.podman_container:
-    name: "jenkins-{{ item.team_name }}-{{ item.active_environment }}"
-    state: restarted
-  loop: "{{ jenkins_effective_config | default([]) }}"
-  loop_control:
-    label: "jenkins-{{ item.team_name }}-{{ item.active_environment }}"
-  when: 
-    - jenkins_master_container_runtime == 'podman'
-    - jenkins_effective_config is defined
+  when: jenkins_effective_config is defined
   become: yes
   listen: "restart jenkins"
 

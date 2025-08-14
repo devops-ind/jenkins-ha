@@ -83,29 +83,29 @@ status_haproxy() {
     echo "🔍 HAProxy Container Status:"
     echo "=========================="
     
-    if $CONTAINER_RUNTIME ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -q "^$HAPROXY_CONTAINER"; then
+    if $CONTAINER_RUNTIME ps --format "table {% raw %}{{.Names}}\t{{.Status}}\t{{.Ports}}{% endraw %}" | grep -q "^$HAPROXY_CONTAINER"; then
         echo -e "${GREEN}✅ Container: RUNNING${NC}"
         
         # Show container details
-        $CONTAINER_RUNTIME ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep "$HAPROXY_CONTAINER"
+        $CONTAINER_RUNTIME ps --format "table {% raw %}{{.Names}}\t{{.Status}}\t{{.Ports}}{% endraw %}" | grep "$HAPROXY_CONTAINER"
         
         # Show health status (Docker only)
         if [ "$CONTAINER_RUNTIME" = "docker" ]; then
             local health_status
-            health_status=$(docker inspect --format='{{.State.Health.Status}}' "$HAPROXY_CONTAINER" 2>/dev/null || echo "unknown")
+            health_status=$(docker inspect --format='{% raw %}{{.State.Health.Status}}{% endraw %}' "$HAPROXY_CONTAINER" 2>/dev/null || echo "unknown")
             echo "Health Status: $health_status"
         fi
         
         # Show resource usage
         echo ""
         echo "📊 Resource Usage:"
-        $CONTAINER_RUNTIME stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}" "$HAPROXY_CONTAINER"
+        $CONTAINER_RUNTIME stats --no-stream --format "table {% raw %}{{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}{% endraw %}" "$HAPROXY_CONTAINER"
         
     else
         echo -e "${RED}❌ Container: NOT RUNNING${NC}"
         
         # Check if container exists but is stopped
-        if $CONTAINER_RUNTIME ps -a --format "table {{.Names}}" | grep -q "^$HAPROXY_CONTAINER$"; then
+        if $CONTAINER_RUNTIME ps -a --format "table {% raw %}{{.Names}}{% endraw %}" | grep -q "^$HAPROXY_CONTAINER$"; then
             echo -e "${YELLOW}⚠️ Container exists but is stopped${NC}"
         else
             echo -e "${YELLOW}⚠️ Container does not exist${NC}"
@@ -123,7 +123,7 @@ logs_haproxy() {
     echo "📋 HAProxy Container Logs (last $lines lines):"
     echo "============================================="
     
-    if $CONTAINER_RUNTIME ps --format "table {{.Names}}" | grep -q "^$HAPROXY_CONTAINER$"; then
+    if $CONTAINER_RUNTIME ps --format "table {% raw %}{{.Names}}{% endraw %}" | grep -q "^$HAPROXY_CONTAINER$"; then
         $CONTAINER_RUNTIME logs --tail "$lines" "$HAPROXY_CONTAINER"
     else
         echo -e "${RED}❌ Container is not running${NC}"

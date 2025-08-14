@@ -1,4 +1,89 @@
 ---
 # Default variables for monitoring role
+
+# General monitoring configuration
 monitoring_enabled: true
 monitoring_version: "latest"
+
+# Monitoring user configuration
+monitoring_user: "monitoring"
+monitoring_group: "monitoring" 
+monitoring_uid: 1004
+monitoring_gid: 1004
+monitoring_home_dir: "/opt/monitoring"
+
+# Network configuration
+monitoring_network_name: "monitoring-net"
+monitoring_network_subnet: "172.26.0.0/16"
+
+# Service configuration
+prometheus_enabled: true
+prometheus_port: 9090
+prometheus_version: "latest"
+prometheus_data_retention: "15d"
+prometheus_scrape_interval: "30s"
+prometheus_evaluation_interval: "30s"
+
+# Grafana configuration
+grafana_enabled: true
+grafana_port: 3000
+grafana_version: "latest"
+grafana_admin_user: "admin"
+grafana_admin_password: "admin123"
+grafana_allow_sign_up: false
+grafana_disable_gravatar: true
+grafana_prometheus_datasource:
+  name: "Prometheus"
+  type: "prometheus"
+  access: "proxy"
+  url: "http://localhost:9090"
+  isDefault: true
+
+# Alertmanager configuration
+alertmanager_enabled: false
+alertmanager_port: 9093
+alertmanager_version: "latest"
+
+# Node Exporter configuration
+node_exporter_enabled: true
+node_exporter_port: 9100
+node_exporter_version: "latest"
+
+# Prometheus targets configuration
+prometheus_targets:
+  - job: "prometheus"
+    targets:
+      - "localhost:9090"
+  - job: "node-exporter"
+    targets:
+      - "localhost:9100"
+  - job: "jenkins"
+    targets:
+      - "localhost:8080"
+      - "localhost:8081"
+
+# Docker configuration for monitoring services
+monitoring_docker_network: "{{ monitoring_network_name }}"
+monitoring_restart_policy: "unless-stopped"
+
+# Additional exporters
+cadvisor_enabled: true
+cadvisor_port: 8080
+
+# Directories to create
+monitoring_directories:
+  - "{{ monitoring_home_dir }}"
+  - "{{ monitoring_home_dir }}/prometheus"
+  - "{{ monitoring_home_dir }}/prometheus/data"
+  - "{{ monitoring_home_dir }}/prometheus/config"
+  - "{{ monitoring_home_dir }}/prometheus/rules"
+  - "{{ monitoring_home_dir }}/grafana"
+  - "{{ monitoring_home_dir }}/grafana/data"
+  - "{{ monitoring_home_dir }}/grafana/dashboards"
+  - "{{ monitoring_home_dir }}/grafana/provisioning"
+  - "{{ monitoring_home_dir }}/grafana/provisioning/dashboards"
+  - "{{ monitoring_home_dir }}/grafana/provisioning/datasources"
+  - "{{ monitoring_home_dir }}/alertmanager"
+  - "{{ monitoring_home_dir }}/exporters"
+  - "{{ monitoring_home_dir }}/bin"
+  - "{{ monitoring_home_dir }}/logs"

@@ -1,0 +1,27 @@
+[Unit]
+Description=Prometheus Server
+Documentation=https://prometheus.io/docs/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ monitoring_user }}
+Group={{ monitoring_group }}
+ExecStart=/usr/bin/docker run --rm --name prometheus-{{ deployment_environment | default('local') }} \
+  -p {{ prometheus_port }}:9090 \
+  -v {{ monitoring_home_dir }}/prometheus/config:/etc/prometheus \
+  -v {{ monitoring_home_dir }}/prometheus/data:/prometheus \
+  -v {{ monitoring_home_dir }}/prometheus/rules:/etc/prometheus/rules \
+  --network {{ monitoring_docker_network }} \
+  prom/prometheus:{{ prometheus_version }} \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --storage.tsdb.path=/prometheus \
+  --storage.tsdb.retention.time={{ prometheus_data_retention }} \
+  --web.enable-lifecycle
+ExecStop=/usr/bin/docker stop prometheus-{{ deployment_environment | default('local') }}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

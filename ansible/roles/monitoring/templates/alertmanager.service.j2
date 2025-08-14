@@ -1,0 +1,23 @@
+[Unit]
+Description=Alertmanager
+Documentation=https://prometheus.io/docs/alerting/alertmanager/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ monitoring_user }}
+Group={{ monitoring_group }}
+ExecStart=/usr/bin/docker run --rm --name alertmanager-{{ deployment_environment | default('local') }} \
+  -p {{ alertmanager_port }}:9093 \
+  -v {{ monitoring_home_dir }}/alertmanager:/etc/alertmanager \
+  --network {{ monitoring_docker_network }} \
+  prom/alertmanager:{{ alertmanager_version }} \
+  --config.file=/etc/alertmanager/alertmanager.yml \
+  --storage.path=/alertmanager
+ExecStop=/usr/bin/docker stop alertmanager-{{ deployment_environment | default('local') }}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -27,7 +27,7 @@ log() {
 check_haproxy_container() {
     echo "🐳 Checking HAProxy container health..."
     
-    if ! docker ps --format "table {{.Names}}" | grep -q "^$HAPROXY_CONTAINER$"; then
+    if ! docker ps --format "table {% raw %}{{.Names}}{% endraw %}" | grep -q "^$HAPROXY_CONTAINER$"; then
         echo -e "${RED}❌ HAProxy container: NOT RUNNING${NC}"
         log "ERROR: HAProxy container '$HAPROXY_CONTAINER' is not running"
         return 1

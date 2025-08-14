@@ -15,7 +15,7 @@ _jenkins_container_states:
 _jenkins_port_configs:
   active_ports:
     web: "{{ jenkins_master_config.ports.web }}:{{ jenkins_master_port }}"
-    agent: "{{ jenkins_master_config.ports.agent }}:{{ jenkins_master_agent_port }}"
+    agent: "{{ jenkins_master_config.ports.agent }}:{{ jenkins_jnlp_port }}"
   inactive_ports: []
 
 # Internal volume mappings
@@ -24,6 +24,12 @@ _jenkins_volume_mappings:
   shared: "{{ jenkins_master_shared_path }}"
   docker_sock: "/var/run/docker.sock"
 
+# Image name resolution logic
+_jenkins_image_resolution:
+  custom_image_available: "{{ jenkins_custom_image_registry is defined and jenkins_custom_image_registry | length > 0 }}"
+  use_custom_images: "{{ jenkins_master_build_custom_images | default(true) }}"
+  fallback_image: "{{ jenkins_master_image_registry }}/{{ jenkins_master_image_name }}:{{ jenkins_master_image_tag }}"
+
 # Container runtime specific configurations
 _container_runtime_configs:
   docker:
@@ -31,22 +37,11 @@ _container_runtime_configs:
     container_module: "docker_container"
     volume_module: "docker_volume"
     network_module: "docker_network"
-  podman:
-    module: "containers.podman"
-    container_module: "podman_container"
-    volume_module: "podman_volume"
-    network_module: "podman_network"
 
-# Health check configurations per runtime
+# Health check configurations
 _health_check_configs:
   docker:
     test_format: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_master_port }}/login"]
-    interval: "30s"
-    timeout: "10s"
-    retries: 3
-    start_period: "60s"
-  podman:
-    test_format: "curl -f http://localhost:{{ jenkins_master_port }}/login || exit 1"
     interval: "30s"
     timeout: "10s"
     retries: 3
@@ -62,8 +57,8 @@ _script_templates:
 # Configuration paths
 _config_paths:
   haproxy_conf_dir: "/etc/haproxy/conf.d"
-  jenkins_scripts_dir: "{{ jenkins_master_home_dir }}/scripts"
-  jenkins_casc_dir: "{{ jenkins_master_home_dir }}/{{ jenkins_master_config.team_name }}/{{ jenkins_master_config.active_environment }}/casc_configs"
+  jenkins_scripts_dir: "{{ jenkins_home_dir }}/scripts"
+  jenkins_casc_dir: "{{ jenkins_home_dir }}/{{ jenkins_master_config.team_name }}/{{ jenkins_master_config.active_environment }}/casc_configs"
 
 # Internal validation rules
 _validation_rules:
@@ -79,7 +74,6 @@ _validation_rules:
     - "green"
   valid_runtimes:
     - "docker"
-    - "podman"
   port_range:
     min: 1024
     max: 65535

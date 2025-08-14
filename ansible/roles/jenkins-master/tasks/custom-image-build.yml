@@ -1,0 +1,272 @@
+---
+# Jenkins Master - Custom Team Image Building
+# Builds team-specific Jenkins images using base images from jenkins-images role
+
+- name: Set default jenkins_effective_config if not defined
+  set_fact:
+    jenkins_effective_config: "{{ jenkins_teams if jenkins_teams is defined and jenkins_teams | length > 0 else [jenkins_master_config] }}"
+  when: jenkins_effective_config is not defined
+  tags: ['custom-images', 'validation']
+
+- name: Validate jenkins_effective_config is defined
+  assert:
+    that:
+      - jenkins_effective_config is defined
+      - jenkins_effective_config | length > 0
+    fail_msg: "jenkins_effective_config is not defined or empty. Check jenkins_teams or jenkins_master_config"
+    success_msg: "jenkins_effective_config validated with {{ jenkins_effective_config | length }} team(s)"
+  tags: ['custom-images', 'validation']
+
+- name: Display custom image build configuration
+  debug:
+    msg: |
+      🚀 Jenkins Custom Image Build Configuration:
+      
+      🔧 Custom Build Enabled: {{ jenkins_master_build_custom_images }}
+      🏗️ Base Image: {{ jenkins_master_base_image_name }}:{{ jenkins_master_base_image_tag }}
+      🏷️ Custom Image Prefix: {{ jenkins_master_custom_image_prefix }}
+      📁 Build Directory: {{ jenkins_master_custom_build_dir }}
+      🔄 Force Rebuild: {{ jenkins_master_force_custom_rebuild }}
+      👥 Teams: {{ jenkins_effective_config | map(attribute='team_name') | list | join(', ') }}
+  tags: ['custom-images', 'info']
+
+- name: Create base custom image build directory
+  file:
+    path: "{{ jenkins_master_custom_build_dir }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+  tags: ['custom-images', 'directories']
+
+- name: Create team main directories
+  file:
+    path: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+  loop: "{{ jenkins_effective_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  tags: ['custom-images', 'directories']
+
+- name: Create team subdirectories
+  file:
+    path: "{{ jenkins_master_custom_build_dir }}/{{ item.0.team_name }}/{{ item.1 }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+  with_nested:
+    - "{{ jenkins_effective_config }}"
+    - ["casc-configs", "seed-jobs", "scripts"]
+  loop_control:
+    label: "{{ item.0.team_name }}/{{ item.1 }}"
+  tags: ['custom-images', 'directories']
+
+- name: Generate team-specific Dockerfile
+  template:
+    src: Dockerfile.team-custom.j2
+    dest: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}/Dockerfile"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  loop: "{{ jenkins_effective_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  tags: ['custom-images', 'dockerfile']
+
+- name: Generate team-specific Jenkins Configuration as Code (JCasC)
+  template:
+    src: casc-config-team.yml.j2
+    dest: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}/casc-configs/jenkins.yml"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  loop: "{{ jenkins_effective_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  when: jenkins_master_team_configs_enabled | default(true)
+  tags: ['custom-images', 'casc']
+
+- name: Generate team-specific seed job DSL
+  template:
+    src: seed-job-dsl.groovy.j2
+    dest: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}/seed-jobs/seedJob.groovy"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  loop: "{{ jenkins_effective_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  when: jenkins_master_team_seed_jobs_enabled | default(true)
+  tags: ['custom-images', 'seed-jobs']
+
+- name: Generate team-specific plugins list
+  template:
+    src: team-plugins.txt.j2
+    dest: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}/team-plugins.txt"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  loop: "{{ jenkins_effective_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  when: jenkins_master_team_plugins_enabled | default(true)
+  tags: ['custom-images', 'plugins']
+
+- name: Check if preferred base image exists
+  community.docker.docker_image_info:
+    name: "{{ jenkins_master_base_image_name }}:{{ jenkins_master_base_image_tag }}"
+  register: preferred_base_image_info
+  failed_when: false
+  tags: ['custom-images', 'validation']
+
+- name: Check if fallback base image exists
+  community.docker.docker_image_info:
+    name: "{{ jenkins_master_fallback_base_image }}:{{ jenkins_master_fallback_base_tag }}"
+  register: fallback_base_image_info
+  failed_when: false
+  when: 
+    - preferred_base_image_info.images | length == 0
+    - jenkins_master_auto_fallback_enabled | default(true)
+  tags: ['custom-images', 'validation']
+
+- name: Determine base image to use
+  set_fact:
+    jenkins_actual_base_image: >-
+      {%- if preferred_base_image_info.images | length > 0 -%}
+        {{ jenkins_master_base_image_name }}:{{ jenkins_master_base_image_tag }}
+      {%- elif jenkins_master_auto_fallback_enabled | default(true) and fallback_base_image_info.images | length > 0 -%}
+        {{ jenkins_master_fallback_base_image }}:{{ jenkins_master_fallback_base_tag }}
+      {%- else -%}
+        none
+      {%- endif -%}
+    jenkins_base_image_source: >-
+      {%- if preferred_base_image_info.images | length > 0 -%}
+        jenkins-images-role
+      {%- elif jenkins_master_auto_fallback_enabled | default(true) and fallback_base_image_info.images | length > 0 -%}
+        official-jenkins
+      {%- else -%}
+        unavailable
+      {%- endif -%}
+  tags: ['custom-images', 'validation']
+
+- name: Display base image selection
+  debug:
+    msg: |
+      📦 Base Image Selection Results:
+      
+      🎯 Preferred: {{ jenkins_master_base_image_name }}:{{ jenkins_master_base_image_tag }} - {{ 'Available' if preferred_base_image_info.images | length > 0 else 'Not Found' }}
+      🔄 Fallback: {{ jenkins_master_fallback_base_image }}:{{ jenkins_master_fallback_base_tag }} - {{ 'Available' if (fallback_base_image_info.images | default([]) | length > 0) else 'Not Checked/Available' }}
+      ✅ Using: {{ jenkins_actual_base_image }}
+      📍 Source: {{ jenkins_base_image_source }}
+      
+      {% if jenkins_base_image_source == 'jenkins-images-role' %}
+      🎉 Using custom base image from jenkins-images role (recommended)
+      {% elif jenkins_base_image_source == 'official-jenkins' %}
+      ⚠️ Using official Jenkins as fallback (limited customization)
+      {% else %}
+      ❌ No suitable base image found - custom image builds will be skipped
+      {% endif %}
+  tags: ['custom-images', 'validation']
+
+- name: Pull fallback base image if needed
+  community.docker.docker_image:
+    name: "{{ jenkins_master_fallback_base_image }}"
+    tag: "{{ jenkins_master_fallback_base_tag }}"
+    source: pull
+    state: present
+  when: 
+    - jenkins_base_image_source == 'official-jenkins'
+    - fallback_base_image_info.images | length == 0
+  tags: ['custom-images', 'pull']
+
+- name: Build custom Jenkins team images
+  community.docker.docker_image:
+    name: "{{ jenkins_master_custom_image_prefix }}-{{ item.team_name }}"
+    tag: "{{ jenkins_master_base_image_tag }}"
+    build:
+      path: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}"
+      dockerfile: Dockerfile
+      pull: no  # Don't pull base image since we built it locally
+      nocache: "{{ jenkins_master_force_custom_rebuild | default(false) }}"
+      args:
+        TEAM_NAME: "{{ item.team_name }}"
+        BUILD_DATE: "{{ ansible_date_time.iso8601 }}"
+        VCS_REF: "{{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
+        BASE_IMAGE: "{{ jenkins_actual_base_image }}"
+    source: build
+    state: present
+    push: "{{ jenkins_master_custom_image_push | default(false) }}"
+  loop: "{{ jenkins_effective_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  register: custom_image_builds
+  when: 
+    - jenkins_master_build_custom_images | default(true)
+    - jenkins_actual_base_image != 'none'
+  tags: ['custom-images', 'build']
+
+- name: Create custom image registry for deployment
+  set_fact:
+    jenkins_custom_images_built: "{{ custom_image_builds.results | default([]) | selectattr('changed', 'defined') | selectattr('changed', 'equalto', true) | list | length > 0 }}"
+    jenkins_custom_image_registry: >-
+      {%- set registry = {} -%}
+      {%- for result in custom_image_builds.results | default([]) -%}
+        {%- if result.image is defined -%}
+          {%- set team_name = result.item.team_name -%}
+          {%- set image_name = jenkins_master_custom_image_prefix + '-' + team_name -%}
+          {%- set _ = registry.update({team_name: image_name + ':' + jenkins_master_base_image_tag}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ registry }}
+  when: custom_image_builds is defined
+  tags: ['custom-images', 'registry']
+
+- name: Display custom image build summary
+  debug:
+    msg: |
+      🎉 Custom Jenkins Image Build Summary:
+      
+      🔧 Custom Build Enabled: {{ jenkins_master_build_custom_images }}
+      📍 Base Image Source: {{ jenkins_base_image_source | default('not-determined') }}
+      📦 Base Image Used: {{ jenkins_actual_base_image | default('none') }}
+      📦 Images Built: {{ custom_image_builds.results | default([]) | selectattr('changed', 'defined') | selectattr('changed', 'equalto', true) | list | length }}
+      {% if jenkins_custom_image_registry is defined %}
+      🏷️ Built Images:
+      {% for team, image in jenkins_custom_image_registry.items() %}
+      • {{ team }}: {{ image }}
+      {% endfor %}
+      {% endif %}
+      
+      {% if jenkins_base_image_source == 'official-jenkins' %}
+      ℹ️ Using official Jenkins as base (jenkins-images role not required)
+      {% elif jenkins_base_image_source == 'jenkins-images-role' %}
+      ✅ Using custom base from jenkins-images role (optimal)
+      {% endif %}
+      
+      {% if custom_image_builds is defined and custom_image_builds.results | selectattr('failed', 'defined') | list | length > 0 %}
+      ❌ Failed Builds:
+      {% for result in custom_image_builds.results | selectattr('failed', 'defined') | selectattr('failed', 'equalto', true) %}
+      • {{ result.item.team_name }}: {{ result.msg | default('Unknown error') }}
+      {% endfor %}
+      {% endif %}
+  tags: ['custom-images', 'summary']
+
+- name: Fail if required custom images failed to build
+  fail:
+    msg: |
+      ❌ Custom image build failed for one or more teams!
+      
+      Please check the build logs and ensure:
+      1. Base image {{ jenkins_master_base_image_name }}:{{ jenkins_master_base_image_tag }} exists
+      2. Docker daemon is running and accessible
+      3. Build templates are valid
+      4. Sufficient disk space and permissions
+  when: 
+    - jenkins_master_build_custom_images | default(true)
+    - custom_image_builds is defined
+    - custom_image_builds.results | selectattr('failed', 'defined') | selectattr('failed', 'equalto', true) | list | length > 0
+  tags: ['custom-images', 'validation']

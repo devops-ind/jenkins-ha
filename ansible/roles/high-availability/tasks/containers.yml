@@ -1,6 +1,22 @@
 ---
 # HAProxy High Availability - Container Management
 
+- name: Check container runtime environment compatibility
+  block:
+    - name: Detect if running in devcontainer/codespace
+      set_fact:
+        _is_devcontainer: "{{ ansible_env.REMOTE_CONTAINERS is defined or ansible_env.CODESPACES is defined or deployment_mode in ['devcontainer', 'local'] }}"
+
+    - name: Warn about container compatibility mode
+      debug:
+        msg: |
+          DevContainer/CodeSpace environment detected.
+          Using compatibility mode for HAProxy container:
+          - Using Debian-based HAProxy image instead of Alpine
+          - Enabling privileged mode for network parameter access
+          - Adding security option overrides
+      when: _is_devcontainer | default(false)
+
 - name: Create HAProxy volumes for container runtime
   include_tasks: volumes.yml
   tags: ['containers', 'volumes']

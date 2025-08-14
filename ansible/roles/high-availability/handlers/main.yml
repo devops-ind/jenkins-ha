@@ -7,16 +7,6 @@
     state: started
     restart: yes
   become: yes
-  when: haproxy_container_runtime == 'docker'
-  listen: "restart haproxy container"
-
-- name: restart haproxy container (podman)
-  containers.podman.podman_container:
-    name: "jenkins-haproxy"
-    state: started
-    restart: yes
-  become: yes
-  when: haproxy_container_runtime == 'podman'
   listen: "restart haproxy container"
 
 - name: restart haproxy
@@ -25,25 +15,10 @@
     state: started
     restart: yes
   become: yes
-  when: haproxy_container_runtime == 'docker'
-  listen: "restart haproxy"
-
-- name: restart haproxy (podman)
-  containers.podman.podman_container:
-    name: "jenkins-haproxy"
-    state: started
-    restart: yes
-  become: yes
-  when: haproxy_container_runtime == 'podman'
   listen: "restart haproxy"
 
 - name: reload haproxy
-  shell: |
-    if [ "{{ haproxy_container_runtime }}" = "docker" ]; then
-        docker exec jenkins-haproxy kill -HUP 1
-    else
-        podman exec jenkins-haproxy kill -HUP 1
-    fi
+  shell: docker exec jenkins-haproxy kill -HUP 1
   become: yes
   listen: "reload haproxy"
 
@@ -57,12 +32,7 @@
   listen: "restart keepalived"
 
 - name: validate haproxy config
-  shell: |
-    if [ "{{ haproxy_container_runtime }}" = "docker" ]; then
-        docker exec jenkins-haproxy haproxy -f /usr/local/etc/haproxy/haproxy.cfg -c
-    else
-        podman exec jenkins-haproxy haproxy -f /usr/local/etc/haproxy/haproxy.cfg -c
-    fi
+  shell: docker exec jenkins-haproxy haproxy -f /usr/local/etc/haproxy/haproxy.cfg -c
   become: yes
   listen: "validate haproxy config"
 
@@ -72,16 +42,6 @@
     state: started
     restart: yes
   become: yes
-  when: haproxy_container_runtime == 'docker'
-  listen: "reload ssl certificates"
-
-- name: reload ssl certificates (podman)
-  containers.podman.podman_container:
-    name: "jenkins-haproxy"
-    state: started
-    restart: yes
-  become: yes
-  when: haproxy_container_runtime == 'podman'
   listen: "reload ssl certificates"
 
 - name: update haproxy stats

@@ -31,6 +31,9 @@ haproxy_maxconn: 8192
 # Virtual IP Configuration (keepalived)
 keepalived_enabled: false
 jenkins_vip: ""  # Set this to enable VIP
+vip_address: "{{ jenkins_vip if jenkins_vip != '' else '*' }}"  # Bind address for HAProxy
+jenkins_port: "{{ jenkins_master_port | default(80) }}"  # Port for HTTP frontend
+# jenkins_domain defined above
 keepalived_interface: "{{ ansible_default_ipv4.interface }}"
 keepalived_priority: 100  # Higher number = higher priority
 keepalived_vrid: 51
@@ -52,6 +55,7 @@ failover_notification_enabled: false
 
 # SSL Configuration for Wildcard Domain
 ssl_enabled: true
+ssl_certificate_path: "/usr/local/etc/haproxy/ssl/combined.pem"  # Path inside container
 ssl_cert_path: "/etc/ssl/certs/wildcard.devops.example.com.pem"
 ssl_key_path: "/etc/ssl/private/wildcard.devops.example.com.key"
 ssl_ca_cert_path: "/etc/ssl/certs/ca-chain.pem"
@@ -74,7 +78,7 @@ monitoring_alert_enabled: false
 monitoring_alert_threshold: 3
 
 # HAProxy Container Configuration (matching jenkins-master pattern)
-haproxy_container_runtime: "docker"  # docker or podman
+haproxy_container_runtime: "{{ jenkins_container_runtime | default('docker') }}"
 haproxy_restart_policy: "unless-stopped"
 haproxy_startup_wait_time: 15
 
@@ -83,9 +87,15 @@ haproxy_image_registry: "docker.io"
 haproxy_image_name: "haproxy"
 haproxy_image_tag: "2.8-alpine"
 
+# HAProxy Alternative Images for Container Compatibility
+# Use debian-based image for devcontainer environments to avoid Alpine Linux kernel parameter issues
+haproxy_image_alternatives:
+  devcontainer: "2.8-alpine"
+  production: "2.8-alpine"
+
 # HAProxy Network Configuration
 haproxy_network_name: "jenkins-network"
-haproxy_network_mode: "host"  # Required for VIP functionality
+haproxy_network_mode: "bridge"  # Use bridge for compatibility with Jenkins containers
 
 # HAProxy Container Resources
 haproxy_memory_limit: "512M"
@@ -94,7 +104,7 @@ haproxy_memory_reservation: "256M"
 haproxy_cpu_reservation: "0.25"
 
 # HAProxy Logging Configuration
-haproxy_log_driver: "journald"
+haproxy_log_driver: "json-file"
 haproxy_log_max_size: "10m"
 haproxy_log_max_files: "3"
 
@@ -111,5 +121,6 @@ haproxy_labels:
 
 # HAProxy Container User/Group
 haproxy_user: "haproxy"
-haproxy_uid: 1000
-haproxy_gid: 1000
+haproxy_group: "haproxy"  # Group name matches user for simplicity
+haproxy_uid: 1005  # Unique UID avoiding conflicts: local(1000), monitoring(1004), others(1001-1003)
+haproxy_gid: 1005
