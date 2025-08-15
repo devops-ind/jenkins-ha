@@ -9,9 +9,7 @@ global
     stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
     stats timeout 30s
     
-    # Security - run as non-root in container
-    user haproxy
-    group haproxy
+    # Security - running in container
     
     # SSL Configuration for wildcard certificate
     {% if ssl_enabled | default(false) %}
@@ -34,19 +32,7 @@ defaults
     timeout http-keep-alive 10s
     timeout check 10s
     
-    # Custom error pages
-    errorfile 400 /etc/haproxy/errors/400.http
-    errorfile 403 /etc/haproxy/errors/403.http
-    errorfile 408 /etc/haproxy/errors/408.http
-    errorfile 500 /etc/haproxy/errors/500.http
-    errorfile 502 /etc/haproxy/errors/502.http
-    errorfile 503 /etc/haproxy/errors/503.http
-    errorfile 504 /etc/haproxy/errors/504.http
     
-    # Security headers
-    http-response set-header X-Content-Type-Options nosniff
-    http-response set-header X-Frame-Options DENY
-    http-response set-header X-XSS-Protection "1; mode=block"
 
 # =============================================================================
 # FRONTEND CONFIGURATION - Multi-Team Wildcard Routing
@@ -76,7 +62,10 @@ frontend jenkins_http
     # Capture hostname for team routing
     capture request header Host len 64
     
-    # Security headers
+    # Security headers  
+    http-response set-header X-Content-Type-Options nosniff
+    http-response set-header X-Frame-Options DENY
+    http-response set-header X-XSS-Protection "1; mode=block"
     http-request set-header X-Forwarded-Proto https if { ssl_fc }
     http-request set-header X-Forwarded-Proto http if !{ ssl_fc }
     http-request set-header X-Forwarded-For %[src]
@@ -157,8 +146,10 @@ backend jenkins_backend_{{ team.team_name }}
     {% if groups['jenkins_masters'] is defined and groups['jenkins_masters'] | length > 0 %}
     {% for host in groups['jenkins_masters'] %}
     {% if team.blue_green_enabled | default(true) %}
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }} {% if team.active_environment | default('blue') == 'blue' %}{% else %}backup{% endif %}
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) + 100 }} check inter {{ haproxy_check_interval | default('5s') }} {% if team.active_environment | default('blue') == 'green' %}{% else %}backup{% endif %}
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }}{% if team.active_environment | default('blue') == 'blue' %} {% else %} backup{% endif %}
+
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 10 }} check inter {{ haproxy_check_interval | default('5s') }}{% if team.active_environment | default('blue') == 'green' %} {% else %} backup{% endif %}
+
     {% else %}
     server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }}
     {% endif %}
@@ -166,8 +157,10 @@ backend jenkins_backend_{{ team.team_name }}
     {% else %}
     # Localhost fallback for {{ team.team_name }}
     {% if team.blue_green_enabled | default(true) %}
-    server {{ team.team_name }}-localhost-blue 127.0.0.1:{{ team.ports.web | default(8080) }} check {% if team.active_environment | default('blue') == 'blue' %}{% else %}backup{% endif %}
-    server {{ team.team_name }}-localhost-green 127.0.0.1:{{ team.ports.web | default(8080) + 100 }} check {% if team.active_environment | default('blue') == 'green' %}{% else %}backup{% endif %}
+    server {{ team.team_name }}-localhost-blue 127.0.0.1:{{ team.ports.web | default(8080) }} check{% if team.active_environment | default('blue') == 'blue' %} {% else %} backup{% endif %}
+
+    server {{ team.team_name }}-localhost-green 127.0.0.1:{{ (team.ports.web | default(8080)) + 10 }} check{% if team.active_environment | default('blue') == 'green' %} {% else %} backup{% endif %}
+
     {% else %}
     server {{ team.team_name }}-localhost 127.0.0.1:{{ team.ports.web | default(8080) }} check
     {% endif %}

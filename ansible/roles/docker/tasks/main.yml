@@ -50,9 +50,30 @@
     update_cache: yes
   when: ansible_os_family == "Debian"
 
-- name: Install Docker CE (RedHat)
+- name: Install Docker CE dependencies (RedHat)
   package:
-    name: docker-ce
+    name:
+      - yum-utils
+      - device-mapper-persistent-data
+      - lvm2
+    state: present
+  when: ansible_os_family == "RedHat"
+
+- name: Add Docker CE repository (RedHat)
+  shell: |
+    dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+  args:
+    creates: /etc/yum.repos.d/docker-ce.repo
+  when: ansible_os_family == "RedHat"
+
+- name: Install Docker CE packages (RedHat)
+  package:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
     state: present
   when: ansible_os_family == "RedHat"
 

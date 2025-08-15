@@ -60,7 +60,7 @@ quick_health_check() {
     local max_score=4
     
     # Check 1: Container running
-    if $CONTAINER_RUNTIME inspect "$container_name" --format='{{.State.Status}}' 2>/dev/null | grep -q "running"; then
+    if $CONTAINER_RUNTIME inspect "$container_name" --format='{{ '{{' }}.State.Status{{ '}}' }}' 2>/dev/null | grep -q "running"; then
         ((health_score++))
     fi
     
@@ -75,7 +75,7 @@ quick_health_check() {
     fi
     
     # Check 4: Container health (if configured)
-    local container_health=$($CONTAINER_RUNTIME inspect "$container_name" --format='{{.State.Health.Status}}' 2>/dev/null || echo "N/A")
+    local container_health=$($CONTAINER_RUNTIME inspect "$container_name" --format='{{ '{{' }}.State.Health.Status{{ '}}' }}' 2>/dev/null || echo "N/A")
     if [[ "$container_health" == "healthy" ]] || [[ "$container_health" == "N/A" ]]; then
         ((health_score++))
     fi
@@ -141,11 +141,11 @@ show_metrics() {
     # Container metrics
     if $CONTAINER_RUNTIME inspect "$container_name" &>/dev/null; then
         echo -e "\n${YELLOW}Container Metrics:${NC}"
-        local stats=$($CONTAINER_RUNTIME stats "$container_name" --no-stream --format "table {{.MemUsage}}\t{{.CPUPerc}}\t{{.NetIO}}\t{{.BlockIO}}" 2>/dev/null || echo "N/A")
+        local stats=$($CONTAINER_RUNTIME stats "$container_name" --no-stream --format "table {{ '{{' }}.MemUsage{{ '}}' }}\t{{ '{{' }}.CPUPerc{{ '}}' }}\t{{ '{{' }}.NetIO{{ '}}' }}\t{{ '{{' }}.BlockIO{{ '}}' }}" 2>/dev/null || echo "N/A")
         echo "$stats"
         
         # Container uptime
-        local started_at=$($CONTAINER_RUNTIME inspect "$container_name" --format='{{.State.StartedAt}}' 2>/dev/null)
+        local started_at=$($CONTAINER_RUNTIME inspect "$container_name" --format='{{ '{{' }}.State.StartedAt{{ '}}' }}' 2>/dev/null)
         if [[ -n "$started_at" ]]; then
             echo -e "\nContainer Started: $started_at"
         fi

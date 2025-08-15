@@ -15,6 +15,7 @@ jenkins_master_startup_wait_time: 20
 jenkins_master_image_registry: "docker.io"
 jenkins_master_image_name: "jenkins/jenkins"
 jenkins_master_image_tag: "lts"
+jenkins_base_image_source: "official-jenkins"
 
 # Network Configuration
 jenkins_master_network_name: "jenkins-network"

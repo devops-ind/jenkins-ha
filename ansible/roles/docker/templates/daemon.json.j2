@@ -8,7 +8,8 @@
   "storage-driver": "{{ docker_daemon_options['storage-driver'] }}",
   "live-restore": {{ docker_daemon_options['live-restore'] | lower }},
   "userland-proxy": {{ docker_daemon_options['userland-proxy'] | lower }},
-  "experimental": {{ docker_daemon_options['experimental'] | lower }},
+  "experimental": {{ docker_daemon_options['experimental'] | lower }}{% if (docker_daemon_options['default-ulimits'] | default({}) | length > 0 and ansible_distribution != "CentOS") or docker_registry_mirrors or docker_insecure_registries %},{% endif %}
+{% if docker_daemon_options['default-ulimits'] | default({}) | length > 0 and ansible_distribution != "CentOS" %}
   "default-ulimits": {
 {% for ulimit, values in docker_daemon_options['default-ulimits'].items() %}
     "{{ ulimit }}": {
@@ -17,6 +18,7 @@
     }{% if not loop.last %},{% endif %}
 {% endfor %}
   }{% if docker_registry_mirrors or docker_insecure_registries %},{% endif %}
+{% endif %}
 {% if docker_registry_mirrors %}
   "registry-mirrors": [
 {% for mirror in docker_registry_mirrors %}

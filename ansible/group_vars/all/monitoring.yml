@@ -2,7 +2,7 @@
 prometheus_version: "v3.5.0"
 grafana_version: "9.3.0"
 alertmanager_version: "0.25.0"
-node_exporter_version: "1.5.0"
+node_exporter_version: "v1.9.1"
 
 # Prometheus configuration
 prometheus_port: 9090
@@ -10,6 +10,6 @@ prometheus_data_dir: "/var/lib/prometheus"
 prometheus_config_dir: "/etc/prometheus"
 
 # Grafana configuration
-grafana_port: 3000
+grafana_port: 9300
 grafana_data_dir: "/var/lib/grafana"
 grafana_provisioning_dir: "/etc/grafana/provisioning"

@@ -65,5 +65,5 @@ docker_cleanup_cron:
   weekday: "0"  # Sunday
 
 # Security settings
-docker_enable_audit: true
+docker_enable_audit: "{{ deployment_mode | default('local') not in ['devcontainer', 'local'] }}"
 docker_socket_group: docker

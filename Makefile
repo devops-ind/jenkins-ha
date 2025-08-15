@@ -22,27 +22,27 @@ RESET := \033[0m
 .PHONY: local
 local: ## Deploy Jenkins HA locally
 	@echo "$(BLUE)🚀 Deploying Jenkins HA locally...$(RESET)"
-	@$(SCRIPTS_DIR)/deploy-local.sh
+	@cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml
 
 .PHONY: local-verbose
 local-verbose: ## Deploy locally with verbose output
 	@echo "$(BLUE)🚀 Deploying Jenkins HA locally (verbose)...$(RESET)"
-	@$(SCRIPTS_DIR)/deploy-local.sh --verbose
+	@cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml -v
 
 .PHONY: local-dry-run
 local-dry-run: ## Perform a dry run of local deployment
 	@echo "$(BLUE)🔍 Dry run of local deployment...$(RESET)"
-	@$(SCRIPTS_DIR)/deploy-local.sh --dry-run
+	@cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml --check
 
 .PHONY: local-jenkins
 local-jenkins: ## Deploy only Jenkins infrastructure locally
 	@echo "$(BLUE)🏗️ Deploying Jenkins infrastructure locally...$(RESET)"
-	@$(SCRIPTS_DIR)/deploy-local.sh --tags common,docker,jenkins,infrastructure
+	@cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml --tags jenkins
 
 .PHONY: local-monitoring
 local-monitoring: ## Deploy only monitoring stack locally
 	@echo "$(BLUE)📊 Deploying monitoring stack locally...$(RESET)"
-	@$(SCRIPTS_DIR)/deploy-local.sh --tags monitoring,prometheus,grafana
+	@cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml --tags monitoring
 
 
 ##@ Production Commands
@@ -77,7 +77,7 @@ build-images: ## Build and push Docker images
 .PHONY: build-local-images
 build-local-images: ## Build Docker images for local development
 	@echo "$(BLUE)🏗️ Building Docker images locally...$(RESET)"
-	@$(SCRIPTS_DIR)/deploy-local.sh --tags images
+	@cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml --tags images -e build_jenkins_images=true
 
 ##@ Testing and Validation
 
@@ -88,7 +88,6 @@ test: test-syntax test-inventory ## Run all tests
 test-syntax: ## Test Ansible syntax
 	@echo "$(BLUE)🔍 Testing Ansible syntax...$(RESET)"
 	@cd $(ANSIBLE_DIR) && ansible-playbook site.yml --syntax-check
-	@cd $(ANSIBLE_DIR) && ansible-playbook deploy-local.yml --syntax-check
 
 .PHONY: test-inventory
 test-inventory: ## Test inventory configurations
@@ -179,14 +178,14 @@ status: ## Show deployment status
 	@echo "$(BLUE)📊 Deployment Status:$(RESET)"
 	@echo "$(YELLOW)Local Services:$(RESET)"
 	@curl -s -o /dev/null -w "Jenkins:    %{http_code}\n" http://localhost:8080/login || echo "Jenkins:    Not running"
-	@curl -s -o /dev/null -w "Grafana:    %{http_code}\n" http://localhost:3000/api/health || echo "Grafana:    Not running"
+	@curl -s -o /dev/null -w "Grafana:    %{http_code}\n" http://localhost:9300/api/health || echo "Grafana:    Not running"
 	@curl -s -o /dev/null -w "Prometheus: %{http_code}\n" http://localhost:9090/-/healthy || echo "Prometheus: Not running"  
 
 .PHONY: urls
 urls: ## Show service URLs
 	@echo "$(BLUE)🌐 Service URLs:$(RESET)"
 	@echo "$(GREEN)Jenkins:    http://localhost:8080$(RESET)"
-	@echo "$(GREEN)Grafana:    http://localhost:3000$(RESET)"
+	@echo "$(GREEN)Grafana:    http://localhost:9300$(RESET)"
 	@echo "$(GREEN)Prometheus: http://localhost:9090$(RESET)"
 
 .PHONY: credentials

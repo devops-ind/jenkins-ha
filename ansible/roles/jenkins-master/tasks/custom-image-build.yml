@@ -8,6 +8,15 @@
   when: jenkins_effective_config is not defined
   tags: ['custom-images', 'validation']
 
+- name: Initialize base image info variables
+  set_fact:
+    preferred_base_image_info:
+      images: []
+    fallback_base_image_info:
+      images: []
+    jenkins_actual_base_image: "jenkins/jenkins:lts"
+  tags: ['always', 'custom-images']
+
 - name: Validate jenkins_effective_config is defined
   assert:
     that:
@@ -121,6 +130,13 @@
     name: "{{ jenkins_master_base_image_name }}:{{ jenkins_master_base_image_tag }}"
   register: preferred_base_image_info
   failed_when: false
+  tags: ['custom-images', 'validation']
+
+- name: Initialize fallback image info if not set
+  set_fact:
+    fallback_base_image_info:
+      images: []
+  when: fallback_base_image_info is not defined
   tags: ['custom-images', 'validation']
 
 - name: Check if fallback base image exists

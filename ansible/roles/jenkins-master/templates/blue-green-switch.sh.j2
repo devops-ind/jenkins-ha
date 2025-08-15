@@ -74,8 +74,13 @@ health_check() {
     local attempt=1
     
     while [[ $attempt -le $max_attempts ]]; do
-        if curl -f -s "http://localhost:${WEB_PORT}/login" &>/dev/null; then
-            success "Jenkins web interface is accessible"
+        local check_port=$WEB_PORT
+        if [[ "$environment" == "green" ]]; then
+            check_port=$((WEB_PORT + 10))
+        fi
+        
+        if curl -f -s "http://localhost:${check_port}/login" &>/dev/null; then
+            success "Jenkins web interface is accessible on port $check_port"
             return 0
         fi
         

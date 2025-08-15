@@ -21,7 +21,7 @@ backend jenkins_backend_{{ item.team_name }}
     
     # Green environment servers  
     {% for host in groups['jenkins_masters'] | default([]) %}
-    server {{ item.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (item.ports.web | default(8080)) + 100 }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }} {% if item.active_environment | default('blue') == 'green' %}{% else %}backup{% endif %}
+    server {{ item.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (item.ports.web | default(8080)) + 10 }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }} {% if item.active_environment | default('blue') == 'green' %}{% else %}backup{% endif %}
     
     {% endfor %}
     {% else %}

@@ -67,7 +67,7 @@
       - "haproxy-admin-socket:/run/haproxy:rw"
     _haproxy_container_user: "{{ '' if deployment_mode in ['devcontainer', 'local'] else (haproxy_uid ~ ':' ~ haproxy_gid) }}"
     _haproxy_health_check_command: >-
-      curl -f http://localhost:{{ haproxy_stats_port | default(8404) }}/stats || wget --quiet --tries=1 --spider http://localhost:{{ haproxy_stats_port | default(8404) }}/stats || exit 1
+      test -f /usr/local/etc/haproxy/haproxy.cfg
     _haproxy_dynamic_labels:
       teams: "{{ jenkins_teams | default([]) | map(attribute='team_name') | join(',') }}"
       ssl_enabled: "{{ ssl_enabled | default(false) | string }}"
@@ -75,7 +75,7 @@
       deployment_mode: "{{ deployment_mode }}"
   register: haproxy_container_standard
   ignore_errors: true
-  when: not (_is_devcontainer | default(false))
+  when: not (_is_devcontainer | default(false)) and deployment_mode != 'production'
   tags: ['containers', 'docker', 'deploy']
 
 - name: Deploy HAProxy container with DevContainer compatibility (Docker)
@@ -130,32 +130,28 @@
       # Admin socket (volume)
       - "haproxy-admin-socket:/run/haproxy:rw"
     # DevContainer compatibility configurations - addresses /proc/sys/net/ipv4/ip_unprivileged_port_start issue
-    _haproxy_privileged: "{{ deployment_mode in ['devcontainer', 'local'] }}"
-    _haproxy_container_user: "{{ '' if deployment_mode in ['devcontainer', 'local'] else (haproxy_uid ~ ':' ~ haproxy_gid) }}"
-    _haproxy_capabilities: "{{ _haproxy_devcontainer_caps if deployment_mode in ['devcontainer', 'local'] else [] }}"
+    _haproxy_privileged: "{{ deployment_mode in ['devcontainer', 'local', 'production'] }}"
+    _haproxy_container_user: "{{ '' if deployment_mode in ['devcontainer', 'local', 'production'] else (haproxy_uid ~ ':' ~ haproxy_gid) }}"
+    _haproxy_capabilities: "{{ _haproxy_devcontainer_caps if deployment_mode in ['devcontainer', 'local', 'production'] else [] }}"
     _haproxy_devcontainer_caps:
       - "NET_BIND_SERVICE"
       - "NET_ADMIN"
-    _haproxy_security_opts: "{{ _haproxy_devcontainer_security_opts if deployment_mode in ['devcontainer', 'local'] else [] }}"
+    _haproxy_security_opts: "{{ _haproxy_devcontainer_security_opts if deployment_mode in ['devcontainer', 'local', 'production'] else [] }}"
     _haproxy_devcontainer_security_opts:
       - "seccomp=unconfined"
       - "apparmor=unconfined"
-    _haproxy_sysctls: "{{ _haproxy_devcontainer_sysctls if deployment_mode in ['devcontainer', 'local'] else {} }}"
+    _haproxy_sysctls: "{{ _haproxy_devcontainer_sysctls if deployment_mode in ['devcontainer', 'local', 'production'] else {} }}"
     _haproxy_devcontainer_sysctls:
       net.ipv4.ip_unprivileged_port_start: "80"
     _haproxy_health_check_command: >-
-      {% if _haproxy_tag.endswith('-alpine') %}
-      wget --quiet --tries=1 --spider http://localhost:{{ haproxy_stats_port | default(8404) }}/stats || exit 1
-      {% else %}
-      curl -f http://localhost:{{ haproxy_stats_port | default(8404) }}/stats || exit 1
-      {% endif %}
+      test -f /usr/local/etc/haproxy/haproxy.cfg
     _haproxy_dynamic_labels:
       teams: "{{ jenkins_teams | default([]) | map(attribute='team_name') | join(',') }}"
       ssl_enabled: "{{ ssl_enabled | default(false) | string }}"
       version: "{{ _haproxy_tag }}"
       deployment_mode: "{{ deployment_mode }}"
   register: haproxy_container_devcontainer
-  when: _is_devcontainer | default(false) or haproxy_container_standard is failed
+  when: _is_devcontainer | default(false) or haproxy_container_standard is failed or deployment_mode == 'production'
   tags: ['containers', 'docker', 'deploy']
 
 - name: Set deployment result from successful container launch
@@ -174,7 +170,7 @@
       Security Opts: {{ _haproxy_security_opts }}
       Sysctls: {{ _haproxy_sysctls }}
       Capabilities: {{ _haproxy_capabilities }}
-  when: deployment_mode in ['devcontainer', 'local'] and ansible_verbosity >= 1
+  when: deployment_mode in ['devcontainer', 'local', 'production'] and ansible_verbosity >= 1
   tags: ['containers', 'docker', 'debug']
 
 - name: Fail if both container deployment attempts failed

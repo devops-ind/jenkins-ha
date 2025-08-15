@@ -50,5 +50,5 @@
       - '--web.enable-lifecycle'
     networks:
       - name: "{{ monitoring_docker_network }}"
-    user: "{{ monitoring_uid }}:{{ monitoring_gid }}"
+    user: "{{ (monitoring_uid | string) + ':' + (monitoring_gid | string) if deployment_mode | default('local') not in ['devcontainer', 'local'] else omit }}"
   when: prometheus_enabled | default(true)

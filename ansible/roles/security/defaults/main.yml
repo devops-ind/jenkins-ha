@@ -96,23 +96,12 @@ java_keystore_path: "/usr/lib/jvm/default-java/lib/security/cacerts"
 java_keystore_password: "changeit"
 
 # Firewall Configuration
-security_allowed_ports:
-  - "22"    # SSH
-  - "80"    # HTTP
-  - "443"   # HTTPS
-  - "8080"  # Jenkins primary
-  - "8081"  # Jenkins secondary (if HA)
-  - "8443"  # Jenkins SSL primary
-  - "8444"  # Jenkins SSL secondary (if HA)
-  - "50000" # Jenkins agent primary
-  - "50001" # Jenkins agent secondary (if HA)
-  - "8404"  # HAProxy stats
-  - "3000"  # Grafana
-  - "3443"  # Grafana SSL
-  - "9090"  # Prometheus
-  - "9443"  # Prometheus SSL
-  - "9093"  # Alertmanager
-  - "9493"  # Alertmanager SSL
+# Note: firewall_allowed_ports should be defined in inventory with protocol (e.g., "22/tcp")
+# Example:
+# firewall_allowed_ports:
+#   - "22/tcp"    # SSH
+#   - "80/tcp"    # HTTP
+#   - "443/tcp"   # HTTPS
 
 # SSH Hardening - Basic system access only (not used for Jenkins agents)
 ssh_hardening_enabled: false  # Disabled as Jenkins no longer uses SSH for agents

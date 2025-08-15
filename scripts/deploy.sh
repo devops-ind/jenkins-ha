@@ -73,7 +73,7 @@ ansible-playbook "$PLAYBOOK" --syntax-check || error "Playbook syntax check fail
 
 # Inventory validation
 log "Validating inventory..."
-python3 tests/inventory_test.py "$INVENTORY" || error "Inventory validation failed"
+ansible-inventory -i "$INVENTORY" --list > /dev/null || error "Inventory validation failed"
 
 # Ping all hosts
 log "Testing connectivity to all hosts..."

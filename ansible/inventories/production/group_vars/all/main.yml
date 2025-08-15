@@ -1,75 +1,103 @@
 ---
-# Production Environment Configuration
-# This file overrides defaults from group_vars/all/ for production deployment
+# Production CentOS 9 VM Configuration
+# Real production settings for Jenkins HA on CentOS 9
 
 # Environment identification
 deployment_environment: "production"
 environment_tier: "prod"
+deployment_mode: "production"
 
-# Production-specific versions (overrides defaults)
-jenkins_version: "2.426.1"
-docker_version: "24.0.7"
-timezone: "UTC"
+# CentOS 9 specific configurations
+os_family: "RedHat"
+package_manager: "dnf"
+firewall_service: "firewalld"
 
-# Production network configuration
-jenkins_network_name: "jenkins-prod-net"
-jenkins_network_subnet: "172.20.0.0/16"
-monitoring_network_name: "monitoring-prod-net"
-monitoring_network_subnet: "172.21.0.0/16"
+# Jenkins configuration for production
+jenkins_admin_user: "admin"
+jenkins_admin_password: "{{ vault_jenkins_admin_password | default('admin123') }}"
+jenkins_version: "lts"
 
-# Production storage configuration
-jenkins_home_dir: "/var/jenkins"
-jenkins_data_dir: "/var/lib/jenkins"
-backup_location: "/backup/jenkins"
-shared_storage_mount: "/shared"
-shared_storage_enabled: true
+# HAProxy configuration for production VM
+haproxy_image_registry: "docker.io"
+haproxy_image_name: "haproxy"
+haproxy_image_tag: "2.8"  # Use stable Debian-based image
+haproxy_stats_user: "admin"
+haproxy_stats_password: "{{ vault_haproxy_stats_password | default('admin123') }}"
 
-# Production security settings (overrides defaults)
-jenkins_enable_security: true
-jenkins_security_realm: "ldap"  # Override default "local"
-jenkins_authorization_strategy: "matrix"  # Override default
-enable_ssl: true
-ssl_cert_path: "/etc/ssl/certs/jenkins.crt"
-ssl_key_path: "/etc/ssl/private/jenkins.key"
-
-# Production backup configuration (overrides defaults)
-jenkins_backup_enabled: true
-backup_enabled: true
-backup_schedule: "0 2 * * *"  # Daily at 2 AM
-backup_retention_days: 30
-backup_method: "borg"
-backup_compression: "lz4"
-
-# Production monitoring settings
-jenkins_monitoring_enabled: true
+# Monitoring configuration
 monitoring_enabled: true
-prometheus_enabled: true
-grafana_enabled: true
-alertmanager_enabled: true
+prometheus_retention: "15d"  # Production retention
+grafana_admin_user: "admin"
+grafana_admin_password: "{{ vault_grafana_admin_password | default('admin123') }}"
 
-# Production resource limits
-jenkins_master_memory: "4g"  # Override default 2g for production
-jenkins_master_cpu_limit: "2"
-jenkins_agents_max: 10
+# Backup configuration
+backup_enabled: true
+backup_retention_days: 30
+backup_schedule_hour: 2
+backup_schedule_minute: 0
 
-# Production HA settings
-jenkins_ha_enabled: true
-jenkins_cluster_size: 2
-jenkins_vip: "10.0.1.100"
-jenkins_load_balancer_enabled: true
+# Docker configuration for CentOS 9
+docker_edition: "ce"
+docker_enable_audit: true  # Production security
+docker_daemon_config:
+  log-driver: "json-file"
+  log-opts:
+    max-size: "10m"
+    max-file: "3"
+  storage-driver: "overlay2"
+  exec-opts:
+    - "native.cgroupdriver=systemd"
 
-# Production image settings
-jenkins_master_image_tag: "latest"
-jenkins_agent_image_tag: "latest"
-jenkins_images_force_rebuild: false
-jenkins_images_push: true
+# Security settings for production
+security_hardening_enabled: true
+selinux_enabled: true
+selinux_policy: "targeted"
+selinux_mode: "enforcing"
 
+# Resource limits for production VM
+jenkins_master_memory_limit: "2g"
+jenkins_master_cpu_limit: "1.5"
+haproxy_memory_limit: "512M"
+haproxy_cpu_limit: "0.5"
 
-# Production-specific plugins (extends defaults)
-jenkins_additional_plugins:
-  - ldap
-  - matrix-auth
-  - backup
-  - monitoring
-  - artifactory
-  - sonarqube
+# Network settings
+jenkins_network_name: "jenkins-network"
+monitoring_network_name: "monitoring-net"
+
+# Shared storage settings
+shared_storage_enabled: true
+shared_storage_type: "local"
+shared_storage_path: "/opt/jenkins-shared"
+shared_storage_owner: "jenkins"
+shared_storage_group: "jenkins"
+
+# Production-specific user/group mappings to avoid conflicts
+jenkins_uid: 1001
+jenkins_gid: 1001
+monitoring_uid: 1005
+monitoring_gid: 1005
+haproxy_uid: 1004
+
+# HAProxy should bind to port 80 (HTTP), not 8080 which conflicts with Jenkins
+jenkins_port: 80
+haproxy_gid: 1004
+
+# Timezone
+common_timezone: "UTC"
+
+# Performance tuning for production
+vm_swappiness: 10
+vm_max_map_count: 262144
+
+# Firewall ports to open
+firewall_allowed_ports:
+  - "8080/tcp"  # DevOps Jenkins
+  - "8081/tcp"  # Developer Jenkins  
+  - "80/tcp"    # HAProxy HTTP
+  - "443/tcp"   # HAProxy HTTPS (future)
+  - "8404/tcp"  # HAProxy Stats
+  - "9090/tcp"  # Prometheus
+  - "9100/tcp"  # Node Exporter
+  - "9200/tcp"  # cAdvisor
+  - "9300/tcp"  # Grafana (changed from 3000)
+  - "22/tcp"    # SSH

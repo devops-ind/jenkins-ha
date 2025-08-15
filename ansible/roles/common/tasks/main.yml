@@ -7,6 +7,14 @@
   become: yes
   when: common_update_packages
 
+- name: Install EPEL repository (RedHat family)
+  package:
+    name: epel-release
+    state: present
+  when: 
+    - common_install_tools
+    - ansible_os_family == "RedHat"
+
 - name: Install essential packages
   package:
     name: "{{ common_packages }}"
@@ -65,8 +73,11 @@
     dest: /etc/logrotate.d/jenkins-system
   when: common_logrotate_enabled
 
-- name: Ensure system is up to date
+- name: Ensure system is up to date (disabled in production)
   package:
     name: "*"
     state: latest
-  when: common_update_packages and ansible_os_family == "RedHat"
+  when: 
+    - common_update_packages
+    - ansible_os_family == "RedHat"
+    - deployment_environment | default('local') != 'production'

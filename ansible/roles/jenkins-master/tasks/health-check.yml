@@ -27,7 +27,7 @@
   tags: ['health', 'api']
 
 - name: Check container health status
-  command: "{{ jenkins_master_container_runtime }} inspect jenkins-{{ jenkins_master_config.team_name }}-{{ jenkins_master_config.active_environment }} --format='{{.State.Health.Status}}'"
+  command: "{{ jenkins_master_container_runtime }} inspect jenkins-{{ jenkins_master_config.team_name }}-{{ jenkins_master_config.active_environment }} --format='{{ '{{' }}.State.Health.Status{{ '}}' }}'"
   register: container_health
   failed_when: false
   changed_when: false

@@ -29,7 +29,7 @@
     state: started
     restart_policy: "{{ monitoring_restart_policy }}"
     ports:
-      - "8080:8080"
+      - "{{ cadvisor_port }}:8080"
     volumes:
       - "/:/rootfs:ro"
       - "/var/run:/var/run:rw"

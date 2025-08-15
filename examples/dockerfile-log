@@ -1,0 +1,80 @@
+FROM iedubharbor.example.net/jenkins/python-agent:latest-jdk17
+
+# === Build arguments for version flexibility ===
+ARG ANT_VERSION=1.10.14
+ARG GRADLE_VERSION=8.7
+ARG NODE_VERSION=18.20.3
+ARG ANDROID_CMD_TOOLS_VERSION=11076708
+ARG INSTALL_ANDROID_NDK=false
+
+USER root
+
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt \
+    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    JAVA_OPTS="-Djavax.net.ssl.trustStore=/opt/java/openjdk/lib/security/cacerts \
+    -Djavax.net.ssl.trustStorePassword=changeit -Djenkins.install.runSetupWizard=false -Djava.awt.headless=true" \
+    NVM_DIR=/opt/.nvm \
+    ANDROID_SDK_ROOT=/opt/android-sdk \
+    ANT_HOME=/opt/apache-ant-${ANT_VERSION} \
+    GRADLE_HOME=/opt/gradle/gradle-${GRADLE_VERSION} \
+    PATH=$PATH:/opt/apache-ant-${ANT_VERSION}/bin:/opt/gradle/gradle-${GRADLE_VERSION}/bin:/opt/.nvm/versions/node/v${NODE_VERSION}/bin:/opt/android-sdk/build-tools/35.0.0:/opt/android-sdk/platform-tools:/opt/android-sdk/cmdline-tools/latest/bin
+
+SHELL ["/bin/bash", "-c"]
+
+RUN set -eux && \
+    mkdir -p /tmp/downloads && cd /tmp/downloads && \
+    \
+    # Parallel downloads
+    wget -q https://downloads.apache.org/ant/binaries/apache-ant-${ANT_VERSION}-bin.tar.gz & \
+    wget -q https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip & \
+    wget -q https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_CMD_TOOLS_VERSION}_latest.zip -O android-sdk.zip & \
+    wait && \
+    \
+    # Install tools
+    tar -xzf apache-ant-${ANT_VERSION}-bin.tar.gz -C /opt && \
+    mkdir -p /opt/gradle && unzip -q gradle-${GRADLE_VERSION}-bin.zip -d /opt/gradle && \
+    ln -sf /opt/apache-ant-${ANT_VERSION}/bin/ant /usr/local/bin/ant && \
+    \
+    # NVM and Node.js
+    mkdir -p ${NVM_DIR} && \
+    curl -sSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash && \
+    source ${NVM_DIR}/nvm.sh && \
+    nvm install ${NODE_VERSION} && nvm use ${NODE_VERSION} && nvm alias default ${NODE_VERSION} && \
+    npm install -g --production yarn @angular/cli ionic && npm cache clean --force && \
+    \
+    # Symlinks
+    ln -sf ${NVM_DIR}/versions/node/v${NODE_VERSION}/bin/* /usr/local/bin/ && \
+    \
+    # Android SDK
+    mkdir -p ${ANDROID_SDK_ROOT}/cmdline-tools && \
+    unzip -q android-sdk.zip -d ${ANDROID_SDK_ROOT}/cmdline-tools && \
+    mv ${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools ${ANDROID_SDK_ROOT}/cmdline-tools/latest && \
+    timeout 300 ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --licenses <<<$'y\ny\ny\ny\ny\ny\ny\ny\ny\ny\n' || true && \
+    \
+    # Install Android SDK packages conditionally
+    if [ "${INSTALL_ANDROID_NDK}" = "true" ]; then \
+        ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager \
+          "platform-tools" "platforms;android-34" "build-tools;35.0.0" \
+          "ndk;27.0.11902837" "cmdline-tools;latest"; \
+    else \
+        ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager \
+          "platform-tools" "platforms;android-34" "build-tools;35.0.0" \
+          "cmdline-tools;latest"; \
+    fi && \
+    \
+    # Environment setup
+    echo 'export NVM_DIR="/opt/.nvm"' > /etc/profile.d/nvm.sh && \
+    echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> /etc/profile.d/nvm.sh && \
+    chmod 644 /etc/profile.d/nvm.sh && \
+    mkdir -p /var/jenkins_home && \
+    echo 'source /etc/profile.d/nvm.sh' >> /home/jenkins/.bashrc && \
+    chown -R jenkins:jenkins ${NVM_DIR} ${ANDROID_SDK_ROOT} /var/jenkins_home /home/jenkins/.bashrc && \
+    \
+    # Comprehensive cleanup
+    rm -rf /tmp/downloads /tmp/* /var/cache/apk/* ${NVM_DIR}/.cache \
+           ${ANDROID_SDK_ROOT}/cmdline-tools/latest/.android /root/.android \
+           /home/jenkins/.android 2>/dev/null || true
+
+USER jenkins
+EXPOSE 8081

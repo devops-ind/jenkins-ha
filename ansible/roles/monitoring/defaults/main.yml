@@ -10,7 +10,7 @@ monitoring_user: "monitoring"
 monitoring_group: "monitoring" 
 monitoring_uid: 1004
 monitoring_gid: 1004
-monitoring_home_dir: "/opt/monitoring"
+monitoring_home_dir: "{{ '/workspace/monitoring' if deployment_mode | default('local') in ['devcontainer', 'local'] else '/opt/monitoring' }}"
 
 # Network configuration
 monitoring_network_name: "monitoring-net"
@@ -26,10 +26,10 @@ prometheus_evaluation_interval: "30s"
 
 # Grafana configuration
 grafana_enabled: true
-grafana_port: 3000
+grafana_port: 9300  # Changed from 3000 to 9300 for monitoring consistency
 grafana_version: "latest"
 grafana_admin_user: "admin"
-grafana_admin_password: "admin123"
+grafana_admin_password: "{{ vault_grafana_admin_password | default('admin123') }}"
 grafana_allow_sign_up: false
 grafana_disable_gravatar: true
 grafana_prometheus_datasource:
@@ -68,7 +68,7 @@ monitoring_restart_policy: "unless-stopped"
 
 # Additional exporters
 cadvisor_enabled: true
-cadvisor_port: 8080
+cadvisor_port: 9200  # Changed to 9000 range for monitoring consistency
 
 # Directories to create
 monitoring_directories:

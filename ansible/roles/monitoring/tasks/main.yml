@@ -8,6 +8,7 @@
     gid: "{{ monitoring_gid }}"
     state: present
   become: yes
+  when: deployment_mode | default('local') not in ['devcontainer', 'local']
 
 - name: Create monitoring system user
   user:
@@ -19,16 +20,17 @@
     system: yes
     create_home: yes
   become: yes
+  when: deployment_mode | default('local') not in ['devcontainer', 'local']
 
 - name: Create monitoring directories
   file:
     path: "{{ item }}"
     state: directory
-    owner: "{{ monitoring_user }}"
-    group: "{{ monitoring_group }}"
+    owner: "{{ monitoring_user if deployment_mode | default('local') not in ['devcontainer', 'local'] else omit }}"
+    group: "{{ monitoring_group if deployment_mode | default('local') not in ['devcontainer', 'local'] else omit }}"
     mode: '0755'
   loop: "{{ monitoring_directories }}"
-  become: yes
+  become: "{{ deployment_mode | default('local') not in ['devcontainer', 'local'] }}"
 
 - name: Create monitoring network
   community.docker.docker_network:

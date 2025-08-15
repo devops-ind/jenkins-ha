@@ -179,7 +179,7 @@
     jenkins_ha_enabled: "{{ groups['jenkins_masters'] | default([]) | length > 1 }}"
     jenkins_master_priority: "{{ play_hosts.index(inventory_hostname) + 1 }}"
     # Unified jenkins-master role supports both single and multi-team deployments
-    jenkins_teams: "{{ jenkins_teams | default([]) }}"
+    # jenkins_teams is already defined in group_vars
   roles:
     - role: jenkins-master
       tags: ['jenkins', 'deploy']

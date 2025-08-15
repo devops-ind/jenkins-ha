@@ -11,17 +11,113 @@ jenkins_teams:
       cpu: "2.0"
     env_vars:
       JENKINS_TEAM: "devops"
-      JENKINS_ADMIN_PASSWORD: "admin123"
+      JENKINS_ADMIN_PASSWORD: "{{ vault_jenkins_admin_password | default('admin123') }}"
     labels:
       team: "devops"
       tier: "production"
       environment: "{{ deployment_mode | default('local') }}"
+    security_policies:
+      rbac_enabled: true
+      namespace_isolation: true
+      resource_quotas:
+        cpu_limit: "4"
+        memory_limit: "8Gi"
+        storage_limit: "100Gi"
+      network_policies:
+        ingress_allowed: ["monitoring", "load_balancers"]
+        egress_allowed: ["harbor", "git_repos", "internet"]
+    
     credentials:
       - type: "usernamePassword"
         id: "devops-git-credentials"
         username: "admin"
-        password: "git123"
+        password: "{{ vault_git_password | default('git123') }}"
         description: "DevOps Team Git Credentials"
+        scope: "GLOBAL"
+      - type: "secretText"
+        id: "devops-api-token"
+        secret: "{{ vault_devops_api_token | default('token123') }}"
+        description: "DevOps Team API Token"
+        scope: "GLOBAL"
+      - type: "usernamePassword"
+        id: "harbor-registry-credentials"
+        username: "{{ vault_harbor_username | default('admin') }}"
+        password: "{{ vault_harbor_password | default('Harbor12345') }}"
+        description: "Harbor Registry Credentials"
+    seed_jobs:
+      - name: "infrastructure-health-check"
+        type: "pipeline"
+        display_name: "Infrastructure Health Check"
+        description: "Health monitoring for DevOps team infrastructure"
+        folder: "Infrastructure"
+        pipeline_source: "external"  # NEW: Pipeline source type
+        jenkinsfile_path: "pipelines/Jenkinsfile.health-check"
+        git_repo: "https://github.com/your-org/jenkins-ha.git"  # NEW: Repository URL
+        git_branch: "main"  # NEW: Branch specification
+        triggers:
+          - type: "cron"
+            schedule: "H/15 * * * *"
+          - type: "webhook"  # NEW: Support for webhook triggers
+            token: "health-check-webhook"
+        parameters:
+          - name: "CHECK_TYPE"
+            type: "choice"
+            choices: ["full", "basic", "connectivity"]
+            description: "Type of health check to perform"
+        deployment_gates:  # NEW: Deployment safety gates
+          pre_deployment:
+            - "connectivity_check"
+            - "resource_validation"
+          post_deployment:
+            - "health_verification"
+            - "sli_validation"
+      - name: "backup-pipeline"
+        type: "pipeline"
+        display_name: "Jenkins Backup"
+        description: "Automated backup pipeline with RTO/RPO compliance"
+        folder: "Infrastructure"
+        pipeline_source: "external"
+        jenkinsfile_path: "pipelines/Jenkinsfile.backup"
+        git_repo: "https://github.com/your-org/jenkins-ha.git"
+        git_branch: "main"
+        triggers:
+          - type: "cron"
+            schedule: "H 3 * * *"
+        parameters:
+          - name: "BACKUP_TYPE"
+            type: "choice"
+            choices: ["full", "config", "jobs", "disaster-recovery"]
+            description: "Type of backup to perform"
+          - name: "RTO_TARGET"
+            type: "string"
+            default: "15"
+            description: "Recovery Time Objective (minutes)"
+          - name: "RPO_TARGET"
+            type: "string"
+            default: "5"
+            description: "Recovery Point Objective (minutes)"
+        sli_thresholds:  # NEW: SLI monitoring for backup operations
+          backup_duration_max: "30m"
+          success_rate_min: "99.5%"
+          retention_compliance: "100%"
+      - name: "image-builder"
+        type: "pipeline"
+        display_name: "Jenkins Image Builder"
+        description: "Build and manage Jenkins Docker images"
+        folder: "Infrastructure"
+        jenkinsfile_path: "pipelines/Jenkinsfile.image-builder"
+        triggers:
+          - type: "cron"
+            schedule: "H 2 * * 0"
+        parameters:
+          - name: "IMAGES_TO_BUILD"
+            type: "choice"
+            choices: ["all", "master", "agents"]
+            description: "Images to build"
+          - name: "PUSH_TO_REGISTRY"
+            type: "boolean"
+            default: true
+            description: "Push built images to registry"
 
   - team_name: developer
     active_environment: blue
@@ -34,17 +130,133 @@ jenkins_teams:
       cpu: "1.5"
     env_vars:
       JENKINS_TEAM: "developer"
-      JENKINS_ADMIN_PASSWORD: "admin123"
+      JENKINS_ADMIN_PASSWORD: "{{ vault_jenkins_admin_password | default('admin123') }}"
     labels:
       team: "developer"
       tier: "production"
       environment: "{{ deployment_mode | default('local') }}"
+    security_policies:
+      rbac_enabled: true
+      namespace_isolation: true
+      resource_quotas:
+        cpu_limit: "2"
+        memory_limit: "4Gi"
+        storage_limit: "50Gi"
+      network_policies:
+        ingress_allowed: ["devops", "monitoring"]
+        egress_allowed: ["harbor", "git_repos"]
+      code_scanning:
+        enabled: true
+        tools: ["sonarqube", "trivy", "bandit"]
+    
     credentials:
       - type: "usernamePassword"
         id: "developer-git-credentials"
         username: "admin"
-        password: "git123"
+        password: "{{ vault_git_password | default('git123') }}"
         description: "Developer Team Git Credentials"
+        scope: "GLOBAL"
+      - type: "usernamePassword"
+        id: "harbor-registry-credentials"
+        username: "{{ vault_harbor_username | default('admin') }}"
+        password: "{{ vault_harbor_password | default('Harbor12345') }}"
+        description: "Harbor Registry Credentials"
+      - type: "secretText"
+        id: "sonar-token"
+        secret: "{{ vault_sonar_token | default('sonar123') }}"
+        description: "SonarQube Analysis Token"
+    seed_jobs:
+      - name: "maven-app-pipeline"
+        type: "pipeline"
+        display_name: "Maven Application Pipeline"
+        description: "Enterprise Maven CI/CD with security scanning"
+        folder: "Applications"
+        pipeline_source: "embedded"  # Use embedded DSL for application pipelines
+        agent_label: "maven"
+        deploy_enabled: true
+        blue_green_enabled: true  # NEW: Blue-green deployment support
+        parameters:
+          - name: "GIT_BRANCH"
+            type: "string"
+            default: "main"
+            description: "Git branch to build"
+          - name: "RUN_TESTS"
+            type: "boolean"
+            default: true
+            description: "Execute unit tests"
+          - name: "BUILD_DOCKER_IMAGE"
+            type: "boolean"
+            default: true  # Changed to true for container deployment
+            description: "Build Docker image after packaging"
+          - name: "SECURITY_SCAN"
+            type: "boolean"
+            default: true
+            description: "Run Trivy security scanning"
+          - name: "DEPLOY_ENVIRONMENT"
+            type: "choice"
+            choices: ["staging", "production", "blue", "green"]
+            description: "Target deployment environment"
+        quality_gates:  # NEW: Quality gates for deployment engineering
+          code_coverage_min: "80%"
+          security_scan_threshold: "HIGH"
+          performance_regression_threshold: "5%"
+        deployment_strategy:  # NEW: Deployment strategy configuration
+          type: "blue_green"
+          rollback_triggers:
+            - "error_rate_threshold: 1%"
+            - "response_time_threshold: 500ms"
+            - "cpu_usage_threshold: 80%"
+      - name: "python-app-pipeline"
+        type: "pipeline"
+        display_name: "Python Application Pipeline"
+        description: "Enterprise Python CI/CD with comprehensive testing"
+        folder: "Applications"
+        pipeline_source: "embedded"
+        agent_label: "python"
+        deploy_enabled: true
+        canary_enabled: true  # NEW: Canary deployment support
+        parameters:
+          - name: "PYTHON_VERSION"
+            type: "choice"
+            choices: ["3.9", "3.10", "3.11", "3.12"]
+            description: "Python version to use"
+          - name: "RUN_LINTING"
+            type: "boolean"
+            default: true
+            description: "Run code linting checks"
+          - name: "RUN_INTEGRATION_TESTS"
+            type: "boolean"
+            default: true
+            description: "Execute integration tests"
+          - name: "CANARY_PERCENTAGE"
+            type: "string"
+            default: "10"
+            description: "Canary deployment traffic percentage"
+        test_strategy:  # NEW: Comprehensive testing strategy
+          unit_tests: true
+          integration_tests: true
+          security_tests: true
+          performance_tests: true
+          chaos_engineering: false
+        monitoring_config:  # NEW: Application monitoring
+          metrics_enabled: true
+          tracing_enabled: true
+          alerting_enabled: true
+      - name: "nodejs-app-pipeline"
+        type: "pipeline"
+        display_name: "Node.js Application Pipeline"
+        description: "Build and test Node.js applications"
+        folder: "Applications"
+        agent_label: "nodejs"
+        parameters:
+          - name: "NODE_VERSION"
+            type: "choice"
+            choices: ["16", "18", "20"]
+            description: "Node.js version to use"
+          - name: "NPM_INSTALL"
+            type: "boolean"
+            default: true
+            description: "Run npm install"
 
   # - team_name: qa
   #   active_environment: green

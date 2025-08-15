@@ -46,7 +46,7 @@
     that:
       - item.resources.memory is defined
       - item.resources.cpu is defined
-      - item.resources.memory | regex_search('[0-9]+[gm]')
+      - item.resources.memory | regex_search('[0-9]+[gm]') is not none
       - item.resources.cpu | string | float > 0
     fail_msg: "Resource configuration for {{ item.team_name }} must include valid memory (e.g., '2g') and CPU (e.g., '1.0')"
     success_msg: "Resource configuration validation passed for {{ item.team_name }}"

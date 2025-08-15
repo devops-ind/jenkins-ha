@@ -1,6 +1,0 @@
----
-- name: Build and Deploy Jenkins Images
-  hosts: jenkins_masters
-  become: yes
-  roles:
-    - jenkins-images

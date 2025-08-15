@@ -2,7 +2,7 @@
 
 ![Jenkins HA](https://img.shields.io/badge/Jenkins-HA%20Ready-green) ![Ansible](https://img.shields.io/badge/Ansible-2.14+-blue) ![Docker](https://img.shields.io/badge/Docker-24.x-blue) ![Production Ready](https://img.shields.io/badge/Production-Ready-brightgreen)
 
-A production-grade, containerized Jenkins infrastructure with **Blue-Green Deployment** and **Multi-Team Support** managed through Ansible automation. This repository provides complete infrastructure-as-code for deploying and managing a scalable Jenkins environment with blue-green deployment strategy, comprehensive security, monitoring, and disaster recovery capabilities.
+A production-grade, containerized Jenkins infrastructure with **Blue-Green Deployment** and **Multi-Team Support** managed through Ansible automation. This repository provides complete infrastructure-as-code for deploying and managing a scalable Jenkins environment with automated pipeline creation, comprehensive monitoring, and enterprise security.
 
 ## Table of Contents
 
@@ -10,6 +10,8 @@ A production-grade, containerized Jenkins infrastructure with **Blue-Green Deplo
 - [Quick Start](#quick-start)
 - [Architecture](#architecture)
 - [Features](#features)
+- [Team Configuration](#team-configuration)
+- [Pipeline Automation](#pipeline-automation)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Deployment](#deployment)
@@ -22,24 +24,24 @@ A production-grade, containerized Jenkins infrastructure with **Blue-Green Deplo
 This infrastructure provides:
 
 - **Blue-Green Deployment**: Zero-downtime deployments with automated environment switching
-- **Multi-Team Support**: Isolated Jenkins masters for multiple teams (devops, developer, qa)
+- **Multi-Team Support**: Isolated Jenkins masters with automated pipeline creation
 - **Containerized Architecture**: Docker/Podman containers with native Ansible orchestration
-- **Dynamic Agent Scaling**: Container-based agents provisioned on-demand via Docker Cloud Plugin
-- **HAProxy Load Balancing**: Advanced traffic routing with health checks and failover
-- **Security Hardening**: Comprehensive security controls and compliance measures
-- **Monitoring Stack**: Prometheus/Grafana with custom dashboards and alerting
-- **Automated Backups**: Multi-tier backup strategy with disaster recovery procedures
-- **Job DSL Integration**: Automated job creation and management through code
+- **Automated Pipeline Creation**: DSL-driven job creation with team-specific configurations
+- **Dynamic Agent Scaling**: Container-based agents (Maven, Python, Node.js, DIND) provisioned on-demand
+- **HAProxy Load Balancing**: Advanced traffic routing with health checks and team-based routing
+- **Monitoring Stack**: Prometheus/Grafana with 26-panel dashboards and DORA metrics
+- **Enterprise Security**: Container vulnerability scanning, compliance validation, and audit logging
+- **Automated Operations**: Health checks, backups, and infrastructure maintenance
 
 ### Key Components
 
 - **Blue-Green Jenkins Masters**: Multiple team environments with zero-downtime switching
-- **HAProxy Load Balancer**: Traffic routing with health checks and API management
-- **Dynamic Agent Templates**: On-demand containerized agents (DIND, Maven, Python, Node.js)
-- **Job DSL Automation**: Code-driven job creation and management
-- **Monitoring**: Prometheus metrics collection and Grafana visualization
-- **Storage**: NFS/GlusterFS shared storage for persistence
-- **Security**: Fail2ban, AIDE, RKHunter, and comprehensive hardening
+- **HAProxy Load Balancer**: Team-aware traffic routing with health checks and API management
+- **Automated Pipeline Generation**: DSL-based creation of team-specific jobs and infrastructure pipelines
+- **Dynamic Agent Templates**: On-demand containerized agents with security constraints
+- **Monitoring**: Enhanced Grafana dashboards with SLI tracking and DORA metrics
+- **Storage**: NFS/GlusterFS shared storage with encryption and access controls
+- **Security**: Trivy vulnerability scanning, container security monitoring, and compliance validation
 
 ## Quick Start
 
@@ -57,10 +59,7 @@ ansible-galaxy collection install -r ansible/requirements.yml
 cp ansible/inventories/staging/hosts.yml ansible/inventories/production/hosts.yml
 # Edit with your production hosts
 
-# 4. Set up vault passwords
-./scripts/vault-setup.sh production
-
-# 5. Deploy infrastructure
+# 4. Deploy infrastructure
 make deploy-production
 ```
 
@@ -72,8 +71,11 @@ pip install -r requirements.txt
 # 2. Deploy local environment
 make deploy-local
 
-# 3. Access Jenkins
-open http://localhost:8080
+# 3. Access services
+# Jenkins: http://localhost:8080 (DevOps team)
+# Jenkins: http://localhost:8081 (Developer team)
+# Grafana: http://localhost:9300
+# Prometheus: http://localhost:9090
 ```
 
 ### For Administrators (Day-2 Operations)
@@ -90,7 +92,7 @@ ansible-playbook ansible/site.yml --tags security --check
 
 ## Architecture
 
-### Blue-Green Multi-Team Architecture
+### Multi-Team Blue-Green Architecture
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                          HAProxy Load Balancer                             │
@@ -101,7 +103,7 @@ ansible-playbook ansible/site.yml --tags security --check
         │                         │                         │
 ┌───────▼─────────┐    ┌─────────▼──────────┐    ┌─────────▼─────────┐
 │   DevOps Team   │    │  Developer Team    │    │     QA Team       │
-│   Port: 8080    │    │   Port: 8090       │    │   Port: 8100      │
+│   Port: 8080    │    │   Port: 8081       │    │   Port: 8082      │
 └─────────────────┘    └────────────────────┘    └───────────────────┘
 │                      │                        │
 │ ┌─────────────────┐  │ ┌─────────────────┐    │ ┌─────────────────┐
@@ -139,53 +141,134 @@ ansible-playbook ansible/site.yml --tags security --check
 ### Container Architecture
 - **Runtime Support**: Docker 24.x and Podman 4.x with native Ansible orchestration
 - **Blue-Green Deployment**: Automated environment switching with health checks
-- **Image Management**: Custom-built images with security hardening
-- **Orchestration**: Direct container management (no Docker Compose dependency)
-- **Networking**: Custom bridge networks with DNS resolution
-- **Storage**: Named volumes and bind mounts for persistence
-- **Multi-Team Isolation**: Separate container environments per team
-
-For detailed architecture information, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- **Image Management**: Custom-built images with security hardening and vulnerability scanning
+- **Orchestration**: Direct container management with site.yml playbook
+- **Networking**: Custom bridge networks with DNS resolution and team isolation
+- **Storage**: Named volumes and bind mounts for persistence across blue-green switches
+- **Multi-Team Isolation**: Separate container environments with resource constraints
 
 ## Features
 
 ### Production-Ready Infrastructure
-- ✅ **Blue-Green Deployment**: Zero-downtime deployments with automated switching
-- ✅ **Multi-Team Support**: Isolated Jenkins environments for different teams
-- ✅ **Container Orchestration**: Docker/Podman with native Ansible management
-- ✅ **HAProxy Load Balancing**: Advanced traffic routing with health checks and API
-- ✅ **Shared Storage**: NFS/GlusterFS for persistent Jenkins data
+- ✅ **Blue-Green Deployment**: Zero-downtime deployments with automated switching and rollback triggers
+- ✅ **Multi-Team Support**: Isolated Jenkins environments with automated pipeline creation
+- ✅ **Container Orchestration**: Docker/Podman with native Ansible management and security constraints
+- ✅ **HAProxy Load Balancing**: Team-aware traffic routing with health checks and SLI monitoring
+- ✅ **Shared Storage**: NFS/GlusterFS with encryption and access controls
 - ✅ **SSL/TLS**: Certificate management and encryption
-- ✅ **Job DSL Automation**: Code-driven job creation and pipeline management
+- ✅ **Automated Pipeline Creation**: DSL-driven job creation with team-specific configurations
 
 ### Security & Compliance
 - ✅ **System Hardening**: CIS benchmark compliance and security controls
+- ✅ **Container Security**: Trivy vulnerability scanning, security constraints, and runtime monitoring
 - ✅ **Intrusion Detection**: Fail2ban, AIDE file integrity, RKHunter
-- ✅ **Access Control**: RBAC, LDAP integration, credential management
-- ✅ **Vulnerability Scanning**: Container image scanning with Trivy
+- ✅ **Access Control**: RBAC, team-based isolation, credential management
 - ✅ **Audit Logging**: Comprehensive logging and compliance reporting
+- ✅ **Vulnerability Management**: Automated security scanning and compliance validation
 
 ### Monitoring & Observability  
-- ✅ **Metrics Collection**: Prometheus with custom Jenkins metrics
-- ✅ **Visualization**: Grafana dashboards for infrastructure and applications
-- ✅ **Alerting**: AlertManager with notification routing
+- ✅ **Enhanced Metrics Collection**: Prometheus with custom Jenkins metrics and SLI tracking
+- ✅ **Advanced Visualization**: 26-panel Grafana dashboards with DORA metrics and blue-green status
+- ✅ **Automated Alerting**: AlertManager with notification routing and rollback triggers
 - ✅ **Log Management**: Centralized logging and analysis
-- ✅ **Health Checks**: Automated health monitoring and reporting
+- ✅ **Health Monitoring**: Multi-layer health checks with automated rollback capabilities
 
 ### Backup & Recovery
-- ✅ **Automated Backups**: Daily incremental, weekly full backups
+- ✅ **Enterprise Backup**: Automated daily incremental, weekly full backups with RTO/RPO compliance
 - ✅ **Multiple Targets**: Local, cloud, and remote storage options
-- ✅ **Disaster Recovery**: Complete DR procedures and testing
+- ✅ **Automated Disaster Recovery**: Complete DR procedures with 15-minute RTO, 5-minute RPO targets
 - ✅ **Point-in-Time Recovery**: Restore to specific timestamps
 - ✅ **Backup Verification**: Automated backup testing and validation
 
 ### DevOps Integration
-- ✅ **Infrastructure Pipelines**: Complete infrastructure management pipelines
-- ✅ **Dynamic Agent Templates**: DIND, Maven, Python, Node.js container agents
-- ✅ **Job DSL Scripts**: Organized job definitions in `jenkins-dsl/` directory
+- ✅ **Automated Pipeline Creation**: Team-specific infrastructure and application pipelines
+- ✅ **Dynamic Agent Templates**: DIND, Maven, Python, Node.js container agents with security constraints
+- ✅ **Job DSL Automation**: Organized job definitions with team-specific configurations
 - ✅ **Infrastructure as Code**: Complete Ansible automation with blue-green deployment
 - ✅ **Environment Management**: Production, staging, and devcontainer support
-- ✅ **Multi-Team Workflows**: Isolated CI/CD environments per development team
+- ✅ **Multi-Team Workflows**: Isolated CI/CD environments with automated job provisioning
+
+## Team Configuration
+
+Teams are configured in `ansible/group_vars/all/jenkins_teams.yml` with automatic pipeline creation:
+
+### DevOps Team
+```yaml
+- team_name: devops
+  active_environment: blue
+  ports:
+    web: 8080
+    agent: 50000
+  seed_jobs:
+    - name: "infrastructure-health-check"
+      type: "pipeline"
+      display_name: "Infrastructure Health Check"
+      triggers:
+        - type: "cron"
+          schedule: "H/15 * * * *"
+    - name: "backup-pipeline"
+      type: "pipeline"
+      display_name: "Jenkins Backup"
+      triggers:
+        - type: "cron"
+          schedule: "H 3 * * *"
+    - name: "image-builder"
+      type: "pipeline"
+      display_name: "Jenkins Image Builder"
+      triggers:
+        - type: "cron"
+          schedule: "H 2 * * 0"
+```
+
+### Developer Team
+```yaml
+- team_name: developer
+  active_environment: blue
+  ports:
+    web: 8081
+    agent: 50001
+  seed_jobs:
+    - name: "maven-app-pipeline"
+      type: "pipeline"
+      display_name: "Maven Application Pipeline"
+      agent_label: "maven"
+      deploy_enabled: true
+    - name: "python-app-pipeline"
+      type: "pipeline"
+      display_name: "Python Application Pipeline"
+      agent_label: "python"
+    - name: "nodejs-app-pipeline"
+      type: "pipeline"
+      display_name: "Node.js Application Pipeline"
+      agent_label: "nodejs"
+```
+
+## Pipeline Automation
+
+### Automated Job Creation
+Each team automatically receives:
+
+**Infrastructure Jobs** (DevOps Team):
+- Health monitoring (every 15 minutes)
+- Automated backups (daily at 3 AM)
+- Image building (weekly on Sunday)
+- Blue-green environment switching
+
+**Application Pipelines** (Developer Team):
+- Maven application builds with testing and Docker image creation
+- Python application builds with version selection and linting
+- Node.js application builds with version selection and npm options
+
+**Monitoring Jobs** (All Teams):
+- Team-specific health checks
+- Agent connectivity monitoring
+- Storage usage validation
+
+### DSL Seed Job Integration
+- **Embedded DSL Scripts**: Team configurations automatically generate pipeline jobs
+- **Daily Job Updates**: Seed jobs run at 6 AM to create/update team pipelines
+- **Sandbox Security**: All DSL execution runs in sandbox mode with pre-approved signatures
+- **External Pipeline Support**: References external Jenkinsfiles in `pipelines/` directory
 
 ## Prerequisites
 
@@ -205,29 +288,29 @@ For detailed architecture information, see [docs/ARCHITECTURE.md](docs/ARCHITECT
 - **CPU**: 4-8 cores per master
 - **RAM**: 16GB+ per master (8GB Jenkins + 8GB system)
 - **Disk**: 100GB+ OS + 50GB+ container storage + shared storage access
-- **Count**: Minimum 2 for HA (supports 2-4 masters)
+- **Count**: Minimum 1 for blue-green (supports 2-4 masters)
 
 **Dynamic Agent Resources (Container-based)**
 - **DIND Agent**: 2GB RAM, privileged Docker access
 - **Maven Agent**: 4GB RAM, 3GB heap, persistent .m2 cache
 - **Python Agent**: 2GB RAM, pip cache persistence
 - **Node.js Agent**: 3GB RAM, npm cache persistence
-- **Scaling**: Auto-scaling based on demand (0-10 concurrent agents)
+- **Scaling**: Auto-scaling based on demand (0-10 concurrent agents per team)
 
-**Shared Storage**
-- **Type**: NFS 4.1+ server or GlusterFS 10.x cluster
-- **Capacity**: 1TB+ (scalable with growth)
-- **Performance**: 2000+ IOPS, 100MB/s+ throughput
-- **Redundancy**: RAID 10 or distributed replication
+**Monitoring Stack**
+- **CPU**: 4 cores
+- **RAM**: 8GB
+- **Storage**: 200GB+ for metrics and logs
+- **Ports**: Prometheus (9090), Grafana (9300), cAdvisor (9200)
 
 **Supporting Services**
-- **Monitoring Stack**: 4 CPU, 8GB RAM, 200GB+ storage
-- **Load Balancer**: 2 CPU, 4GB RAM (can be virtual/shared)
+- **HAProxy Load Balancer**: 2 CPU, 4GB RAM (can be virtual/shared)
+- **Shared Storage**: NFS 4.1+ server or GlusterFS 10.x cluster
 
 ### Network Requirements
 - **Connectivity**: All nodes must have network connectivity
 - **DNS**: Hostname resolution or IP-based inventory
-- **Firewall**: Required ports open (see [docs/SECURITY.md](docs/SECURITY.md))
+- **Firewall**: Required ports open (22/tcp, 80/tcp, 443/tcp, 8080-8082/tcp, 9090/tcp, 9300/tcp)
 - **Bandwidth**: 1Gbps+ recommended for image transfers
 - **Time Sync**: NTP synchronization across all nodes
 
@@ -261,6 +344,26 @@ cp ansible/inventories/staging/hosts.yml ansible/inventories/production/hosts.ym
 vim ansible/inventories/production/hosts.yml
 ```
 
+Required inventory groups:
+```yaml
+jenkins_masters:
+  hosts:
+    jenkins-01:
+      ansible_host: 192.168.1.10
+    jenkins-02:
+      ansible_host: 192.168.1.11
+
+load_balancers:
+  hosts:
+    haproxy-01:
+      ansible_host: 192.168.1.20
+
+monitoring:
+  hosts:
+    monitoring-01:
+      ansible_host: 192.168.1.30
+```
+
 ### 3. Vault Setup
 
 ```bash
@@ -269,17 +372,6 @@ vim ansible/inventories/production/hosts.yml
 
 # Create encrypted variables
 ansible-vault create ansible/inventories/production/group_vars/all/vault.yml
-```
-
-### 4. SSL Certificates (Optional)
-
-```bash
-# For production with custom certificates
-mkdir -p environments/certificates/production
-cp your-certificates/* environments/certificates/production/
-
-# For Let's Encrypt (automatic)
-# Certificates will be generated during deployment
 ```
 
 ## Deployment
@@ -294,12 +386,6 @@ make deploy-production
 ansible-playbook -i ansible/inventories/production/hosts.yml \
   ansible/site.yml \
   --vault-password-file=environments/vault-passwords/.vault_pass_production
-```
-
-### Staging Deployment
-
-```bash
-make deploy-staging
 ```
 
 ### Local Development
@@ -333,15 +419,16 @@ ansible-playbook -i ansible/inventories/production/hosts.yml \
 # Test infrastructure health
 ansible all -i ansible/inventories/production/hosts.yml -m ping
 
-# Check Jenkins accessibility
-curl -I http://your-jenkins-vip:8080/login
+# Check team services
+curl -I http://your-jenkins-vip:8080/login  # DevOps team
+curl -I http://your-jenkins-vip:8081/login  # Developer team
 
-# Verify load balancer stats
+# Verify monitoring
+curl http://your-monitoring-host:9090/-/healthy  # Prometheus
+curl http://your-monitoring-host:9300/api/health  # Grafana
+
+# Check load balancer stats
 curl http://your-load-balancer:8404/stats
-
-# Check container status
-ansible jenkins_masters -i ansible/inventories/production/hosts.yml \
-  -m shell -a "docker ps | grep jenkins"
 ```
 
 ## Operations
@@ -352,14 +439,27 @@ ansible jenkins_masters -i ansible/inventories/production/hosts.yml \
 # Monitor infrastructure health
 make monitor
 
-# Check security status
-ansible-playbook ansible/site.yml --tags security --check
+# Check service status
+make status
 
 # View system logs
 ./scripts/monitor.sh logs
 
 # Check backup status
 ./scripts/backup.sh status
+```
+
+### Team Pipeline Management
+
+```bash
+# View team configurations
+cat ansible/group_vars/all/jenkins_teams.yml
+
+# Trigger seed job updates (manual)
+# Access Jenkins UI -> Team folder -> dsl-seed-job -> Build Now
+
+# Blue-green environment switch
+./scripts/blue-green-switch.sh <team-name> switch
 ```
 
 ### Maintenance Operations
@@ -371,31 +471,31 @@ make backup
 # Update Jenkins version
 ansible-playbook ansible/site.yml -e jenkins_version=2.427.1
 
-# Security hardening check
+# Security compliance scan
 ansible-playbook ansible/site.yml --tags security
 
-# Certificate renewal
-ansible-playbook ansible/site.yml --tags ssl-certificates
+# Update team configurations
+# Edit ansible/group_vars/all/jenkins_teams.yml
+# Redeploy: ansible-playbook ansible/site.yml --tags jenkins,config
 ```
 
 ### Emergency Operations
 
 ```bash
 # Disaster recovery
-./scripts/disaster-recovery.sh
+./scripts/disaster-recovery.sh production --validate
 
 # Emergency backup
 ./scripts/backup.sh emergency
 
-# Security incident response
-./scripts/incident-response.sh critical "description"
+# Blue-green rollback
+./scripts/blue-green-switch.sh <team-name> rollback
 ```
 
 ## Documentation
 
 ### Core Documentation
-- **[Operations Guide](docs/OPERATIONS.md)**: Complete operations manual with troubleshooting, deployment commands, and emergency procedures
-- **[Deployment Guide](docs/DEPLOYMENT.md)**: Comprehensive deployment procedures and prerequisites
+- **[CLAUDE.md](CLAUDE.md)**: Complete deployment commands and configuration guidance
 - **[Architecture](docs/ARCHITECTURE.md)**: System design and component overview
 - **[Security Guide](docs/SECURITY.md)**: Security hardening, compliance, and incident response
 - **[Blue-Green Deployment](docs/BLUE-GREEN-DEPLOYMENT.md)**: Zero-downtime deployment strategy
@@ -403,17 +503,17 @@ ansible-playbook ansible/site.yml --tags ssl-certificates
 - **[Monitoring](docs/MONITORING.md)**: Observability and alerting setup
 - **[High Availability](docs/HIGH-AVAILABILITY.md)**: HA configuration and management
 
-### Development Documentation
-- **[Job DSL Management](docs/JOB-DSL-MANAGEMENT.md)**: Automated job creation and pipeline management
-- **[View Management](docs/VIEW-MANAGEMENT.md)**: Jenkins view configuration and management
-- **[Inventory Management](docs/config/INVENTORY-MANAGEMENT.md)**: Host and environment management
+### Pipeline Documentation
+- **[Pipeline Directory](pipelines/)**: External Jenkinsfile definitions for infrastructure jobs
+- **[DSL Scripts](jenkins-dsl/)**: Job DSL definitions and examples
+- **[Team Configuration](ansible/group_vars/all/jenkins_teams.yml)**: Team-specific pipeline configurations
 
 ## Support
 
 ### Getting Help
 
 1. **Documentation**: Check the relevant documentation in the `docs/` directory
-2. **Troubleshooting**: Review [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
+2. **Configuration**: Review `CLAUDE.md` for deployment commands and troubleshooting
 3. **Issues**: Create an issue with detailed description and logs
 4. **Community**: Join our community discussions
 
@@ -421,15 +521,31 @@ ansible-playbook ansible/site.yml --tags ssl-certificates
 
 When reporting issues, please include:
 - Environment details (staging/production)
+- Team configuration and affected services
 - Error messages and logs
 - Steps to reproduce
 - Expected vs actual behavior
 
-### Emergency Contacts
+### Service URLs
 
-- **Infrastructure Team**: infra@company.com
-- **Security Team**: security@company.com  
-- **24/7 Support**: +1-555-0123
+After deployment, access services at:
+
+```bash
+# Team Services
+DevOps Jenkins:    http://<jenkins-host>:8080
+Developer Jenkins: http://<jenkins-host>:8081
+
+# Monitoring
+Grafana:          http://<monitoring-host>:9300
+Prometheus:       http://<monitoring-host>:9090
+HAProxy Stats:    http://<load-balancer>:8404/stats
+
+# Local Development
+DevOps Jenkins:    http://localhost:8080
+Developer Jenkins: http://localhost:8081
+Grafana:          http://localhost:9300
+Prometheus:       http://localhost:9090
+```
 
 ### Contributing
 
@@ -445,4 +561,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Jenkins HA Infrastructure** - Production-ready, secure, and highly available Jenkins infrastructure with comprehensive automation and monitoring.
+**Jenkins HA Infrastructure** - Production-ready, secure, and highly available Jenkins infrastructure with automated pipeline creation, comprehensive monitoring, and enterprise security.

@@ -5,7 +5,15 @@
     name: docker
     state: restarted
     enabled: yes
+    daemon_reload: yes
   listen: "restart docker"
+  when: deployment_mode | default('local') not in ['devcontainer', 'local']
+
+- name: skip docker restart in devcontainer
+  debug:
+    msg: "Skipping Docker service restart in devcontainer environment"
+  listen: "restart docker"
+  when: deployment_mode | default('local') in ['devcontainer', 'local']
 
 - name: restart auditd
   systemd:
@@ -13,3 +21,12 @@
     state: restarted
     enabled: yes
   listen: "restart auditd"
+  when: 
+    - deployment_mode | default('local') not in ['devcontainer', 'local']
+    - ansible_facts.services['auditd.service'] is defined
+
+- name: skip auditd restart in devcontainer
+  debug:
+    msg: "Skipping auditd service restart - not available in development environment"
+  listen: "restart auditd"
+  when: deployment_mode | default('local') in ['devcontainer', 'local']

@@ -1,0 +1,108 @@
+# === STAGE 1: Download and prepare tools ===
+FROM alpine:3.19 AS downloader
+
+# Install wget, unzip, curl for downloads
+RUN apk add --no-cache wget unzip curl bash
+
+# Set versions
+ENV ANT_VERSION=1.10.14 \
+    GRADLE_VERSION=8.7 \
+    NODE_VERSION=18.20.3 \
+    ANDROID_CMD_TOOLS_VERSION=11076708 \
+    NVM_DIR=/opt/.nvm
+
+WORKDIR /downloads
+
+# Download all tools in parallel
+RUN wget -q https://downloads.apache.org/ant/binaries/apache-ant-${ANT_VERSION}-bin.tar.gz & \
+    wget -q https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip & \
+    wget -q https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_CMD_TOOLS_VERSION}_latest.zip -O android-sdk.zip & \
+    wait
+
+# Extract and prepare tools
+RUN mkdir -p /opt/tools && \
+    # Extract Ant
+    tar -xzf apache-ant-${ANT_VERSION}-bin.tar.gz -C /opt/tools && \
+    # Extract Gradle  
+    mkdir -p /opt/tools/gradle && \
+    unzip -q gradle-${GRADLE_VERSION}-bin.zip -d /opt/tools/gradle && \
+    # Prepare Android SDK
+    mkdir -p /opt/tools/android-sdk/cmdline-tools && \
+    unzip -q android-sdk.zip -d /opt/tools/android-sdk/cmdline-tools && \
+    mv /opt/tools/android-sdk/cmdline-tools/cmdline-tools /opt/tools/android-sdk/cmdline-tools/latest
+
+# Install NVM and Node.js
+RUN mkdir -p ${NVM_DIR} && \
+    curl -sSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash && \
+    bash -c "source ${NVM_DIR}/nvm.sh && \
+             nvm install ${NODE_VERSION} && \
+             nvm use ${NODE_VERSION} && \
+             nvm alias default ${NODE_VERSION} && \
+             npm install -g --production yarn @angular/cli ionic && \
+             npm cache clean --force"
+
+# === STAGE 2: Final image ===
+FROM iedubharbor.example.net/jenkins/python-agent:latest-jdk17
+
+USER root
+
+# === Environment variables ===
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt \
+    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    JAVA_OPTS="-Djavax.net.ssl.trustStore=/opt/java/openjdk/lib/security/cacerts \
+    -Djavax.net.ssl.trustStorePassword=changeit -Djenkins.install.runSetupWizard=false -Djava.awt.headless=true" \
+    NVM_DIR=/opt/.nvm \
+    ANDROID_SDK_ROOT=/opt/android-sdk \
+    ANT_VERSION=1.10.14 \
+    GRADLE_VERSION=8.7 \
+    NODE_VERSION=18.20.3
+
+ENV ANT_HOME=/opt/apache-ant-${ANT_VERSION} \
+    GRADLE_HOME=/opt/gradle/gradle-${GRADLE_VERSION} \
+    PATH=$PATH:/opt/apache-ant-${ANT_VERSION}/bin:/opt/gradle/gradle-${GRADLE_VERSION}/bin:${NVM_DIR}/versions/node/v${NODE_VERSION}/bin:${ANDROID_SDK_ROOT}/build-tools/35.0.0:${ANDROID_SDK_ROOT}/platform-tools:${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin
+
+SHELL ["/bin/bash", "-c"]
+
+# Copy pre-built tools from downloader stage
+COPY --from=downloader /opt/tools/apache-ant-${ANT_VERSION} /opt/apache-ant-${ANT_VERSION}
+COPY --from=downloader /opt/tools/gradle/gradle-${GRADLE_VERSION} /opt/gradle/gradle-${GRADLE_VERSION}
+COPY --from=downloader /opt/tools/android-sdk ${ANDROID_SDK_ROOT}
+COPY --from=downloader ${NVM_DIR} ${NVM_DIR}
+
+# Final setup and Android SDK installation
+RUN set -eux && \
+    # Create symlinks
+    ln -sf /opt/apache-ant-${ANT_VERSION}/bin/ant /usr/local/bin/ant && \
+    ln -sf ${NVM_DIR}/versions/node/v${NODE_VERSION}/bin/node /usr/local/bin/node && \
+    ln -sf ${NVM_DIR}/versions/node/v${NODE_VERSION}/bin/npm /usr/local/bin/npm && \
+    ln -sf ${NVM_DIR}/versions/node/v${NODE_VERSION}/bin/yarn /usr/local/bin/yarn && \
+    ln -sf ${NVM_DIR}/versions/node/v${NODE_VERSION}/bin/ionic /usr/local/bin/ionic && \
+    ln -sf ${NVM_DIR}/versions/node/v${NODE_VERSION}/bin/ng /usr/local/bin/ng && \
+    \
+    # Setup nvm environment
+    echo 'export NVM_DIR="/opt/.nvm"' > /etc/profile.d/nvm.sh && \
+    echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> /etc/profile.d/nvm.sh && \
+    chmod 644 /etc/profile.d/nvm.sh && \
+    \
+    # Install only essential Android SDK components
+    timeout 300 ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --licenses <<<$'y\ny\ny\ny\ny\ny\ny\ny\ny\ny\n' || true && \
+    ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager \
+      "platform-tools" \
+      "platforms;android-34" \
+      "build-tools;35.0.0" \
+      "cmdline-tools;latest" && \
+    \
+    # Setup directories and permissions
+    mkdir -p /var/jenkins_home && \
+    echo 'source /etc/profile.d/nvm.sh' >> /home/jenkins/.bashrc && \
+    chown -R jenkins:jenkins ${NVM_DIR} ${ANDROID_SDK_ROOT} /var/jenkins_home /home/jenkins/.bashrc && \
+    \
+    # Final cleanup
+    rm -rf ${ANDROID_SDK_ROOT}/cmdline-tools/latest/.android \
+           /root/.android \
+           /home/jenkins/.android 2>/dev/null || true
+
+USER jenkins
+
+EXPOSE 8081
