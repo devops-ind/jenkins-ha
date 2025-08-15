@@ -78,8 +78,8 @@ monitoring_uid: 1005
 monitoring_gid: 1005
 haproxy_uid: 1004
 
-# HAProxy should bind to port 80 (HTTP), not 8080 which conflicts with Jenkins
-jenkins_port: 80
+# HAProxy should bind to port 8090 (HTTP), avoiding privileged port 80 in host networking
+jenkins_port: 8090
 haproxy_gid: 1004
 
 # Timezone
@@ -93,7 +93,7 @@ vm_max_map_count: 262144
 firewall_allowed_ports:
   - "8080/tcp"  # DevOps Jenkins
   - "8081/tcp"  # Developer Jenkins  
-  - "80/tcp"    # HAProxy HTTP
+  - "8090/tcp"  # HAProxy HTTP
   - "443/tcp"   # HAProxy HTTPS (future)
   - "8404/tcp"  # HAProxy Stats
   - "9090/tcp"  # Prometheus

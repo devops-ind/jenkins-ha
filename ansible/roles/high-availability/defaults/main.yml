@@ -95,7 +95,7 @@ haproxy_image_alternatives:
 
 # HAProxy Network Configuration
 haproxy_network_name: "jenkins-network"
-haproxy_network_mode: "bridge"  # Use bridge for compatibility with Jenkins containers
+haproxy_network_mode: "host"  # Use host networking for direct access to Jenkins backends
 
 # HAProxy Container Resources
 haproxy_memory_limit: "512M"

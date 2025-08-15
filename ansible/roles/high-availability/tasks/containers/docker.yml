@@ -140,7 +140,7 @@
     _haproxy_devcontainer_security_opts:
       - "seccomp=unconfined"
       - "apparmor=unconfined"
-    _haproxy_sysctls: "{{ _haproxy_devcontainer_sysctls if deployment_mode in ['devcontainer', 'local', 'production'] else {} }}"
+    _haproxy_sysctls: "{{ _haproxy_devcontainer_sysctls if (deployment_mode in ['devcontainer', 'local', 'production'] and haproxy_network_mode != 'host') else {} }}"
     _haproxy_devcontainer_sysctls:
       net.ipv4.ip_unprivileged_port_start: "80"
     _haproxy_health_check_command: >-

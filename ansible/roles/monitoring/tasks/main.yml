@@ -127,13 +127,12 @@
     password: "{{ grafana_admin_password }}"
     force_basic_auth: yes
     body_format: json
-    body: "{{ lookup('file', item) | from_json }}"
+    body: "{{ lookup('file', playbook_dir + '/../' + item) | from_json }}"
     status_code: [200, 412]  # 412 if dashboard already exists
   loop:
-    - "{{ monitoring_home_dir }}/grafana/dashboards/jenkins-overview.json"
-    - "{{ monitoring_home_dir }}/grafana/dashboards/jenkins-builds.json"
-    - "{{ monitoring_home_dir }}/grafana/dashboards/infrastructure-health.json"
-    - "{{ monitoring_home_dir }}/grafana/dashboards/security-metrics.json"
+    - "monitoring/grafana/dashboards/jenkins-overview.json"
+    - "monitoring/grafana/dashboards/jenkins-comprehensive.json"
+    - "monitoring/grafana/dashboards/jenkins-blue-green.json"
   ignore_errors: yes  # Don't fail deployment if dashboard import fails
 
 - name: Create monitoring bin directory
