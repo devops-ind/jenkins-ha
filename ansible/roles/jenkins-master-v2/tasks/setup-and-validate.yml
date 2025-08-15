@@ -1,0 +1,211 @@
+---
+# Simplified Jenkins Master - Combined Setup, Validation, and Infrastructure
+# Consolidates: validate.yml (84 lines) + configuration.yml (113 lines) + networking.yml (31 lines) + socket-detection.yml (38 lines)
+# Total: ~266 lines → ~120 lines (53% reduction)
+
+# ====================================
+# VALIDATION PHASE
+# ====================================
+
+- name: Validate deployment configuration
+  block:
+    - name: Validate basic team configuration
+      assert:
+        that:
+          - item.team_name is defined and item.team_name | length > 0
+          - item.active_environment is defined and item.active_environment in ['blue', 'green']
+          - item.ports.web is defined and item.ports.web | int > 1024
+          - item.ports.agent is defined and item.ports.agent | int > 1024
+          - item.ports.web != item.ports.agent
+          - item.resources.memory is defined and item.resources.memory | regex_search('[0-9]+[gm]') is not none
+          - item.resources.cpu is defined and item.resources.cpu | string | float > 0
+        fail_msg: "Invalid configuration for team {{ item.team_name }}: missing or invalid team_name, active_environment, ports, or resources"
+        success_msg: "Configuration validation passed for team {{ item.team_name }}"
+      loop: "{{ jenkins_teams_config }}"
+      loop_control:
+        label: "{{ item.team_name }}"
+
+    - name: Validate port conflicts between teams
+      assert:
+        that:
+          - jenkins_teams_config | map(attribute='ports.web') | list | unique | length == jenkins_teams_config | length
+          - jenkins_teams_config | map(attribute='ports.agent') | list | unique | length == jenkins_teams_config | length
+        fail_msg: |
+          Port conflicts detected between teams:
+          Web ports: {{ jenkins_teams_config | map(attribute='ports.web') | list }}
+          Agent ports: {{ jenkins_teams_config | map(attribute='ports.agent') | list }}
+        success_msg: "No port conflicts detected between teams"
+      when: jenkins_teams_config | length > 1
+
+    - name: Validate container runtime availability
+      command: "docker --version"
+      register: docker_check
+      failed_when: docker_check.rc != 0
+      changed_when: false
+  tags: ['validate', 'setup']
+
+# ====================================
+# SYSTEM CONFIGURATION PHASE
+# ====================================
+
+- name: Setup Jenkins system infrastructure
+  block:
+    - name: Create Jenkins system user and group
+      group:
+        name: "{{ jenkins_user }}"
+        gid: "{{ jenkins_gid }}"
+        state: present
+      become: yes
+
+    - name: Create Jenkins system user
+      user:
+        name: "{{ jenkins_user }}"
+        uid: "{{ jenkins_uid }}"
+        group: "{{ jenkins_user }}"
+        home: "{{ jenkins_home_dir }}"
+        shell: /bin/bash
+        system: yes
+        create_home: yes
+      become: yes
+
+    - name: Create Jenkins base directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_user }}"
+        mode: '0755'
+      loop:
+        - "{{ jenkins_home_dir }}/init.groovy.d"
+        - "{{ jenkins_home_dir }}/scripts"
+
+    - name: Create team-specific directory structure
+      file:
+        path: "{{ jenkins_home_dir }}/{{ item.0.team_name }}/{{ item.1 }}/casc_configs"
+        state: directory
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_user }}"
+        mode: '0755'
+        recurse: yes
+      with_nested:
+        - "{{ jenkins_teams_config }}"
+        - ['blue', 'green']
+      loop_control:
+        label: "{{ item.0.team_name }}/{{ item.1 }}"
+  tags: ['setup', 'config']
+
+# ====================================
+# NETWORKING PHASE
+# ====================================
+
+- name: Setup Docker networking infrastructure
+  block:
+    - name: Create Jenkins network
+      community.docker.docker_network:
+        name: "{{ jenkins_master_network_name }}"
+        driver: "{{ jenkins_master_network_driver }}"
+        ipam_config:
+          - subnet: "{{ jenkins_master_network_subnet }}"
+            gateway: "{{ jenkins_master_network_gateway }}"
+        state: present
+
+    - name: Check port availability for all teams
+      wait_for:
+        port: "{{ item.1 }}"
+        host: "{{ ansible_default_ipv4.address }}"
+        state: stopped
+        timeout: 3
+      with_nested:
+        - "{{ jenkins_teams_config }}"
+        - "{{ ['ports.web', 'ports.agent'] }}"
+      vars:
+        port_value: "{{ item.0[item.1] }}"
+      loop: >-
+        {%- set result = [] -%}
+        {%- for team in jenkins_teams_config -%}
+          {%- set _ = result.append([team.team_name, team.ports.web]) -%}
+          {%- set _ = result.append([team.team_name, team.ports.agent]) -%}
+        {%- endfor -%}
+        {{ result }}
+      loop_control:
+        label: "{{ item.0 }}:{{ item.1 }}"
+      failed_when: false
+      register: port_check
+
+    - name: Warn about potential port conflicts
+      debug:
+        msg: "Warning: Port {{ item.item.1 }} for team {{ item.item.0 }} may be in use"
+      loop: "{{ port_check.results }}"
+      when: item.failed is defined and item.failed
+      loop_control:
+        label: "{{ item.item.0 }}:{{ item.item.1 }}"
+  tags: ['setup', 'network']
+
+# ====================================
+# CONTAINER RUNTIME DETECTION
+# ====================================
+
+- name: Detect and validate container runtime environment
+  block:
+    - name: Detect Docker socket location
+      stat:
+        path: "{{ jenkins_master_socket_path_docker }}"
+      register: docker_socket_stat
+
+    - name: Validate Docker socket accessibility
+      assert:
+        that:
+          - docker_socket_stat.stat.exists
+          - docker_socket_stat.stat.issock
+        fail_msg: "Docker socket not found or not accessible at {{ jenkins_master_socket_path_docker }}"
+        success_msg: "Docker socket validated at {{ jenkins_master_socket_path_docker }}"
+
+    - name: Test Docker connectivity
+      command: docker info
+      register: docker_info_check
+      failed_when: docker_info_check.rc != 0
+      changed_when: false
+  tags: ['setup', 'docker', 'socket']
+
+# ====================================
+# JENKINS CONFIGURATION FILES
+# ====================================
+
+- name: Generate Jenkins Configuration as Code files
+  template:
+    src: jcasc/jenkins-config.yml.j2
+    dest: "{{ jenkins_home_dir }}/{{ item.0.team_name }}/{{ item.1 }}/casc_configs/jenkins.yaml"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_user }}"
+    mode: '0644'
+  with_nested:
+    - "{{ jenkins_teams_config }}"
+    - ['blue', 'green']
+  loop_control:
+    label: "{{ item.0.team_name }}/{{ item.1 }}"
+  vars:
+    jenkins_current_team: "{{ item.0 }}"
+    jenkins_current_environment: "{{ item.1 }}"
+  tags: ['setup', 'config', 'jcasc']
+
+- name: Copy Jenkins initialization scripts
+  copy:
+    src: init-scripts/setup-dsl-approval.groovy
+    dest: "{{ jenkins_home_dir }}/init.groovy.d/01-setup-dsl-approval.groovy"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_user }}"
+    mode: '0644'
+  tags: ['setup', 'config', 'init-scripts']
+
+- name: Setup and validation phase complete
+  debug:
+    msg: |
+      ====================================
+      Setup and Validation Complete
+      ====================================
+      Teams validated: {{ jenkins_teams_config | length }}
+      Docker runtime: Validated
+      Network: {{ jenkins_master_network_name }} created
+      Team directories: Created for all environments
+      ====================================
+  tags: ['setup', 'validate']

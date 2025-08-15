@@ -186,10 +186,8 @@
   vars:
     jenkins_ha_enabled: "{{ groups['jenkins_masters'] | default([]) | length > 1 }}"
     jenkins_master_priority: "{{ play_hosts.index(inventory_hostname) + 1 }}"
-    # Unified jenkins-master role supports both single and multi-team deployments
-    # jenkins_teams is already defined in group_vars
   roles:
-    - role: jenkins-master
+    - role: jenkins-master-v2
       tags: ['jenkins', 'deploy']
   post_tasks:
     - name: Wait for Jenkins teams to be ready
@@ -209,10 +207,10 @@
   become: yes
   gather_facts: yes
   roles:
-    - role: high-availability
+    - role: high-availability-v2
       tags: ['ha', 'cluster', 'haproxy', 'loadbalancer']
       when: 
-        - jenkins_ha_enabled | default(false)
+        - (jenkins_ha_enabled | default(false)) | bool
         - (groups['jenkins_masters'] | default([]) | length > 1) or (jenkins_teams | default([]) | length > 1)
 
 - name: Setup Monitoring Stack

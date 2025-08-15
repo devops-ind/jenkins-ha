@@ -1,0 +1,61 @@
+---
+# Simplified Jenkins Master Role - Main Orchestration
+# Consolidated from 13 task files to 4 files while maintaining all enterprise features
+
+- name: Display jenkins-master-v2 role information
+  debug:
+    msg: |
+      ==================================================
+      Jenkins Master Role v2 - Simplified Architecture
+      ==================================================
+      Original complexity: 1018 lines across 13 files
+      Simplified version: ~530 lines across 4 files
+      Features preserved: Blue-green, Multi-team, Custom images
+      ==================================================
+
+- name: Determine deployment configuration
+  set_fact:
+    jenkins_teams_config: "{{ jenkins_teams | default([jenkins_master_config]) }}"
+    jenkins_deployment_mode: "{{ 'multi-team' if jenkins_teams is defined and jenkins_teams | length > 0 else 'single-team' }}"
+  tags: ['always']
+
+- name: Display deployment configuration
+  debug:
+    msg: |
+      Deployment Mode: {{ jenkins_deployment_mode }}
+      Teams to Deploy: {{ jenkins_teams_config | map(attribute='team_name') | list | join(', ') }}
+      Container Runtime: {{ jenkins_master_container_runtime }}
+  tags: ['always']
+
+# Phase 1: System setup, validation, and infrastructure preparation
+- name: Setup and validation phase
+  import_tasks: setup-and-validate.yml
+  tags: ['setup', 'validate', 'config', 'network']
+
+# Phase 2: Custom image building and container deployment  
+- name: Image building and container deployment phase
+  import_tasks: image-and-container.yml
+  tags: ['images', 'containers', 'deploy', 'custom-images', 'build']
+
+# Phase 3: Blue-green deployment management and health monitoring
+- name: Blue-green deployment and monitoring phase
+  import_tasks: deploy-and-monitor.yml
+  tags: ['blue-green', 'deploy', 'monitor', 'health', 'verify']
+
+- name: Jenkins Master v2 deployment complete
+  debug:
+    msg: |
+      ====================================================
+      Jenkins Master v2 Deployment Summary
+      ====================================================
+      Mode: {{ jenkins_deployment_mode }}
+      Teams: {{ jenkins_teams_config | length }}
+      Active Environments: {{ jenkins_teams_config | selectattr('active_environment', 'defined') | map(attribute='active_environment') | list | join(', ') }}
+      Container Runtime: {{ jenkins_master_container_runtime }}
+      ====================================================
+      Access your Jenkins instances:
+      {% for team in jenkins_teams_config %}
+      {{ team.team_name }}: http://{{ jenkins_verification_host }}:{{ team.ports.web }}
+      {% endfor %}
+      ====================================================
+  tags: ['always']

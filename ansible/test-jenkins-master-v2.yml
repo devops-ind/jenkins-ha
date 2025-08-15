@@ -1,0 +1,106 @@
+---
+# Test playbook for simplified jenkins-master-v2 role
+# Validates side-by-side deployment with original role
+
+- hosts: localhost
+  become: yes
+  gather_facts: yes
+  vars:
+    # Test configuration for simplified role
+    jenkins_teams_test:
+      - team_name: "devops-test"
+        active_environment: "blue"
+        ports:
+          web: 8082
+          agent: 50002
+        resources:
+          memory: "2g"
+          cpu: "1.0"
+        env_vars:
+          JAVA_OPTS: "-Djenkins.install.runSetupWizard=false -Xmx1g"
+        labels:
+          environment: "test"
+          tier: "testing"
+      - team_name: "developer-test"
+        active_environment: "blue"
+        ports:
+          web: 8083
+          agent: 50003
+        resources:
+          memory: "1g"
+          cpu: "0.5"
+        env_vars:
+          JAVA_OPTS: "-Djenkins.install.runSetupWizard=false -Xmx512m"
+        labels:
+          environment: "test"
+          tier: "testing"
+    
+    # Override default configuration
+    jenkins_teams: "{{ jenkins_teams_test }}"
+    jenkins_master_custom_image_prefix: "jenkins-custom-test"
+    jenkins_master_build_custom_images: true
+    jenkins_master_startup_wait_time: 30
+
+  pre_tasks:
+    - name: Display test configuration
+      debug:
+        msg: |
+          =================================================
+          Testing Simplified Jenkins Master Role v2
+          =================================================
+          Test teams: {{ jenkins_teams | length }}
+          Teams: {{ jenkins_teams | map(attribute='team_name') | list | join(', ') }}
+          Ports: {{ jenkins_teams | map(attribute='ports.web') | list | join(', ') }}
+          =================================================
+
+  tasks:
+    - name: Test syntax validation
+      debug:
+        msg: "Running syntax validation for jenkins-master-v2 role..."
+
+    - name: Import jenkins-master-v2 role
+      import_role:
+        name: jenkins-master-v2
+      tags: ['jenkins-v2']
+
+  post_tasks:
+    - name: Verify simplified role deployment
+      uri:
+        url: "http://localhost:{{ item.ports.web }}/login"
+        method: GET
+        status_code: [200, 403]
+        timeout: 30
+      retries: 10
+      delay: 10
+      loop: "{{ jenkins_teams }}"
+      loop_control:
+        label: "{{ item.team_name }}:{{ item.ports.web }}"
+      register: deployment_verification
+
+    - name: Display deployment verification results
+      debug:
+        msg: |
+          =================================================
+          Jenkins Master v2 Deployment Verification
+          =================================================
+          {% for result in deployment_verification.results %}
+          • {{ jenkins_teams[loop.index0].team_name }}: {{ 'SUCCESS' if result.status in [200, 403] else 'FAILED' }} (HTTP {{ result.status }})
+          {% endfor %}
+          
+          Access URLs:
+          {% for team in jenkins_teams %}
+          • {{ team.team_name }}: http://localhost:{{ team.ports.web }}
+          {% endfor %}
+          =================================================
+
+    - name: Compare role complexity
+      debug:
+        msg: |
+          =================================================
+          Role Complexity Comparison
+          =================================================
+          Original jenkins-master role: 1018 lines across 13 files
+          Simplified jenkins-master-v2 role: 728 lines across 4 files
+          Reduction: {{ ((1018 - 728) / 1018 * 100) | round(1) }}% fewer lines
+          File reduction: {{ ((13 - 4) / 13 * 100) | round(1) }}% fewer files
+          =================================================

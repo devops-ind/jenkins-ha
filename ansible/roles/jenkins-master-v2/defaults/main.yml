@@ -1,0 +1,166 @@
+---
+# Simplified Jenkins Master Role v2 - Default Variables
+# Streamlined configuration maintaining all enterprise features
+
+# ====================================
+# CORE JENKINS CONFIGURATION
+# ====================================
+# Use group_vars values for: jenkins_user, jenkins_uid, jenkins_gid, jenkins_home_dir, jenkins_master_port, jenkins_jnlp_port
+jenkins_master_container_home: "/var/jenkins_home"
+jenkins_master_shared_path: "/shared/jenkins"
+
+# ====================================
+# CONTAINER RUNTIME CONFIGURATION
+# ====================================
+jenkins_master_container_runtime: "{{ jenkins_container_runtime | default('docker') }}"
+jenkins_master_restart_policy: "unless-stopped"
+jenkins_master_startup_wait_time: 20
+
+# ====================================
+# IMAGE CONFIGURATION
+# ====================================
+jenkins_master_image_registry: "docker.io"
+jenkins_master_image_name: "jenkins/jenkins"
+jenkins_master_image_tag: "lts"
+
+# ====================================
+# NETWORK CONFIGURATION
+# ====================================
+jenkins_master_network_name: "jenkins-network"
+jenkins_master_network_driver: "bridge"
+jenkins_master_network_subnet: "172.20.0.0/16"
+jenkins_master_network_gateway: "172.20.0.1"
+
+# ====================================
+# LOGGING CONFIGURATION
+# ====================================
+jenkins_master_log_driver: "json-file"
+jenkins_master_log_max_size: "10m"
+jenkins_master_log_max_files: "3"
+
+# ====================================
+# ENVIRONMENT VARIABLES
+# ====================================
+jenkins_master_env_vars:
+  JAVA_OPTS: "-Djenkins.install.runSetupWizard=false -Dhudson.DNSMultiCast.disabled=true"
+  JENKINS_OPTS: "--httpPort={{ jenkins_master_port }}"
+  CASC_JENKINS_CONFIG: "{{ jenkins_master_container_home }}/casc_configs"
+  TZ: "{{ common_timezone | default('UTC') }}"
+
+# ====================================
+# HEALTH CHECK CONFIGURATION
+# ====================================
+jenkins_master_health_check_retries: 30
+jenkins_master_health_check_delay: 10
+jenkins_master_health_check_timeout: 60
+
+# ====================================
+# VERIFICATION HOST CONFIGURATION
+# ====================================
+jenkins_verification_host: "{{ 'host.docker.internal' if ansible_virtualization_type | default('') == 'docker' else ('localhost' if deployment_mode | default('') in ['local', 'devcontainer'] else ansible_default_ipv4.address | default('localhost')) }}"
+
+# ====================================
+# BLUE-GREEN DEPLOYMENT CONFIGURATION
+# ====================================
+jenkins_master_blue_green_enabled: true
+
+# ====================================
+# CLEANUP CONFIGURATION
+# ====================================
+jenkins_master_cleanup_enabled: false
+jenkins_master_cleanup_containers: false
+jenkins_master_cleanup_volumes: false
+jenkins_master_cleanup_images: false
+jenkins_master_cleanup_logs: false
+jenkins_master_log_retention_days: 30
+
+# ====================================
+# SINGLE-TEAM CONFIGURATION (LEGACY COMPATIBILITY)
+# ====================================
+jenkins_master_config:
+  team_name: "default"
+  active_environment: "blue"
+  ports:
+    web: 8080
+    agent: 50000
+  resources:
+    memory: "2g"
+    cpu: "1.0"
+  env_vars: {}
+  labels: {}
+
+# ====================================
+# SECURITY CONFIGURATION
+# ====================================
+jenkins_master_security_enabled: true
+jenkins_master_csrf_protection: true
+jenkins_master_agent_protocols: ["JNLP4-connect", "Ping"]
+
+# ====================================
+# JCASC CONFIGURATION
+# ====================================
+jenkins_master_casc_enabled: true
+jenkins_master_casc_config_path: "{{ jenkins_master_container_home }}/casc_configs"
+
+# ====================================
+# DYNAMIC AGENT SUPPORT
+# ====================================
+jenkins_master_dynamic_agents_enabled: true
+jenkins_master_dynamic_agent_image_tag: "latest"
+
+# ====================================
+# DOCKER SOCKET CONFIGURATION
+# ====================================
+jenkins_master_docker_in_docker_enabled: true
+jenkins_master_socket_mount_enabled: true
+jenkins_master_socket_path_docker: "/var/run/docker.sock"
+
+# ====================================
+# MONITORING INTEGRATION
+# ====================================
+jenkins_master_monitoring_enabled: true
+jenkins_master_prometheus_metrics: true
+
+# ====================================
+# CUSTOM IMAGE BUILDING CONFIGURATION
+# ====================================
+jenkins_master_build_custom_images: true
+jenkins_master_custom_image_prefix: "jenkins-custom"
+jenkins_master_custom_build_dir: "/tmp/jenkins-custom-build"
+
+# Base image configuration
+jenkins_master_base_image_name: "jenkins/jenkins"
+jenkins_master_base_image_tag: "{{ jenkins_master_image_tag }}"
+
+# Team customization options
+jenkins_master_team_seed_jobs_enabled: true
+jenkins_master_team_plugins_enabled: true
+jenkins_master_team_configs_enabled: true
+jenkins_master_force_custom_rebuild: false
+
+# Custom image registry settings
+jenkins_master_custom_image_registry: "{{ jenkins_master_image_registry }}"
+jenkins_master_custom_image_push: false
+
+# ====================================
+# SIMPLIFIED VARIABLE STRUCTURE
+# ====================================
+# Note: Multi-team configuration uses jenkins_teams variable from inventory
+# Example jenkins_teams structure:
+# jenkins_teams:
+#   - team_name: "devops"
+#     active_environment: "blue"
+#     ports:
+#       web: 8080
+#       agent: 50000
+#     resources:
+#       memory: "3g"
+#       cpu: "2.0"
+#   - team_name: "qa"
+#     active_environment: "blue"
+#     ports:
+#       web: 8081
+#       agent: 50001
+#     resources:
+#       memory: "2g"
+#       cpu: "1.0"

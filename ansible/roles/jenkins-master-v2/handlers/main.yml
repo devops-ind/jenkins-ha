@@ -1,0 +1,55 @@
+---
+# Simplified Jenkins Master Role v2 - Handlers
+# Streamlined handlers for Jenkins services
+
+- name: restart jenkins
+  block:
+    - name: Restart active Jenkins containers for all teams
+      community.docker.docker_container:
+        name: "jenkins-{{ item.team_name }}-{{ item.active_environment }}"
+        state: "restarted"
+      loop: "{{ jenkins_teams_config | default([jenkins_master_config]) }}"
+      loop_control:
+        label: "jenkins-{{ item.team_name }}-{{ item.active_environment }}"
+      when: item.active_environment is defined
+
+    - name: Wait for Jenkins instances to be ready after restart
+      uri:
+        url: "http://{{ jenkins_verification_host }}:{{ item.ports.web }}/api/json"
+        method: GET
+        status_code: [200, 403]
+      retries: 20
+      delay: 15
+      loop: "{{ jenkins_teams_config | default([jenkins_master_config]) }}"
+      loop_control:
+        label: "{{ item.team_name }}:{{ item.ports.web }}"
+
+- name: reload jenkins configuration
+  block:
+    - name: Send SIGHUP to Jenkins containers to reload configuration
+      community.docker.docker_container_exec:
+        container: "jenkins-{{ item.team_name }}-{{ item.active_environment }}"
+        command: "kill -HUP 1"
+      loop: "{{ jenkins_teams_config | default([jenkins_master_config]) }}"
+      loop_control:
+        label: "jenkins-{{ item.team_name }}-{{ item.active_environment }}"
+      when: item.active_environment is defined
+      failed_when: false
+
+- name: rebuild custom images
+  block:
+    - name: Force rebuild of custom Jenkins images
+      community.docker.docker_image:
+        name: "{{ jenkins_master_custom_image_prefix }}-{{ item.team_name }}"
+        tag: "{{ jenkins_master_image_tag }}"
+        source: build
+        build:
+          path: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}"
+          dockerfile: Dockerfile
+          pull: yes
+        state: present
+        force_source: yes
+      loop: "{{ jenkins_teams_config | default([jenkins_master_config]) }}"
+      loop_control:
+        label: "{{ jenkins_master_custom_image_prefix }}-{{ item.team_name }}:{{ jenkins_master_image_tag }}"
+      when: jenkins_master_build_custom_images | default(true)

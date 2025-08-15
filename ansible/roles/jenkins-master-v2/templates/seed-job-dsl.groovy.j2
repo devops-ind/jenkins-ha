@@ -1,0 +1,364 @@
+/*
+ * Seed Job DSL for Team: {{ item.team_name }}
+ * This script creates the initial job structure and pipelines for the team
+ */
+
+// Team-specific job creation
+def teamName = '{{ item.team_name }}'
+def teamDisplayName = '{{ item.team_name | title }}'
+
+// Create team folder structure
+folder(teamDisplayName) {
+    displayName("${teamDisplayName} Team")
+    description("Jobs and pipelines for the ${teamName} team")
+}
+
+// Infrastructure folder
+folder("${teamDisplayName}/Infrastructure") {
+    displayName('Infrastructure')
+    description("Infrastructure and deployment jobs for ${teamName}")
+}
+
+// Applications folder  
+folder("${teamDisplayName}/Applications") {
+    displayName('Applications')
+    description("Application build and test jobs for ${teamName}")
+}
+
+// Monitoring folder
+folder("${teamDisplayName}/Monitoring") {
+    displayName('Monitoring')
+    description("Monitoring and health check jobs for ${teamName}")
+}
+
+{% if item.seed_jobs is defined and item.seed_jobs | length > 0 %}
+// Team-specific seed jobs
+{% for seed_job in item.seed_jobs %}
+{% if seed_job.type == 'pipeline' %}
+pipelineJob("${teamDisplayName}/{{ seed_job.folder | default('Applications') }}/{{ seed_job.name }}") {
+    displayName('{{ seed_job.display_name | default(seed_job.name) }}')
+    description('{{ seed_job.description | default("Auto-generated pipeline for " + seed_job.name) }}')
+    
+    {% if seed_job.git_url is defined %}
+    definition {
+        cpsScm {
+            scm {
+                git {
+                    remote {
+                        url('{{ seed_job.git_url }}')
+                        {% if seed_job.credentials_id is defined %}
+                        credentials('{{ seed_job.credentials_id }}')
+                        {% endif %}
+                    }
+                    branch('{{ seed_job.branch | default("main") }}')
+                }
+            }
+            scriptPath('{{ seed_job.jenkinsfile_path | default("Jenkinsfile") }}')
+        }
+    }
+    {% else %}
+    definition {
+        cps {
+            script('''
+                pipeline {
+                    agent { label '{{ item.team_name }}-maven' }
+                    
+                    stages {
+                        stage('Checkout') {
+                            steps {
+                                echo 'Checking out source code...'
+                                // Add your SCM checkout here
+                            }
+                        }
+                        
+                        stage('Build') {
+                            steps {
+                                echo 'Building application...'
+                                // Add your build steps here
+                            }
+                        }
+                        
+                        stage('Test') {
+                            steps {
+                                echo 'Running tests...'
+                                // Add your test steps here
+                            }
+                        }
+                        
+                        {% if seed_job.deploy_enabled | default(false) %}
+                        stage('Deploy') {
+                            steps {
+                                echo 'Deploying application...'
+                                // Add your deployment steps here
+                            }
+                        }
+                        {% endif %}
+                    }
+                    
+                    post {
+                        always {
+                            echo 'Pipeline completed'
+                        }
+                        success {
+                            echo 'Pipeline succeeded'
+                        }
+                        failure {
+                            echo 'Pipeline failed'
+                        }
+                    }
+                }
+            ''')
+            sandbox()
+        }
+    }
+    {% endif %}
+    
+    {% if seed_job.triggers is defined %}
+    triggers {
+        {% for trigger in seed_job.triggers %}
+        {% if trigger.type == 'cron' %}
+        cron('{{ trigger.schedule }}')
+        {% elif trigger.type == 'scm' %}
+        scm('{{ trigger.schedule | default("H/5 * * * *") }}')
+        {% elif trigger.type == 'github' %}
+        githubPush()
+        {% endif %}
+        {% endfor %}
+    }
+    {% endif %}
+    
+    properties {
+        buildDiscarder {
+            strategy {
+                logRotator {
+                    numToKeepStr('{{ seed_job.builds_to_keep | default("10") }}')
+                    daysToKeepStr('{{ seed_job.days_to_keep | default("30") }}')
+                }
+            }
+        }
+        
+        {% if seed_job.parameters is defined %}
+        parameters {
+            {% for param in seed_job.parameters %}
+            {% if param.type == 'string' %}
+            stringParam('{{ param.name }}', '{{ param.default | default("") }}', '{{ param.description | default("") }}')
+            {% elif param.type == 'boolean' %}
+            booleanParam('{{ param.name }}', {{ param.default | default(false) | lower }}, '{{ param.description | default("") }}')
+            {% elif param.type == 'choice' %}
+            choiceParam('{{ param.name }}', {{ param.choices | to_json }}, '{{ param.description | default("") }}')
+            {% endif %}
+            {% endfor %}
+        }
+        {% endif %}
+    }
+}
+
+{% elif seed_job.type == 'freestyle' %}
+freeStyleJob("${teamDisplayName}/{{ seed_job.folder | default('Applications') }}/{{ seed_job.name }}") {
+    displayName('{{ seed_job.display_name | default(seed_job.name) }}')
+    description('{{ seed_job.description | default("Auto-generated freestyle job for " + seed_job.name) }}')
+    
+    label('{{ item.team_name }}-{{ seed_job.agent_label | default("maven") }}')
+    
+    {% if seed_job.git_url is defined %}
+    scm {
+        git {
+            remote {
+                url('{{ seed_job.git_url }}')
+                {% if seed_job.credentials_id is defined %}
+                credentials('{{ seed_job.credentials_id }}')
+                {% endif %}
+            }
+            branch('{{ seed_job.branch | default("main") }}')
+        }
+    }
+    {% endif %}
+    
+    steps {
+        {% for step in seed_job.build_steps | default([]) %}
+        {% if step.type == 'shell' %}
+        shell('{{ step.command }}')
+        {% elif step.type == 'maven' %}
+        maven {
+            goals('{{ step.goals | default("clean compile test") }}')
+            mavenInstallation('Maven-3.9')
+        }
+        {% endif %}
+        {% endfor %}
+    }
+    
+    properties {
+        buildDiscarder {
+            strategy {
+                logRotator {
+                    numToKeepStr('{{ seed_job.builds_to_keep | default("10") }}')
+                    daysToKeepStr('{{ seed_job.days_to_keep | default("30") }}')
+                }
+            }
+        }
+    }
+}
+{% endif %}
+
+{% endfor %}
+{% endif %}
+
+// Team health check job
+pipelineJob("${teamDisplayName}/Monitoring/team-health-check") {
+    displayName('Team Health Check')
+    description("Health monitoring for ${teamName} team infrastructure")
+    
+    definition {
+        cps {
+            script('''
+                pipeline {
+                    agent { label '{{ item.team_name }}-maven' }
+                    
+                    triggers {
+                        cron('H/15 * * * *')  // Every 15 minutes
+                    }
+                    
+                    stages {
+                        stage('Jenkins Health') {
+                            steps {
+                                script {
+                                    def health = jenkins.model.Jenkins.instance.computer.collect { 
+                                        "${it.displayName}: ${it.isOnline() ? 'Online' : 'Offline'}" 
+                                    }.join('\\n')
+                                    
+                                    echo "Jenkins Nodes Status:\\n${health}"
+                                }
+                            }
+                        }
+                        
+                        stage('Agent Connectivity') {
+                            steps {
+                                echo 'Checking Docker agent connectivity...'
+                                sh '''
+                                    docker ps || echo "Docker not available"
+                                    echo "Team: {{ item.team_name }}"
+                                    echo "Environment: {{ item.active_environment }}"
+                                '''
+                            }
+                        }
+                        
+                        stage('Storage Check') {
+                            steps {
+                                echo 'Checking workspace storage...'
+                                sh '''
+                                    df -h $WORKSPACE || echo "Workspace check failed"
+                                    du -sh $JENKINS_HOME/workspace || echo "Workspace size check failed"
+                                '''
+                            }
+                        }
+                    }
+                    
+                    post {
+                        failure {
+                            echo 'Health check failed - team {{ item.team_name }} may need attention'
+                        }
+                    }
+                }
+            ''')
+            sandbox()
+        }
+    }
+    
+    properties {
+        buildDiscarder {
+            strategy {
+                logRotator {
+                    numToKeepStr('5')
+                    daysToKeepStr('7')
+                }
+            }
+        }
+    }
+}
+
+// Blue-Green deployment support job
+pipelineJob("${teamDisplayName}/Infrastructure/blue-green-switch") {
+    displayName('Blue-Green Environment Switch')
+    description("Switch between blue and green environments for ${teamName}")
+    
+    definition {
+        cps {
+            script('''
+                pipeline {
+                    agent { label '{{ item.team_name }}-maven' }
+                    
+                    parameters {
+                        choice(
+                            name: 'TARGET_ENVIRONMENT',
+                            choices: ['blue', 'green'],
+                            description: 'Target environment to switch to'
+                        )
+                        booleanParam(
+                            name: 'CONFIRM_SWITCH',
+                            defaultValue: false,
+                            description: 'Confirm the environment switch'
+                        )
+                    }
+                    
+                    stages {
+                        stage('Validate Switch') {
+                            steps {
+                                script {
+                                    if (!params.CONFIRM_SWITCH) {
+                                        error('Environment switch not confirmed')
+                                    }
+                                    
+                                    echo "Switching {{ item.team_name }} to ${params.TARGET_ENVIRONMENT} environment"
+                                    echo "Current environment: {{ item.active_environment }}"
+                                }
+                            }
+                        }
+                        
+                        stage('Pre-Switch Health Check') {
+                            steps {
+                                echo "Checking ${params.TARGET_ENVIRONMENT} environment health..."
+                                // Add actual health checks here
+                            }
+                        }
+                        
+                        stage('Switch Environment') {
+                            steps {
+                                echo "Performing environment switch to ${params.TARGET_ENVIRONMENT}..."
+                                // Add actual switch logic here
+                                // This would typically call Ansible playbooks
+                            }
+                        }
+                        
+                        stage('Post-Switch Verification') {
+                            steps {
+                                echo "Verifying ${params.TARGET_ENVIRONMENT} environment is active..."
+                                // Add verification steps here
+                            }
+                        }
+                    }
+                    
+                    post {
+                        success {
+                            echo "Successfully switched {{ item.team_name }} to ${params.TARGET_ENVIRONMENT}"
+                        }
+                        failure {
+                            echo "Failed to switch {{ item.team_name }} to ${params.TARGET_ENVIRONMENT}"
+                        }
+                    }
+                }
+            ''')
+            sandbox()
+        }
+    }
+    
+    properties {
+        buildDiscarder {
+            strategy {
+                logRotator {
+                    numToKeepStr('10')
+                    daysToKeepStr('30')
+                }
+            }
+        }
+    }
+}

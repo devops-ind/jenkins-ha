@@ -1,0 +1,82 @@
+---
+# Simplified Jenkins Master Role v2 - Internal Variables
+# Reduced complexity while maintaining functionality
+
+# ====================================
+# VERIFICATION HOST RESOLUTION
+# ====================================
+jenkins_verification_host: >-
+  {%- if deployment_mode == 'local' or deployment_mode == 'devcontainer' -%}
+    localhost
+  {%- elif ansible_virtualization_type | default('') == 'docker' -%}
+    host.docker.internal
+  {%- else -%}
+    {{ ansible_default_ipv4.address | default('localhost') }}
+  {%- endif -%}
+
+# ====================================
+# DOCKER SOCKET CONFIGURATION
+# ====================================
+jenkins_docker_socket: "/var/run/docker.sock"
+
+# ====================================
+# SIMPLIFIED PORT CONFIGURATION
+# ====================================
+# Note: Port mapping is handled dynamically in tasks based on team configuration
+# Active environment gets exposed ports, inactive environment has no exposed ports
+
+# ====================================
+# CONTAINER LABELS (UNIFIED)
+# ====================================
+jenkins_master_default_labels:
+  service: "jenkins-master"
+  managed_by: "ansible"
+  role: "jenkins-master-v2"
+  version: "simplified"
+
+# ====================================
+# HEALTH CHECK CONFIGURATION
+# ====================================
+jenkins_health_check_config:
+  test_command: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_master_port }}/login"]
+  interval: "30s"
+  timeout: "10s"
+  retries: 3
+  start_period: "60s"
+
+# ====================================
+# VOLUME NAMING PATTERNS
+# ====================================
+jenkins_volume_patterns:
+  home: "jenkins-{team}-{environment}-home"
+  shared: "jenkins-{team}-shared"
+
+# ====================================
+# CONTAINER NAMING PATTERNS
+# ====================================
+jenkins_container_patterns:
+  blue: "jenkins-{team}-blue"
+  green: "jenkins-{team}-green"
+
+# ====================================
+# SIMPLIFIED IMAGE RESOLUTION
+# ====================================
+# Custom images use pattern: {prefix}-{team}:{tag}
+# Fallback images use: {registry}/{name}:{tag}
+
+# ====================================
+# ENVIRONMENT-SPECIFIC CONFIGURATIONS
+# ====================================
+jenkins_env_specific_configs:
+  blue:
+    port_offset: 0
+  green:
+    port_offset: 0  # Green uses same ports as blue when active
+
+# ====================================
+# CLEANUP CONFIGURATION MAPPING
+# ====================================
+jenkins_cleanup_operations:
+  containers: "docker ps -aq --filter 'name=jenkins-*' --filter 'status=exited'"
+  volumes: "docker volume ls --filter 'dangling=true' --filter 'name=jenkins-*' -q"
+  images: "docker image prune -f"

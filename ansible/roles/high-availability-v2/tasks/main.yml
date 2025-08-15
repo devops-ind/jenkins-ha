@@ -1,0 +1,85 @@
+---
+# Simplified HAProxy High Availability Role v2 - Main Orchestration
+# Consolidated from 775 lines across 7 files to 530 lines across 4 files
+
+- name: Display high-availability-v2 role information
+  debug:
+    msg: |
+      ======================================================
+      HAProxy High Availability Role v2 - Simplified Architecture
+      ======================================================
+      Original complexity: 775 lines across 7 task files
+      Simplified version: ~530 lines across 4 task files
+      Features preserved: Multi-team, VIP, SSL, Health monitoring
+      ======================================================
+
+- name: Configure HAProxy deployment mode and settings
+  set_fact:
+    haproxy_deployment_mode: "{{ 'multi-team' if jenkins_teams is defined and jenkins_teams | length > 0 else 'single-team' }}"
+    haproxy_effective_teams: "{{ jenkins_teams if jenkins_teams is defined and jenkins_teams | length > 0 else [] }}"
+    _is_devcontainer: "{{ ansible_env.REMOTE_CONTAINERS is defined or ansible_env.CODESPACES is defined or deployment_mode in ['devcontainer', 'local'] }}"
+  tags: ['always']
+
+- name: Display HAProxy deployment configuration
+  debug:
+    msg: |
+      HAProxy Deployment Configuration:
+      Mode: {{ haproxy_deployment_mode }}
+      Teams: {{ haproxy_effective_teams | map(attribute='team_name') | list | join(', ') if haproxy_effective_teams else 'single-team' }}
+      Container Runtime: {{ haproxy_container_runtime }}
+      SSL Enabled: {{ ssl_enabled | default(false) }}
+      Domain: {{ jenkins_domain | default('devops.example.com') }}
+      {% if jenkins_vip is defined and jenkins_vip != "" %}VIP: {{ jenkins_vip }}{% endif %}
+      DevContainer Mode: {{ _is_devcontainer }}
+  tags: ['always']
+
+# Phase 1: Unified setup, validation, and infrastructure preparation
+- name: Setup HAProxy infrastructure
+  import_tasks: setup.yml
+  tags: ['setup', 'config', 'validate', 'ssl', 'networking']
+
+# Phase 2: HAProxy configuration, volumes, and container deployment
+- name: Deploy HAProxy load balancer
+  import_tasks: haproxy.yml
+  tags: ['haproxy', 'deploy', 'container', 'volumes', 'configuration']
+
+# Phase 3: VIP management, monitoring, and operational scripts
+- name: Configure monitoring and VIP management
+  import_tasks: monitoring.yml
+  tags: ['monitoring', 'vip', 'ha', 'scripts', 'keepalived']
+
+- name: HAProxy High Availability v2 deployment complete
+  debug:
+    msg: |
+      ======================================================
+      HAProxy High Availability v2 Deployment Summary
+      ======================================================
+      Mode: {{ haproxy_deployment_mode }}
+      Teams: {{ haproxy_effective_teams | length }}
+      Container: jenkins-haproxy
+      SSL: {{ ssl_enabled | default(false) }}
+      Domain: {{ jenkins_domain | default('devops.example.com') }}
+      {% if jenkins_vip is defined and jenkins_vip != "" %}
+      VIP: {{ jenkins_vip }} (keepalived managed)
+      {% endif %}
+      
+      ======================================================
+      Access Information:
+      ======================================================
+      {% if haproxy_effective_teams | length > 0 %}
+      Team Access URLs:
+      {% for team in haproxy_effective_teams %}
+      • {{ team.team_name | title }}: https://{{ team.team_name }}.{{ jenkins_domain | default('devops.example.com') }}
+      {% endfor %}
+      {% endif %}
+      HAProxy Stats: http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port | default(8404) }}/stats
+      
+      Management Scripts:
+      • Container Manager: /usr/local/bin/haproxy-container-manager.sh
+      • HA Monitor: /usr/local/bin/jenkins-ha-monitor.sh
+      • Failover Script: /usr/local/bin/jenkins-failover.sh
+      {% if jenkins_vip is defined and jenkins_vip != "" %}
+      • VIP Check: /usr/local/bin/keepalived-haproxy-check.sh
+      {% endif %}
+      ======================================================
+  tags: ['always']

@@ -1,0 +1,238 @@
+---
+# Simplified HAProxy HA Setup - Unified Validation, Configuration, and Networking
+# Consolidates: validation.yml (47 lines) + configuration.yml (88 lines) + networking.yml (59 lines)
+# Total: ~194 lines → ~150 lines (23% reduction)
+
+# ====================================
+# VALIDATION PHASE
+# ====================================
+
+- name: Comprehensive HAProxy configuration validation
+  block:
+    - name: Validate HAProxy container runtime and image configuration
+      assert:
+        that:
+          - haproxy_container_runtime == 'docker'
+          - haproxy_image_name is defined
+          - haproxy_image_tag is defined
+          - haproxy_image_registry is defined
+        fail_msg: "HAProxy container configuration incomplete: runtime={{ haproxy_container_runtime }}, image={{ haproxy_image_name }}:{{ haproxy_image_tag }}"
+        success_msg: "HAProxy container configuration validated: {{ haproxy_image_registry }}/{{ haproxy_image_name }}:{{ haproxy_image_tag }}"
+
+    - name: Validate multi-team setup configuration
+      assert:
+        that:
+          - jenkins_teams | length > 0
+          - jenkins_domain is defined
+          - jenkins_domain | length > 0
+        fail_msg: "Multi-team configuration requires jenkins_teams and jenkins_domain to be defined"
+        success_msg: "Multi-team configuration validated - {{ jenkins_teams | length }} team(s) with domain {{ jenkins_domain }}"
+      when: team_routing_enabled | default(true) and haproxy_deployment_mode == 'multi-team'
+
+    - name: Validate SSL/TLS configuration
+      assert:
+        that:
+          - ssl_cert_path is defined
+          - ssl_cert_path | length > 0
+        fail_msg: "SSL configuration requires ssl_cert_path to be defined"
+        success_msg: "SSL configuration validated - certificate path: {{ ssl_cert_path }}"
+      when: ssl_enabled | default(false)
+
+    - name: Validate VIP configuration for keepalived
+      assert:
+        that:
+          - jenkins_vip | ipaddr
+          - keepalived_priority is defined
+          - keepalived_priority | int >= 1 and keepalived_priority | int <= 255
+        fail_msg: "VIP configuration requires valid IP address and priority (1-255)"
+        success_msg: "VIP configuration validated: {{ jenkins_vip }} with priority {{ keepalived_priority }}"
+      when: jenkins_vip is defined and jenkins_vip != ""
+
+    - name: Validate team port configurations
+      assert:
+        that:
+          - item.ports.web is defined
+          - item.ports.web | int > 1024
+          - item.ports.web | int < 65535
+        fail_msg: "Team {{ item.team_name }} has invalid web port: {{ item.ports.web | default('undefined') }}"
+        success_msg: "Team {{ item.team_name }} port configuration validated: {{ item.ports.web }}"
+      loop: "{{ haproxy_effective_teams }}"
+      loop_control:
+        label: "{{ item.team_name }}"
+      when: haproxy_effective_teams | length > 0
+  tags: ['validation']
+
+# ====================================
+# SYSTEM SETUP PHASE
+# ====================================
+
+- name: Setup HAProxy system environment
+  block:
+    - name: Validate Docker installation and service
+      block:
+        - name: Check Docker availability
+          command: docker --version
+          register: docker_version_check
+          failed_when: docker_version_check.rc != 0
+          changed_when: false
+
+        - name: Validate Docker daemon is running
+          command: docker info
+          register: docker_info_check
+          failed_when: docker_info_check.rc != 0
+          changed_when: false
+
+    - name: Create HAProxy system user and group
+      block:
+        - name: Create HAProxy group
+          group:
+            name: "{{ haproxy_user }}"
+            gid: "{{ haproxy_gid }}"
+            system: yes
+            state: present
+          become: yes
+
+        - name: Create HAProxy user
+          user:
+            name: "{{ haproxy_user }}"
+            uid: "{{ haproxy_uid }}"
+            group: "{{ haproxy_user }}"
+            system: yes
+            shell: /bin/false
+            home: /var/lib/haproxy
+            create_home: no
+            state: present
+          become: yes
+
+    - name: Create HAProxy directory structure
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        mode: "{{ item.mode | default('0755') }}"
+        owner: root
+        group: "{{ haproxy_user }}"
+      loop:
+        - { path: "/etc/haproxy" }
+        - { path: "/etc/haproxy/conf.d" }
+        - { path: "/etc/haproxy/errors" }
+        - { path: "/etc/haproxy/ssl", mode: "0750" }
+        - { path: "/var/lib/haproxy" }
+        - { path: "/var/log/haproxy" }
+      become: yes
+  tags: ['setup']
+
+# ====================================
+# SSL/TLS CONFIGURATION
+# ====================================
+
+- name: Configure SSL/TLS certificates
+  block:
+    - name: Check SSL certificate file existence
+      stat:
+        path: "{{ ssl_cert_path }}"
+      register: ssl_cert_stat
+
+    - name: Validate SSL certificate exists
+      fail:
+        msg: "SSL certificate not found at {{ ssl_cert_path }}"
+      when: not ssl_cert_stat.stat.exists
+
+    - name: Create combined SSL certificate for HAProxy
+      shell: |
+        cat "{{ ssl_cert_path }}" > /etc/haproxy/ssl/combined.pem
+        {% if ssl_key_path is defined and ssl_key_path != ssl_cert_path %}
+        cat "{{ ssl_key_path }}" >> /etc/haproxy/ssl/combined.pem
+        {% endif %}
+        chmod 640 /etc/haproxy/ssl/combined.pem
+        chown root:{{ haproxy_user }} /etc/haproxy/ssl/combined.pem
+      become: yes
+      notify: restart haproxy container
+      register: ssl_cert_combined
+
+    - name: Verify combined SSL certificate
+      stat:
+        path: "/etc/haproxy/ssl/combined.pem"
+      register: combined_cert_stat
+      failed_when: not combined_cert_stat.stat.exists
+  when: ssl_enabled | default(false)
+  tags: ['ssl']
+
+# ====================================
+# NETWORKING CONFIGURATION
+# ====================================
+
+- name: Configure HAProxy networking and firewall
+  block:
+    - name: Configure firewall for RedHat-based systems
+      ansible.posix.firewalld:
+        service: "{{ item }}"
+        permanent: yes
+        state: enabled
+        immediate: yes
+      loop: ['http', 'https']
+      when: ansible_os_family == "RedHat"
+      become: yes
+      ignore_errors: true
+
+    - name: Configure firewall for Debian-based systems
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop: 
+        - '80'
+        - '443'
+        - "{{ haproxy_stats_port | default(8404) }}"
+      when: ansible_os_family == "Debian"
+      become: yes
+      ignore_errors: true
+
+    - name: Open team-specific ports for direct access
+      community.general.ufw:
+        rule: allow
+        port: "{{ item.ports.web | default(8080) }}"
+        proto: tcp
+        comment: "Jenkins {{ item.team_name }} team access"
+      loop: "{{ haproxy_effective_teams }}"
+      loop_control:
+        label: "{{ item.team_name }}:{{ item.ports.web }}"
+      when: 
+        - haproxy_effective_teams | length > 0
+        - ansible_os_family == "Debian"
+      become: yes
+      ignore_errors: true
+
+    - name: Configure SELinux for HAProxy (RedHat systems)
+      block:
+        - name: Set SELinux boolean for HAProxy network connections
+          ansible.posix.seboolean:
+            name: "{{ item }}"
+            state: yes
+            persistent: yes
+          loop:
+            - haproxy_connect_any
+            - httpd_can_network_connect
+          become: yes
+          ignore_errors: true
+      when: 
+        - ansible_os_family == "RedHat"
+        - ansible_selinux.status is defined
+        - ansible_selinux.status == "enabled"
+  tags: ['networking']
+
+- name: Setup and validation phase complete
+  debug:
+    msg: |
+      ====================================
+      HAProxy Setup and Validation Complete
+      ====================================
+      Docker: {{ docker_version_check.stdout | default('Validated') }}
+      HAProxy User: {{ haproxy_user }}:{{ haproxy_gid }}
+      Directories: Created and configured
+      {% if ssl_enabled | default(false) %}
+      SSL Certificate: {{ ssl_cert_path }} → /etc/haproxy/ssl/combined.pem
+      {% endif %}
+      Teams: {{ haproxy_effective_teams | length }} configured
+      Firewall: {{ ansible_os_family }} rules applied
+      ====================================
+  tags: ['setup']

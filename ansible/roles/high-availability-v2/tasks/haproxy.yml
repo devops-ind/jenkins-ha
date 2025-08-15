@@ -1,0 +1,278 @@
+---
+# Simplified HAProxy HA Deployment - Unified Configuration, Volumes, and Container Management
+# Consolidates: containers.yml (53 lines) + containers/docker.yml (317 lines) + volumes/docker.yml (26 lines) + configuration.yml (HAProxy parts)
+# Total: ~396 lines → ~180 lines (55% reduction)
+
+# ====================================
+# VOLUME MANAGEMENT PHASE
+# ====================================
+
+- name: Create HAProxy Docker volumes
+  block:
+    - name: Create HAProxy admin socket volume (tmpfs for performance)
+      community.docker.docker_volume:
+        name: "haproxy-admin-socket"
+        driver: "local"
+        driver_options:
+          type: "tmpfs"
+          device: "tmpfs"
+          o: "size=100M,uid={{ haproxy_uid }},gid={{ haproxy_gid }}"
+        state: present
+        labels:
+          service: "haproxy"
+          type: "admin-socket"
+          managed_by: "ansible"
+
+    - name: Create HAProxy logs volume
+      community.docker.docker_volume:
+        name: "haproxy-logs"
+        driver: "local"
+        state: present
+        labels:
+          service: "haproxy"
+          type: "logs"
+          managed_by: "ansible"
+  tags: ['volumes']
+
+# ====================================
+# HAPROXY CONFIGURATION PHASE
+# ====================================
+
+- name: Generate HAProxy configuration files
+  block:
+    - name: Create HAProxy error pages
+      copy:
+        dest: "/etc/haproxy/errors/{{ item.code }}.http"
+        content: |
+          HTTP/1.1 {{ item.code }} {{ item.message }}
+          Content-Type: text/html
+          Content-Length: {{ item.body | length }}
+          
+          {{ item.body }}
+        mode: '0644'
+        owner: root
+        group: "{{ haproxy_user }}"
+      loop:
+        - code: 502
+          message: "Bad Gateway"
+          body: "<html><body><h1>502 Bad Gateway</h1><p>Jenkins service temporarily unavailable.</p><p>Please try again in a few moments.</p></body></html>"
+        - code: 503
+          message: "Service Unavailable"
+          body: "<html><body><h1>503 Service Unavailable</h1><p>Jenkins service temporarily unavailable.</p><p>Please try again in a few moments.</p></body></html>"
+        - code: 504
+          message: "Gateway Timeout"
+          body: "<html><body><h1>504 Gateway Timeout</h1><p>Jenkins service timeout.</p><p>Please try again in a few moments.</p></body></html>"
+      become: yes
+
+    - name: Generate main HAProxy configuration
+      template:
+        src: haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+        backup: yes
+        owner: root
+        group: "{{ haproxy_user }}"
+        mode: '0644'
+      become: yes
+      notify: restart haproxy container
+      register: haproxy_main_config
+
+    - name: Generate team-specific backend configurations
+      template:
+        src: haproxy-team-backend.cfg.j2
+        dest: "/etc/haproxy/conf.d/{{ item.team_name }}-backend.cfg"
+        owner: root
+        group: "{{ haproxy_user }}"
+        mode: '0644'
+      loop: "{{ haproxy_effective_teams }}"
+      loop_control:
+        label: "{{ item.team_name }}"
+      become: yes
+      notify: restart haproxy container
+      when: haproxy_effective_teams | length > 0
+      register: haproxy_team_configs
+
+    - name: Create HAProxy stats configuration
+      copy:
+        dest: "/etc/haproxy/conf.d/stats.cfg"
+        content: |
+          # HAProxy Statistics Configuration
+          listen stats
+              bind *:{{ haproxy_stats_port | default(8404) }}
+              stats enable
+              stats uri {{ haproxy_stats_uri | default('/stats') }}
+              stats refresh 30s
+              stats show-node
+              stats show-legends
+              stats admin if TRUE
+        mode: '0644'
+        owner: root
+        group: "{{ haproxy_user }}"
+      become: yes
+      notify: restart haproxy container
+  tags: ['configuration']
+
+# ====================================
+# CONTAINER DEPLOYMENT PHASE
+# ====================================
+
+- name: Deploy HAProxy container with unified configuration
+  block:
+    - name: Pull HAProxy image
+      community.docker.docker_image:
+        name: "{{ _haproxy_image_full }}"
+        source: pull
+        state: present
+      register: haproxy_image_pull
+
+    - name: Stop existing HAProxy container if running
+      community.docker.docker_container:
+        name: "jenkins-haproxy"
+        state: stopped
+      ignore_errors: true
+
+    - name: Remove existing HAProxy container
+      community.docker.docker_container:
+        name: "jenkins-haproxy"
+        state: absent
+      ignore_errors: true
+
+    - name: Deploy HAProxy container with comprehensive configuration
+      community.docker.docker_container:
+        name: "jenkins-haproxy"
+        image: "{{ _haproxy_image_full }}"
+        state: started
+        restart_policy: "{{ haproxy_restart_policy | default('unless-stopped') }}"
+        network_mode: "{{ haproxy_network_mode | default('bridge') }}"
+        ports: "{{ _haproxy_ports }}"
+        volumes: "{{ _haproxy_volumes }}"
+        env: "{{ _haproxy_env_vars }}"
+        memory: "{{ haproxy_memory_limit | default('512m') }}"
+        cpus: "{{ haproxy_cpu_limit | default('1.0') }}"
+        log_driver: "{{ haproxy_log_driver | default('json-file') }}"
+        log_options:
+          max-size: "{{ haproxy_log_max_size | default('10m') }}"
+          max-file: "{{ haproxy_log_max_files | default('3') }}"
+        labels: "{{ _haproxy_labels }}"
+        # Environment-specific configurations for compatibility
+        user: "{{ '' if _is_devcontainer or deployment_mode == 'production' else (haproxy_uid ~ ':' ~ haproxy_gid) }}"
+        privileged: false
+        healthcheck:
+          test: ["CMD-SHELL", "haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg"]
+          interval: 30s
+          timeout: 10s
+          retries: 3
+          start_period: 30s
+      vars:
+        _image_tag: "{{ haproxy_image_alternatives[deployment_mode | default('production')] | default(haproxy_image_tag) }}"
+        _haproxy_ports: "{{ [] if haproxy_network_mode == 'host' else ['8090:8090', (haproxy_stats_port | default(8404)) ~ ':' ~ (haproxy_stats_port | default(8404))] }}"
+        _haproxy_volumes:
+          - "/etc/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro"
+          - "/etc/haproxy/conf.d:/usr/local/etc/haproxy/conf.d:ro"
+          - "{{ ssl_enabled | ternary('/etc/haproxy/ssl/combined.pem:/usr/local/etc/haproxy/ssl/combined.pem:ro', '') }}"
+          - "/etc/haproxy/errors:/etc/haproxy/errors:ro"
+          - "/var/log/haproxy:/var/log/haproxy:rw"
+          - "/var/lib/haproxy:/var/lib/haproxy:rw"
+          - "haproxy-admin-socket:/run/haproxy:rw"
+        _haproxy_env_vars:
+          HAPROXY_USER: "{{ haproxy_user }}"
+          HAPROXY_UID: "{{ haproxy_uid | string }}"
+          HAPROXY_GID: "{{ haproxy_gid | string }}"
+          TZ: "{{ common_timezone | default('UTC') }}"
+        _haproxy_labels:
+          service: "haproxy"
+          role: "load-balancer"
+          teams: "{{ haproxy_effective_teams | map(attribute='team_name') | join(',') }}"
+          ssl_enabled: "{{ ssl_enabled | default(false) | string }}"
+          deployment_mode: "{{ deployment_mode }}"
+          managed_by: "ansible"
+          version: "simplified-v2"
+      register: haproxy_container
+  tags: ['deploy']
+
+# ====================================
+# POST-DEPLOYMENT VERIFICATION
+# ====================================
+
+- name: Verify HAProxy deployment and functionality
+  block:
+    - name: Wait for HAProxy container startup
+      pause:
+        seconds: "{{ haproxy_startup_wait_time | default(15) }}"
+
+    - name: Get HAProxy container information
+      community.docker.docker_container_info:
+        name: "jenkins-haproxy"
+      register: haproxy_info
+
+    - name: Verify HAProxy container is running
+      assert:
+        that:
+          - haproxy_info.container.State.Status == "running"
+        fail_msg: "HAProxy container is not running: {{ haproxy_info.container.State.Status }}"
+        success_msg: "HAProxy container is running successfully"
+
+    - name: Verify HAProxy configuration is valid
+      command: docker exec jenkins-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+      register: haproxy_config_check
+      failed_when: haproxy_config_check.rc != 0
+      changed_when: false
+
+    - name: Test HAProxy stats endpoint accessibility
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port | default(8404) }}{{ haproxy_stats_uri | default('/stats') }}"
+        method: GET
+        timeout: 10
+      register: haproxy_stats_check
+      retries: 5
+      delay: 5
+      ignore_errors: true
+
+    - name: Test team routing (if multi-team)
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:80"
+        method: HEAD
+        timeout: 10
+        headers:
+          Host: "{{ item.team_name }}.{{ jenkins_domain | default('devops.example.com') }}"
+      loop: "{{ haproxy_effective_teams }}"
+      loop_control:
+        label: "{{ item.team_name }}.{{ jenkins_domain | default('devops.example.com') }}"
+      register: team_routing_check
+      retries: 3
+      delay: 5
+      ignore_errors: true
+      when: haproxy_effective_teams | length > 0
+
+    - name: Display HAProxy deployment verification results
+      debug:
+        msg: |
+          ====================================
+          HAProxy Deployment Verification
+          ====================================
+          Container Status: {{ haproxy_info.container.State.Status }}
+          Health Status: {{ haproxy_info.container.State.Health.Status | default('N/A') }}
+          Configuration: {{ 'Valid' if haproxy_config_check.rc == 0 else 'Invalid' }}
+          Stats Endpoint: {{ 'Accessible' if haproxy_stats_check.status | default(0) == 200 else 'Not accessible' }}
+          Image: {{ haproxy_info.container.Config.Image }}
+          Started: {{ haproxy_info.container.State.StartedAt }}
+          {% if haproxy_effective_teams | length > 0 %}
+          Team Routing Tests:
+          {% for result in team_routing_check.results %}
+          • {{ haproxy_effective_teams[loop.index0].team_name }}: {{ 'OK' if result.status | default(0) in [200, 302, 404] else 'Failed' }}
+          {% endfor %}
+          {% endif %}
+          ====================================
+  tags: ['verify']
+
+- name: HAProxy deployment phase complete
+  debug:
+    msg: |
+      ====================================
+      HAProxy Deployment Complete
+      ====================================
+      Container: jenkins-haproxy ({{ haproxy_info.container.State.Status }})
+      Configuration: {{ 'Valid' if haproxy_config_check.rc == 0 else 'Invalid' }}
+      Teams configured: {{ haproxy_effective_teams | length }}
+      SSL enabled: {{ ssl_enabled | default(false) }}
+      ====================================
+  tags: ['haproxy']

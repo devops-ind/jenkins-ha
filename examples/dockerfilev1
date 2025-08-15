@@ -1,0 +1,196 @@
+# ================================================================
+# STAGE 1: Package Installation and Android SDK Preparation
+# ================================================================
+FROM alpine:3.19 AS builder
+
+# Build arguments
+ARG INSTALL_ANT=true
+ARG INSTALL_GRADLE=true
+ARG INSTALL_NODEJS=true
+ARG INSTALL_ANDROID=true
+ARG INSTALL_ANDROID_NDK=false
+ARG YARN_VERSION=latest
+ARG ANDROID_CMD_TOOLS_VERSION=11076708
+
+# Install base packages and build tools
+RUN apk update && \
+    apk add --no-cache \
+    curl wget unzip bash tar \
+    ca-certificates openssl
+
+# Install development tools via Alpine package manager
+RUN set -eux && \
+    # Build package list
+    PACKAGES="" && \
+    if [ "$INSTALL_ANT" = "true" ]; then \
+        PACKAGES="$PACKAGES apache-ant"; \
+    fi && \
+    if [ "$INSTALL_GRADLE" = "true" ]; then \
+        PACKAGES="$PACKAGES gradle"; \
+    fi && \
+    if [ "$INSTALL_NODEJS" = "true" ]; then \
+        PACKAGES="$PACKAGES nodejs npm"; \
+    fi && \
+    \
+    # Enable edge repositories for latest packages
+    echo "https://dl-cdn.alpinelinux.org/alpine/edge/main" >> /etc/apk/repositories && \
+    echo "https://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories && \
+    apk update && \
+    \
+    # Install packages
+    if [ -n "$PACKAGES" ]; then \
+        apk add --no-cache $PACKAGES; \
+    fi
+
+# Install Node.js global packages if Node.js is enabled
+RUN if [ "$INSTALL_NODEJS" = "true" ]; then \
+        npm install -g yarn@${YARN_VERSION} @angular/cli ionic && \
+        npm cache clean --force; \
+    fi
+
+# Download and prepare Android SDK if needed
+RUN if [ "$INSTALL_ANDROID" = "true" ]; then \
+        echo "📱 Downloading Android SDK..." && \
+        export ANDROID_SDK_ROOT=/opt/android-sdk && \
+        mkdir -p ${ANDROID_SDK_ROOT}/cmdline-tools && \
+        wget -q https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_CMD_TOOLS_VERSION}_latest.zip -O /tmp/android-sdk.zip && \
+        unzip -q /tmp/android-sdk.zip -d ${ANDROID_SDK_ROOT}/cmdline-tools && \
+        mv ${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools ${ANDROID_SDK_ROOT}/cmdline-tools/latest && \
+        rm /tmp/android-sdk.zip && \
+        \
+        # Pre-accept licenses and install SDK components
+        echo "📱 Installing Android SDK components..." && \
+        timeout 300 ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --licenses <<<$'y\ny\ny\ny\ny\ny\ny\ny\ny\ny\n' || true && \
+        if [ "$INSTALL_ANDROID_NDK" = "true" ]; then \
+            ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager \
+              "platform-tools" \
+              "platforms;android-34" \
+              "build-tools;35.0.0" \
+              "ndk;27.0.11902837" \
+              "cmdline-tools;latest"; \
+        else \
+            ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager \
+              "platform-tools" \
+              "platforms;android-34" \
+              "build-tools;35.0.0" \
+              "cmdline-tools;latest"; \
+        fi && \
+        \
+        # Clean up SDK caches and temporary files
+        rm -rf ${ANDROID_SDK_ROOT}/cmdline-tools/latest/.android \
+               ${ANDROID_SDK_ROOT}/.android \
+               /root/.android \
+               /tmp/.android* 2>/dev/null || true; \
+    fi
+
+# Create tool verification script
+RUN echo '#!/bin/bash' > /opt/verify-tools.sh && \
+    echo 'echo "🔍 Verifying installed tools..."' >> /opt/verify-tools.sh && \
+    if [ "$INSTALL_ANT" = "true" ]; then \
+        echo 'echo "✅ Ant: $(ant -version 2>&1 | head -1)"' >> /opt/verify-tools.sh; \
+    fi && \
+    if [ "$INSTALL_GRADLE" = "true" ]; then \
+        echo 'echo "✅ Gradle: $(gradle --version 2>&1 | head -1)"' >> /opt/verify-tools.sh; \
+    fi && \
+    if [ "$INSTALL_NODEJS" = "true" ]; then \
+        echo 'echo "✅ Node.js: $(node --version)"' >> /opt/verify-tools.sh && \
+        echo 'echo "✅ NPM: $(npm --version)"' >> /opt/verify-tools.sh && \
+        echo 'echo "✅ Yarn: $(yarn --version)"' >> /opt/verify-tools.sh; \
+    fi && \
+    if [ "$INSTALL_ANDROID" = "true" ]; then \
+        echo 'echo "✅ Android SDK: $(ls -la /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager 2>/dev/null && echo "Installed" || echo "Not found")"' >> /opt/verify-tools.sh; \
+    fi && \
+    chmod +x /opt/verify-tools.sh
+
+# ================================================================
+# STAGE 2: Final Jenkins Agent Image
+# ================================================================
+FROM iedubharbor.example.net/jenkins/python-agent:latest-jdk17
+
+USER root
+
+# Build arguments (inherit from stage 1)
+ARG INSTALL_ANT=true
+ARG INSTALL_GRADLE=true
+ARG INSTALL_NODEJS=true
+ARG INSTALL_ANDROID=true
+ARG INSTALL_ANDROID_NDK=false
+
+# === Set environment variables for CA trust ===
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt \
+    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    JAVA_OPTS="-Djavax.net.ssl.trustStore=/opt/java/openjdk/lib/security/cacerts \
+    -Djavax.net.ssl.trustStorePassword=changeit -Djenkins.install.runSetupWizard=false -Djava.awt.headless=true"
+
+# Conditionally set Android environment variables
+RUN if [ "$INSTALL_ANDROID" = "true" ]; then \
+        echo "export ANDROID_SDK_ROOT=/opt/android-sdk" >> /etc/environment && \
+        echo "export ANDROID_HOME=/opt/android-sdk" >> /etc/environment; \
+    fi
+
+# Set up PATH with conditional components
+RUN PATH_ADDITIONS="" && \
+    if [ "$INSTALL_ANDROID" = "true" ]; then \
+        PATH_ADDITIONS="$PATH_ADDITIONS:/opt/android-sdk/build-tools/35.0.0:/opt/android-sdk/platform-tools:/opt/android-sdk/cmdline-tools/latest/bin"; \
+    fi && \
+    if [ -n "$PATH_ADDITIONS" ]; then \
+        echo "export PATH=\$PATH$PATH_ADDITIONS" >> /etc/environment; \
+    fi
+
+# Copy only the tools that were actually installed
+COPY --from=builder /usr/bin/ant /usr/bin/ant 2>/dev/null || true
+COPY --from=builder /usr/share/ant /usr/share/ant/ 2>/dev/null || true
+COPY --from=builder /usr/bin/gradle /usr/bin/gradle 2>/dev/null || true
+COPY --from=builder /usr/share/gradle /usr/share/gradle/ 2>/dev/null || true
+COPY --from=builder /usr/bin/node /usr/bin/node 2>/dev/null || true
+COPY --from=builder /usr/bin/npm /usr/bin/npm 2>/dev/null || true
+COPY --from=builder /usr/bin/yarn /usr/bin/yarn 2>/dev/null || true
+COPY --from=builder /usr/lib/node_modules /usr/lib/node_modules/ 2>/dev/null || true
+COPY --from=builder /opt/android-sdk /opt/android-sdk/ 2>/dev/null || true
+
+# Copy tool verification script
+COPY --from=builder /opt/verify-tools.sh /opt/verify-tools.sh
+
+# Install minimal runtime dependencies for copied tools
+RUN apk update && \
+    apk add --no-cache \
+    bash \
+    ca-certificates \
+    libstdc++ \
+    libgcc \
+    && \
+    # Create necessary directories and set permissions
+    mkdir -p /var/jenkins_home && \
+    chown -R jenkins:jenkins /opt/android-sdk /var/jenkins_home /opt/verify-tools.sh 2>/dev/null || true && \
+    \
+    # Clean up
+    rm -rf /var/cache/apk/* /tmp/*
+
+# Set environment variables for Android SDK if installed
+ENV ANDROID_SDK_ROOT=/opt/android-sdk \
+    ANDROID_HOME=/opt/android-sdk \
+    PATH=$PATH:/opt/android-sdk/build-tools/35.0.0:/opt/android-sdk/platform-tools:/opt/android-sdk/cmdline-tools/latest/bin
+
+SHELL ["/bin/bash", "-c"]
+
+# Verify installations and create summary
+RUN echo "🏔️ Alpine Multi-Stage Jenkins Agent Build Complete!" && \
+    echo "📦 Installed tools:" && \
+    /opt/verify-tools.sh && \
+    echo "" && \
+    echo "📊 Image optimization:" && \
+    echo "   ✅ Multi-stage build reduces final image size" && \
+    echo "   ✅ Only runtime files copied to final stage" && \
+    echo "   ✅ Build tools and caches left in builder stage" && \
+    echo "   ✅ Alpine package manager used for standard tools" && \
+    echo "   ✅ Manual downloads only for Android SDK" && \
+    echo ""
+
+USER jenkins
+
+EXPOSE 8081
+
+# Health check to verify tools are working
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD /opt/verify-tools.sh || exit 1

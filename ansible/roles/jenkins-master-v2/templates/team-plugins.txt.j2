@@ -1,0 +1,214 @@
+# Team-specific Jenkins plugins for {{ item.team_name }}
+# These plugins are installed in addition to the base plugins from jenkins-images role
+
+{% if item.custom_plugins is defined and item.custom_plugins | length > 0 %}
+# Custom plugins requested by team {{ item.team_name }}
+{% for plugin in item.custom_plugins %}
+{{ plugin }}
+{% endfor %}
+
+{% endif %}
+# Team workflow plugins based on team configuration
+{% if item.workflow_type is defined %}
+{% if item.workflow_type == 'maven' %}
+# Maven-specific plugins
+maven-plugin
+maven-dependency-analyzer
+maven-deployment-linker
+maven-info-plugin
+
+{% elif item.workflow_type == 'gradle' %}
+# Gradle-specific plugins
+gradle
+gradle-plugin
+
+{% elif item.workflow_type == 'nodejs' %}
+# Node.js-specific plugins
+nodejs
+npm-api
+yarn
+
+{% elif item.workflow_type == 'python' %}
+# Python-specific plugins
+pyenv-pipeline
+python-plugin
+shiningpanda
+
+{% elif item.workflow_type == 'docker' %}
+# Docker-specific plugins
+docker-workflow
+docker-build-step
+docker-custom-build-environment
+
+{% endif %}
+{% endif %}
+
+{% if item.scm_type is defined %}
+{% if item.scm_type == 'github' %}
+# GitHub integration plugins
+github
+github-branch-source
+github-pullrequest
+github-api
+
+{% elif item.scm_type == 'gitlab' %}
+# GitLab integration plugins
+gitlab-plugin
+gitlab-branch-source
+gitlab-api
+
+{% elif item.scm_type == 'bitbucket' %}
+# Bitbucket integration plugins
+bitbucket
+bitbucket-branch-source
+bitbucket-build-status-notifier
+
+{% endif %}
+{% endif %}
+
+{% if item.notification_type is defined %}
+{% if item.notification_type == 'slack' %}
+# Slack notification plugins
+slack
+slack-plugin
+
+{% elif item.notification_type == 'email' %}
+# Email notification plugins
+email-ext
+emailext-template
+
+{% elif item.notification_type == 'teams' %}
+# Microsoft Teams notification plugins
+Office-365-Connector
+
+{% endif %}
+{% endif %}
+
+{% if item.testing_framework is defined %}
+{% if item.testing_framework == 'junit' %}
+# JUnit testing plugins
+junit
+junit-attachments
+junit-realtime-test-reporter
+
+{% elif item.testing_framework == 'testng' %}
+# TestNG testing plugins
+testng-plugin
+testng-results
+
+{% elif item.testing_framework == 'cucumber' %}
+# Cucumber testing plugins
+cucumber-reports
+cucumber-living-documentation
+
+{% elif item.testing_framework == 'selenium' %}
+# Selenium testing plugins
+selenium
+selenium-axis
+
+{% endif %}
+{% endif %}
+
+{% if item.code_quality_tools is defined %}
+{% for tool in item.code_quality_tools %}
+{% if tool == 'sonarqube' %}
+# SonarQube integration
+sonar
+
+{% elif tool == 'checkstyle' %}
+# Checkstyle analysis
+checkstyle
+
+{% elif tool == 'findbugs' %}
+# FindBugs analysis
+findbugs
+
+{% elif tool == 'pmd' %}
+# PMD analysis
+pmd
+
+{% elif tool == 'jacoco' %}
+# JaCoCo code coverage
+jacoco
+
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if item.deployment_tools is defined %}
+{% for tool in item.deployment_tools %}
+{% if tool == 'kubernetes' %}
+# Kubernetes deployment
+kubernetes
+kubernetes-cd
+
+{% elif tool == 'ansible' %}
+# Ansible deployment
+ansible
+ansible-tower
+
+{% elif tool == 'terraform' %}
+# Terraform infrastructure
+terraform
+
+{% elif tool == 'aws' %}
+# AWS integration
+aws-credentials
+aws-parameter-store
+aws-java-sdk
+
+{% elif tool == 'azure' %}
+# Azure integration
+azure-credentials
+azure-vm-agents
+
+{% elif tool == 'gcp' %}
+# Google Cloud integration
+google-cloud-sdk
+google-container-registry-auth
+
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if item.security_scanning is defined and item.security_scanning %}
+# Security scanning plugins
+dependency-check-jenkins-plugin
+sonar-quality-gates
+whitesource
+{% endif %}
+
+{% if item.performance_testing is defined and item.performance_testing %}
+# Performance testing plugins
+performance
+jmeter
+gatling
+{% endif %}
+
+{% if item.artifact_management is defined %}
+{% if item.artifact_management == 'nexus' %}
+# Nexus artifact management
+nexus-artifact-uploader
+nexus-jenkins-plugin
+
+{% elif item.artifact_management == 'artifactory' %}
+# Artifactory artifact management
+artifactory
+
+{% endif %}
+{% endif %}
+
+# Additional utility plugins that benefit most teams
+pipeline-utility-steps
+build-timeout
+timestamper
+ws-cleanup
+build-name-setter
+description-setter
+
+{% if item.labels.tier | default('development') == 'production' %}
+# Production-specific plugins
+monitoring
+prometheus
+config-file-provider
+{% endif %}
