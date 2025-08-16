@@ -1,7 +1,7 @@
 ---
 jenkins_teams:
   - team_name: devops
-    active_environment: blue
+    active_environment: green
     blue_green_enabled: true
     ports:
       web: 8080
@@ -258,25 +258,491 @@ jenkins_teams:
             default: true
             description: "Run npm install"
 
-  # - team_name: qa
-  #   active_environment: green
-  #   blue_green_enabled: true
-  #   ports:
-  #     web: 8082
-  #     agent: 50002
-  #   resources:
-  #     memory: "2g"
-  #     cpu: "1.0"
-  #   env_vars:
-  #     JENKINS_TEAM: "qa"
-  #     JENKINS_ADMIN_PASSWORD: "admin123"
-  #   labels:
-  #     team: "qa"
-  #     tier: "production"
-  #     environment: "{{ deployment_mode | default('local') }}"
-  #   credentials:
-  #     - type: "usernamePassword"
-  #       id: "qa-git-credentials"
-  #       username: "admin"
-  #       password: "git123"
-  #       description: "QA Team Git Credentials"
+  - team_name: dev-qa
+    active_environment: blue
+    blue_green_enabled: true
+    ports:
+      web: 8089
+      agent: 50009
+    resources:
+      memory: "2g"
+      cpu: "1.5"
+    env_vars:
+      JENKINS_TEAM: "dev-qa"
+      JENKINS_ADMIN_PASSWORD: "{{ vault_jenkins_admin_password | default('admin123') }}"
+    labels:
+      team: "dev-qa"
+      tier: "production"
+      environment: "{{ deployment_mode | default('local') }}"
+    security_policies:
+      rbac_enabled: true
+      namespace_isolation: true
+      resource_quotas:
+        cpu_limit: "2"
+        memory_limit: "4Gi"
+        storage_limit: "50Gi"
+      network_policies:
+        ingress_allowed: ["devops", "monitoring"]
+        egress_allowed: ["harbor", "git_repos"]
+      code_scanning:
+        enabled: true
+        tools: ["sonarqube", "trivy", "bandit"]
+    
+    credentials:
+      - type: "usernamePassword"
+        id: "dev-qa-git-credentials"
+        username: "admin"
+        password: "{{ vault_git_password | default('git123') }}"
+        description: "Dev-QA Team Git Credentials"
+        scope: "GLOBAL"
+      - type: "usernamePassword"
+        id: "harbor-registry-credentials"
+        username: "{{ vault_harbor_username | default('admin') }}"
+        password: "{{ vault_harbor_password | default('Harbor12345') }}"
+        description: "Harbor Registry Credentials"
+      - type: "secretText"
+        id: "sonar-token"
+        secret: "{{ vault_sonar_token | default('sonar123') }}"
+        description: "SonarQube Analysis Token"
+    seed_jobs:
+      - name: "qa-automation-pipeline"
+        type: "pipeline"
+        display_name: "QA Automation Pipeline"
+        description: "Automated testing and quality assurance pipeline"
+        folder: "QA"
+        pipeline_source: "embedded"
+        agent_label: "qa"
+        parameters:
+          - name: "TEST_SUITE"
+            type: "choice"
+            choices: ["smoke", "regression", "performance", "security"]
+            description: "Test suite to execute"
+          - name: "ENVIRONMENT"
+            type: "choice"
+            choices: ["staging", "pre-prod", "production"]
+            description: "Target environment for testing"
+          - name: "PARALLEL_EXECUTION"
+            type: "boolean"
+            default: true
+            description: "Enable parallel test execution"
+        quality_gates:
+          test_coverage_min: "85%"
+          defect_density_max: "0.1%"
+          performance_regression_threshold: "3%"
+      - name: "security-scanning-pipeline"
+        type: "pipeline"
+        display_name: "Security Scanning Pipeline"
+        description: "Comprehensive security scanning for applications"
+        folder: "Security"
+        pipeline_source: "embedded"
+        agent_label: "security"
+        parameters:
+          - name: "SCAN_TYPE"
+            type: "choice"
+            choices: ["sast", "dast", "dependency", "container", "infrastructure"]
+            description: "Type of security scan to perform"
+          - name: "SEVERITY_THRESHOLD"
+            type: "choice"
+            choices: ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+            description: "Minimum severity level for findings"
+        security_gates:
+          critical_vulnerabilities_max: 0
+          high_vulnerabilities_max: 5
+          compliance_score_min: "95%"
+
+# Upgrade Configuration for Universal Upgrade Framework
+jenkins_upgrade_config:
+  # Default configuration for all upgrade types
+  default_settings:
+    validation_timeout: 1800  # 30 minutes
+    consensus_timeout: 300    # 5 minutes
+    heartbeat_interval: 30    # 30 seconds
+    retry_attempts: 3
+    retry_delay: 10
+    backup_enabled: true
+    rollback_enabled: true
+    notification_enabled: true
+    
+  # Jenkins version upgrade configuration
+  jenkins_version:
+    supported_strategies: ["blue_green", "rolling", "maintenance"]
+    default_strategy: "blue_green"
+    compatibility_check: true
+    plugin_compatibility_check: true
+    data_migration_required: true
+    
+    # Container-specific configuration
+    container_mode:
+      image_build_strategy: "rebuild"  # rebuild, update, pull
+      base_image_update: true
+      security_scan_required: true
+      build_timeout: 1800  # 30 minutes
+      
+    validation_steps:
+      - "container_build"
+      - "health_check"
+      - "api_compatibility"
+      - "plugin_compatibility"
+      - "job_compatibility"
+      - "performance_validation"
+      - "container_security_scan"  # Added for container mode
+      
+    rollback_triggers:
+      - "health_check_failure"
+      - "api_incompatibility"
+      - "plugin_failures"
+      - "performance_degradation"
+      - "container_build_failure"  # Added for container mode
+    
+  # Plugin upgrade configuration
+  plugins:
+    supported_strategies: ["hot_reload", "restart", "blue_green", "container_restart"]
+    default_strategy: "hot_reload"
+    dependency_resolution: true
+    security_scanning: true
+    compatibility_matrix_check: true
+    
+    # Container-specific plugin management
+    container_mode:
+      plugin_volume_mount: "/var/jenkins_home/plugins"
+      plugin_install_method: "runtime"  # runtime, image_build
+      restart_strategy: "graceful"  # graceful, immediate
+      backup_plugins: true
+      
+    validation_steps:
+      - "download_validation"
+      - "dependency_resolution"
+      - "security_scan"
+      - "compatibility_check"
+      - "functionality_test"
+      - "integration_test"
+      - "container_health_check"  # Added for container mode
+      
+    update_strategies:
+      latest: "Download latest available versions"
+      specific: "Use specific version list"
+      compatible: "Select versions compatible with current Jenkins"
+    
+  # Job DSL upgrade configuration
+  job_dsl:
+    supported_strategies: ["validate_deploy", "canary", "blue_green"]
+    default_strategy: "validate_deploy"
+    syntax_validation: true
+    security_compliance: true
+    impact_analysis: true
+    validation_steps:
+      - "syntax_validation"
+      - "security_compliance"
+      - "impact_analysis"
+      - "dry_run_execution"
+      - "job_generation_test"
+      - "security_policy_check"
+    security_policies:
+      forbidden_patterns:
+        - "System\\.exit"
+        - "Runtime\\.getRuntime"
+        - "ProcessBuilder"
+        - "javax\\.script"
+      required_approvals: 2
+      sandbox_mode: true
+    
+  # Infrastructure upgrade configuration
+  infrastructure:
+    supported_strategies: ["rolling", "blue_green", "maintenance", "container_orchestration"]
+    default_strategy: "rolling"
+    configuration_backup: true
+    drift_detection: true
+    compliance_validation: true
+    
+    # Container-specific infrastructure management
+    container_mode:
+      orchestration_tool: "systemd"  # systemd, docker-compose, kubernetes
+      network_management: "docker_network"
+      volume_management: "docker_volume"
+      service_discovery: "container_dns"
+      load_balancer_integration: "haproxy_container"
+      
+    validation_steps:
+      - "configuration_backup"
+      - "drift_analysis"
+      - "compatibility_check"
+      - "resource_validation"
+      - "network_connectivity"
+      - "security_compliance"
+      - "service_health"
+      - "container_orchestration_health"  # Added for container mode
+      
+    components:
+      ansible_roles: true
+      docker_configs: true
+      network_configs: true
+      security_policies: true
+      ssl_certificates: true
+      monitoring_configs: true
+      container_systemd_services: true  # Added for container mode
+      haproxy_container_config: true   # Added for container mode
+
+# Multi-VM Coordination Configuration with Container Support
+multi_vm_coordination:
+  enabled: true
+  coordinator_vm: "{{ groups['jenkins_masters'][0] }}"
+  consensus_algorithm: "majority"
+  quorum_size: "{{ ((groups['jenkins_masters'] | length) // 2) + 1 }}"
+  coordination_port: 8765
+  heartbeat_interval: 30
+  consensus_timeout: 300
+  network_partition_tolerance: true
+  
+  # Deployment mode detection
+  deployment_mode: "{{ 'container' if (groups['jenkins_masters'] | length) == 1 else 'multi_vm' }}"
+  
+  # Container coordination (single VM mode)
+  container_coordination:
+    enabled: "{{ deployment_mode == 'container' }}"
+    container_runtime: "{{ jenkins_master_container_runtime | default('docker') }}"
+    container_network: "jenkins-network"
+    container_subnet: "172.20.0.0/16"
+    shared_storage: "/var/jenkins_home"
+    
+    # Container health checks
+    container_health_checks:
+      startup_timeout: 300  # seconds
+      health_check_interval: 30  # seconds
+      max_restart_attempts: 3
+      memory_limit: "4g"
+      cpu_limit: "2.0"
+      
+    # Blue-green container configuration
+    blue_green_containers:
+      devops:
+        blue: "jenkins-devops-blue"
+        green: "jenkins-devops-green"
+        ports:
+          blue: 8080
+          green: 8081
+      developer:
+        blue: "jenkins-developer-blue"
+        green: "jenkins-developer-green"
+        ports:
+          blue: 8082
+          green: 8083
+      dev-qa:
+        blue: "jenkins-dev-qa-blue"
+        green: "jenkins-dev-qa-green"
+        ports:
+          blue: 8084
+          green: 8085
+  
+  # VM health check configuration (multi-VM mode)
+  vm_health_checks:
+    enabled: "{{ deployment_mode == 'multi_vm' }}"
+    memory_threshold: 512  # MB
+    disk_threshold: 1024   # MB
+    cpu_threshold: 80      # percentage
+    network_timeout: 10    # seconds
+    docker_health: true
+    jenkins_health: true
+
+# Canary Deployment Configuration
+canary_deployment:
+  enabled: true
+  default_traffic_increment: 10  # percentage
+  validation_interval: 60        # seconds
+  max_validation_time: 900       # 15 minutes
+  error_threshold: 5             # percentage
+  latency_threshold: 2000        # milliseconds
+  auto_rollback: true
+  
+  # Traffic control settings
+  traffic_control:
+    haproxy_stats_port: 8404
+    haproxy_admin_port: 8405
+    validation_endpoints:
+      - "/api/json"
+      - "/login"
+      - "/manage/system-info"
+    metrics_collection:
+      - "error_rate"
+      - "response_time"
+      - "throughput"
+      - "active_sessions"
+      
+  # Container-specific canary deployment
+  container_mode:
+    haproxy_container: "haproxy-lb"
+    config_reload_method: "container_exec"  # container_exec, config_mount
+    backend_discovery: "container_dns"
+    health_check_method: "http_get"
+    traffic_splitting:
+      method: "weight_based"  # weight_based, header_based
+      granularity: 5  # percentage increments
+
+# Notification Configuration
+notification_config:
+  enabled: true
+  channels:
+    slack:
+      webhook_url: "{{ slack_webhook_url | default('') }}"
+      default_channel: "#jenkins-alerts"
+      username: "Jenkins HA Bot"
+      icon_emoji: ":jenkins:"
+    teams:
+      webhook_url: "{{ teams_webhook_url | default('') }}"
+    email:
+      smtp_server: "{{ email_smtp_server | default('') }}"
+      from_address: "{{ email_from | default('jenkins@company.com') }}"
+      recipients: "{{ email_recipients | default('') }}"
+    jira:
+      url: "{{ jira_url | default('') }}"
+      project: "{{ jira_project | default('') }}"
+      issue_type: "Bug"
+    pagerduty:
+      integration_key: "{{ pagerduty_integration_key | default('') }}"
+  
+  # Team-specific notification overrides
+  teams:
+    devops:
+      slack:
+        webhook_url: "{{ devops_slack_webhook | default('') }}"
+        channel: "#devops-alerts"
+      email:
+        recipients: "devops-team@company.com"
+      severity_filter: ["medium", "high", "critical"]
+    developer:
+      slack:
+        webhook_url: "{{ dev_slack_webhook | default('') }}"
+        channel: "#dev-alerts"
+      email:
+        recipients: "dev-team@company.com"
+      severity_filter: ["high", "critical"]
+    dev-qa:
+      slack:
+        webhook_url: "{{ qa_slack_webhook | default('') }}"
+        channel: "#qa-alerts"
+      email:
+        recipients: "qa-team@company.com"
+      severity_filter: ["high", "critical"]
+  
+  # Event templates
+  templates:
+    upgrade_start: "🚀 Jenkins Upgrade Started\n**Team:** {team}\n**Type:** {upgrade_type}\n**Environment:** {environment}\n**Started:** {timestamp}"
+    upgrade_success: "✅ Jenkins Upgrade Completed Successfully\n**Team:** {team}\n**Type:** {upgrade_type}\n**Environment:** {environment}\n**Completed:** {timestamp}\n**Duration:** {duration}"
+    upgrade_failure: "❌ Jenkins Upgrade Failed\n**Team:** {team}\n**Type:** {upgrade_type}\n**Environment:** {environment}\n**Error:** {message}\n**Failed at:** {timestamp}"
+    rollback_initiated: "🔄 Jenkins Rollback Initiated\n**Team:** {team}\n**Environment:** {environment}\n**Reason:** {message}\n**Initiated:** {timestamp}"
+    consensus_update: "🤝 Multi-VM Consensus Update\n**Operation:** {upgrade_type}\n**Status:** {message}\n**VMs Ready:** {ready_vms}\n**Timestamp:** {timestamp}"
+
+# Security Configuration for Upgrades
+upgrade_security:
+  # Plugin security scanning
+  plugin_security:
+    trivy_enabled: true
+    trivy_timeout: 300
+    vulnerability_threshold: "HIGH"
+    allowed_sources:
+      - "https://updates.jenkins.io"
+      - "https://repo.jenkins-ci.org"
+    forbidden_patterns:
+      - "*.snapshot"
+      - "*-SNAPSHOT"
+    
+  # DSL security policies
+  dsl_security:
+    sandbox_mode: true
+    script_approval_required: true
+    forbidden_methods:
+      - "System.exit"
+      - "Runtime.getRuntime"
+      - "ProcessBuilder"
+      - "java.lang.reflect.*"
+    allowed_classes:
+      - "hudson.*"
+      - "jenkins.*"
+      - "org.jenkinsci.*"
+    
+  # Container security
+  container_security:
+    non_root_required: true
+    read_only_root_fs: true
+    no_new_privileges: true
+    security_context:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 1000
+      fsGroup: 1000
+    resource_limits:
+      memory: "4Gi"
+      cpu: "2"
+    network_policies:
+      ingress_allowed: ["monitoring", "load_balancers"]
+      egress_allowed: ["dns", "api_servers"]
+
+# Monitoring and Observability
+upgrade_monitoring:
+  metrics_collection:
+    enabled: true
+    interval: 30  # seconds
+    retention: "7d"
+    exporters:
+      - "prometheus"
+      - "grafana"
+    
+  # SLI/SLO definitions for upgrades
+  sli_definitions:
+    upgrade_success_rate:
+      target: 99.5
+      measurement_window: "30d"
+    upgrade_duration:
+      target: "30m"
+      measurement_window: "30d"
+    rollback_success_rate:
+      target: 100.0
+      measurement_window: "30d"
+    consensus_time:
+      target: "5m"
+      measurement_window: "30d"
+    
+  # Alerting rules
+  alerts:
+    upgrade_failure:
+      severity: "critical"
+      channels: ["slack", "pagerduty"]
+    upgrade_duration_exceeded:
+      severity: "warning"
+      threshold: "45m"
+      channels: ["slack"]
+    consensus_timeout:
+      severity: "high"
+      channels: ["slack", "teams"]
+    rollback_triggered:
+      severity: "high"
+      channels: ["slack", "teams", "email"]
+
+# Backup and Recovery Configuration
+upgrade_backup:
+  enabled: true
+  pre_upgrade_backup: true
+  backup_retention: "30d"
+  compression_enabled: true
+  encryption_enabled: true
+  
+  # Backup components
+  components:
+    jenkins_home: true
+    job_configs: true
+    plugin_configs: true
+    system_configs: true
+    secrets: true
+    user_data: true
+    build_history: false  # Optional due to size
+    
+  # Recovery testing
+  recovery_testing:
+    enabled: true
+    test_frequency: "weekly"
+    rto_target: "15m"  # Recovery Time Objective
+    rpo_target: "5m"   # Recovery Point Objective
+    validation_steps:
+      - "backup_integrity"
+      - "restore_validation"
+      - "functionality_test"
+      - "performance_test"

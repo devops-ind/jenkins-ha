@@ -1,0 +1,466 @@
+---
+# Jenkins Version Upgrade Playbook with Blue-Green Validation
+# Orchestrates safe version upgrades with comprehensive testing
+
+- name: Jenkins Version Upgrade with Blue-Green Validation
+  hosts: "{{ target_hosts | default('jenkins_masters') }}"
+  become: yes
+  gather_facts: yes
+  vars:
+    # Required parameters
+    target_version: "{{ jenkins_target_version | mandatory }}"
+    target_team: "{{ upgrade_team | default('devops') }}"
+    upgrade_environment: "{{ target_environment | default('green') }}"
+    
+    # Upgrade configuration
+    skip_validation: "{{ skip_upgrade_validation | default(false) }}"
+    auto_approve: "{{ auto_approve_upgrade | default(false) }}"
+    validation_timeout: "{{ upgrade_validation_timeout | default(1800) }}"  # 30 minutes
+    rollback_on_failure: "{{ auto_rollback_on_failure | default(true) }}"
+    
+    # Version comparison
+    current_version: "{{ jenkins_version }}"
+    upgrade_type: "{{ 'major' if target_version.split('.')[0] != current_version.split('.')[0] else ('minor' if target_version.split('.')[1] != current_version.split('.')[1] else 'patch') }}"
+    
+    # Paths
+    upgrade_workspace: "/tmp/jenkins-upgrade-{{ target_team }}-{{ ansible_date_time.epoch }}"
+    validation_report_path: "{{ upgrade_workspace }}/validation-report.json"
+    
+  pre_tasks:
+    - name: Validate upgrade parameters
+      assert:
+        that:
+          - target_version is defined
+          - target_version != current_version
+          - target_team in jenkins_teams | map(attribute='team_name') | list
+          - upgrade_environment in ['blue', 'green']
+        fail_msg: |
+          Invalid upgrade parameters:
+          - target_version: {{ target_version | default('undefined') }}
+          - current_version: {{ current_version }}
+          - target_team: {{ target_team }} (must be in {{ jenkins_teams | map(attribute='team_name') | list }})
+          - upgrade_environment: {{ upgrade_environment }} (must be blue or green)
+
+    - name: Create upgrade workspace
+      file:
+        path: "{{ upgrade_workspace }}"
+        state: directory
+        mode: '0755'
+
+    - name: Display upgrade information
+      debug:
+        msg: |
+          🚀 Jenkins Version Upgrade Initiated
+          ==========================================
+          Team: {{ target_team }}
+          Current Version: {{ current_version }}
+          Target Version: {{ target_version }}
+          Upgrade Type: {{ upgrade_type | upper }}
+          Target Environment: {{ upgrade_environment | upper }}
+          Validation: {{ 'SKIPPED' if skip_validation else 'ENABLED' }}
+          Auto-approve: {{ 'YES' if auto_approve else 'NO' }}
+          ==========================================
+
+  tasks:
+    # Phase 1: Pre-upgrade Environment Assessment
+    - name: Pre-upgrade environment assessment
+      block:
+        - name: Check current environment status
+          script: "{{ jenkins_home_dir }}/scripts/blue-green-healthcheck-{{ target_team }}.sh both"
+          register: pre_upgrade_health
+          failed_when: false
+
+        - name: Get current active environment
+          shell: |
+            if [[ -f "{{ jenkins_home_dir }}/{{ target_team }}/blue-green-state.json" ]]; then
+              grep -o '"active_environment":\s*"[^"]*"' "{{ jenkins_home_dir }}/{{ target_team }}/blue-green-state.json" | cut -d'"' -f4
+            else
+              echo "blue"
+            fi
+          register: current_active_env
+          changed_when: false
+
+        - name: Validate upgrade environment is passive
+          assert:
+            that:
+              - current_active_env.stdout != upgrade_environment
+            fail_msg: |
+              ❌ Cannot upgrade active environment!
+              Active: {{ current_active_env.stdout }}
+              Target: {{ upgrade_environment }}
+              Please switch to the other environment first or use the inactive environment.
+
+        - name: Display environment status
+          debug:
+            msg: |
+              📊 Pre-Upgrade Environment Status:
+              Active Environment: {{ current_active_env.stdout | upper }}
+              Upgrade Target: {{ upgrade_environment | upper }}
+              Health Check Results:
+              {{ pre_upgrade_health.stdout_lines | join('\n') }}
+      tags: ['assessment']
+
+    # Phase 2: Deploy New Version to Passive Environment
+    - name: Deploy new Jenkins version to passive environment
+      block:
+        - name: Update team configuration for new version
+          set_fact:
+            upgrade_team_config: >-
+              {{
+                jenkins_teams | selectattr('team_name', 'equalto', target_team) | first |
+                combine({
+                  'active_environment': upgrade_environment,
+                  'upgrade_mode': true,
+                  'upgrade_version': target_version
+                })
+              }}
+
+        - name: Stop existing passive environment container
+          docker_container:
+            name: "jenkins-{{ target_team }}-{{ upgrade_environment }}"
+            state: stopped
+          ignore_errors: true
+
+        - name: Remove existing passive environment container
+          docker_container:
+            name: "jenkins-{{ target_team }}-{{ upgrade_environment }}"
+            state: absent
+          ignore_errors: true
+
+        - name: Build new Jenkins image with target version
+          docker_image:
+            name: "jenkins-custom-{{ target_team }}-upgrade"
+            tag: "{{ target_version }}"
+            source: build
+            build:
+              path: "{{ jenkins_master_custom_build_dir }}/{{ target_team }}"
+              dockerfile: Dockerfile
+              pull: yes
+              args:
+                BASE_IMAGE: "jenkins/jenkins:{{ target_version }}"
+                BUILD_DATE: "{{ ansible_date_time.iso8601 }}"
+                VCS_REF: "{{ ansible_date_time.epoch }}"
+                UPGRADE_VERSION: "{{ target_version }}"
+            state: present
+            force_source: true
+
+        - name: Deploy Jenkins container with new version
+          docker_container:
+            name: "jenkins-{{ target_team }}-{{ upgrade_environment }}"
+            image: "jenkins-custom-{{ target_team }}-upgrade:{{ target_version }}"
+            state: started
+            restart_policy: "unless-stopped"
+            networks:
+              - name: "{{ jenkins_master_network_name }}"
+            ports: []  # No external ports during validation
+            volumes:
+              - "jenkins-{{ target_team }}-{{ upgrade_environment }}-home:{{ jenkins_master_container_home }}"
+              - "jenkins-{{ target_team }}-shared:{{ jenkins_master_shared_path }}"
+              - "{{ jenkins_master_socket_path_docker }}:{{ jenkins_master_socket_path_docker }}:ro"
+            env:
+              JENKINS_ENVIRONMENT: "{{ upgrade_environment }}"
+              JENKINS_TEAM: "{{ target_team }}"
+              JENKINS_VERSION: "{{ target_version }}"
+              JENKINS_UPGRADE_MODE: "true"
+            memory: "{{ upgrade_team_config.resources.memory }}"
+            cpus: "{{ upgrade_team_config.resources.cpu }}"
+            labels:
+              service: "jenkins-master"
+              managed_by: "ansible"
+              team: "{{ target_team }}"
+              environment: "{{ upgrade_environment }}"
+              version: "{{ target_version }}"
+              upgrade_mode: "true"
+            healthcheck:
+              test: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_master_port }}/login"]
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 120s  # Extended for upgrade
+
+        - name: Wait for Jenkins to start
+          pause:
+            seconds: 60
+
+        - name: Verify container is running
+          docker_container_info:
+            name: "jenkins-{{ target_team }}-{{ upgrade_environment }}"
+          register: upgrade_container_info
+          failed_when: upgrade_container_info.container.State.Status != 'running'
+
+        - name: Display deployment status
+          debug:
+            msg: |
+              ✅ New Version Deployed Successfully:
+              Container: jenkins-{{ target_team }}-{{ upgrade_environment }}
+              Image: jenkins-custom-{{ target_team }}-upgrade:{{ target_version }}
+              Status: {{ upgrade_container_info.container.State.Status }}
+              Health: {{ upgrade_container_info.container.State.Health.Status | default('N/A') }}
+      tags: ['deploy']
+
+    # Phase 3: Comprehensive Upgrade Validation
+    - name: Comprehensive upgrade validation
+      block:
+        - name: Run upgrade validation suite
+          script: "{{ jenkins_home_dir }}/scripts/blue-green-upgrade-validator-{{ target_team }}.sh {{ upgrade_environment }} {{ target_version }}"
+          register: upgrade_validation_results
+          timeout: "{{ validation_timeout }}"
+          async: "{{ validation_timeout }}"
+          poll: 30
+          failed_when: false
+
+        - name: Parse validation results
+          set_fact:
+            validation_summary: "{{ upgrade_validation_results.stdout | from_json }}"
+          when: upgrade_validation_results.rc == 0
+
+        - name: Generate validation report
+          template:
+            src: upgrade-validation-report.json.j2
+            dest: "{{ validation_report_path }}"
+            mode: '0644'
+          vars:
+            validation_data: "{{ validation_summary | default({}) }}"
+            validation_exit_code: "{{ upgrade_validation_results.rc }}"
+            validation_output: "{{ upgrade_validation_results.stdout_lines | default([]) }}"
+            validation_errors: "{{ upgrade_validation_results.stderr_lines | default([]) }}"
+
+        - name: Display validation summary
+          debug:
+            msg: |
+              📋 Upgrade Validation Summary:
+              ================================
+              Exit Code: {{ upgrade_validation_results.rc }}
+              {% if validation_summary is defined %}
+              Plugin Compatibility: {{ validation_summary.plugin_compatibility.status | default('UNKNOWN') }}
+              Performance Test: {{ validation_summary.performance_test.status | default('UNKNOWN') }}
+              Security Scan: {{ validation_summary.security_scan.status | default('UNKNOWN') }}
+              Job Migration: {{ validation_summary.job_migration.status | default('UNKNOWN') }}
+              API Compatibility: {{ validation_summary.api_compatibility.status | default('UNKNOWN') }}
+              Overall Score: {{ validation_summary.overall_score | default('N/A') }}/100
+              {% endif %}
+              ================================
+              
+              Detailed results available at: {{ validation_report_path }}
+
+        - name: Fail if validation failed and auto-rollback disabled
+          fail:
+            msg: |
+              ❌ Upgrade validation failed!
+              Exit Code: {{ upgrade_validation_results.rc }}
+              
+              Check the validation report: {{ validation_report_path }}
+              
+              To proceed anyway: -e skip_upgrade_validation=true
+              To enable auto-rollback: -e auto_rollback_on_failure=true
+          when:
+            - upgrade_validation_results.rc != 0
+            - not skip_validation
+            - not rollback_on_failure
+      when: not skip_validation
+      tags: ['validation']
+
+    # Phase 4: Approval Gate (if not auto-approved)
+    - name: Approval gate for upgrade
+      block:
+        - name: Wait for manual approval
+          pause:
+            prompt: |
+              
+              🚦 UPGRADE APPROVAL REQUIRED 🚦
+              =================================
+              
+              Team: {{ target_team }}
+              Version: {{ current_version }} → {{ target_version }}
+              Environment: {{ upgrade_environment }}
+              
+              {% if validation_summary is defined %}
+              Validation Score: {{ validation_summary.overall_score | default('N/A') }}/100
+              {% endif %}
+              
+              Review the validation report:
+              {{ validation_report_path }}
+              
+              Press ENTER to APPROVE the upgrade
+              Press Ctrl+C to ABORT
+              =================================
+          when: not auto_approve
+
+        - name: Record approval decision
+          copy:
+            content: |
+              {
+                "timestamp": "{{ ansible_date_time.iso8601 }}",
+                "approver": "{{ ansible_user_id }}@{{ ansible_hostname }}",
+                "team": "{{ target_team }}",
+                "version_from": "{{ current_version }}",
+                "version_to": "{{ target_version }}",
+                "environment": "{{ upgrade_environment }}",
+                "approval_method": "{{ 'automatic' if auto_approve else 'manual' }}",
+                "validation_score": {{ validation_summary.overall_score | default('null') }}
+              }
+            dest: "{{ upgrade_workspace }}/approval-record.json"
+            mode: '0644'
+      when: 
+        - not skip_validation
+        - upgrade_validation_results.rc == 0 or skip_validation
+      tags: ['approval']
+
+    # Phase 5: Environment Switch
+    - name: Switch to upgraded environment
+      block:
+        - name: Record switch attempt
+          copy:
+            content: |
+              {
+                "timestamp": "{{ ansible_date_time.iso8601 }}",
+                "team": "{{ target_team }}",
+                "operation": "upgrade_switch",
+                "version_from": "{{ current_version }}",
+                "version_to": "{{ target_version }}",
+                "environment_from": "{{ current_active_env.stdout }}",
+                "environment_to": "{{ upgrade_environment }}"
+              }
+            dest: "{{ upgrade_workspace }}/switch-record.json"
+            mode: '0644'
+
+        - name: Execute environment switch
+          script: "{{ jenkins_home_dir }}/scripts/blue-green-switch-{{ target_team }}.sh"
+          register: environment_switch_results
+          environment:
+            JENKINS_UPGRADE_MODE: "true"
+            JENKINS_TARGET_VERSION: "{{ target_version }}"
+
+        - name: Verify switch success
+          docker_container_info:
+            name: "jenkins-{{ target_team }}-{{ upgrade_environment }}"
+          register: post_switch_container
+          failed_when: post_switch_container.container.State.Status != 'running'
+
+        - name: Post-switch health verification
+          script: "{{ jenkins_home_dir }}/scripts/blue-green-healthcheck-{{ target_team }}.sh {{ upgrade_environment }}"
+          register: post_switch_health
+          retries: 5
+          delay: 15
+          until: post_switch_health.rc == 0
+
+        - name: Update version tracking
+          lineinfile:
+            path: "{{ jenkins_home_dir }}/{{ target_team }}/version-history.log"
+            line: "{{ ansible_date_time.iso8601 }}: Upgraded from {{ current_version }} to {{ target_version }} ({{ upgrade_type }})"
+            create: yes
+            mode: '0644'
+
+        - name: Display switch results
+          debug:
+            msg: |
+              🎉 Upgrade Switch Completed Successfully!
+              ==========================================
+              Team: {{ target_team }}
+              Version: {{ current_version }} → {{ target_version }}
+              Active Environment: {{ upgrade_environment | upper }}
+              Container Status: {{ post_switch_container.container.State.Status }}
+              Health Status: {{ 'HEALTHY' if post_switch_health.rc == 0 else 'UNHEALTHY' }}
+              ==========================================
+              
+              Access Jenkins: http://{{ ansible_default_ipv4.address }}:{{ jenkins_teams | selectattr('team_name', 'equalto', target_team) | first | attr('ports.web') }}
+      tags: ['switch']
+
+  rescue:
+    - name: Handle upgrade failure
+      block:
+        - name: Log upgrade failure
+          copy:
+            content: |
+              {
+                "timestamp": "{{ ansible_date_time.iso8601 }}",
+                "team": "{{ target_team }}",
+                "operation": "upgrade_failure",
+                "version_from": "{{ current_version }}",
+                "version_to": "{{ target_version }}",
+                "environment": "{{ upgrade_environment }}",
+                "failed_task": "{{ ansible_failed_task.name | default('unknown') }}",
+                "error_message": "{{ ansible_failed_result.msg | default('unknown error') }}"
+              }
+            dest: "{{ upgrade_workspace }}/failure-record.json"
+            mode: '0644'
+
+        - name: Automatic rollback on failure
+          block:
+            - name: Stop failed upgrade container
+              docker_container:
+                name: "jenkins-{{ target_team }}-{{ upgrade_environment }}"
+                state: stopped
+              ignore_errors: true
+
+            - name: Remove failed upgrade container
+              docker_container:
+                name: "jenkins-{{ target_team }}-{{ upgrade_environment }}"
+                state: absent
+              ignore_errors: true
+
+            - name: Restart original environment
+              script: "{{ jenkins_home_dir }}/scripts/blue-green-switch-{{ target_team }}.sh"
+              register: rollback_results
+              environment:
+                JENKINS_ROLLBACK_MODE: "true"
+                JENKINS_ORIGINAL_VERSION: "{{ current_version }}"
+
+            - name: Verify rollback success
+              script: "{{ jenkins_home_dir }}/scripts/blue-green-healthcheck-{{ target_team }}.sh {{ current_active_env.stdout }}"
+              register: rollback_health
+              retries: 3
+              delay: 10
+
+            - name: Display rollback results
+              debug:
+                msg: |
+                  🔄 Automatic Rollback Executed
+                  ==============================
+                  Original Environment: {{ current_active_env.stdout }}
+                  Rollback Status: {{ 'SUCCESS' if rollback_health.rc == 0 else 'FAILED' }}
+                  
+                  Check failure details: {{ upgrade_workspace }}/failure-record.json
+          when: rollback_on_failure
+
+        - name: Re-raise failure
+          fail:
+            msg: |
+              ❌ Jenkins upgrade failed!
+              
+              Team: {{ target_team }}
+              Version: {{ current_version }} → {{ target_version }}
+              Failed Task: {{ ansible_failed_task.name | default('unknown') }}
+              
+              {% if rollback_on_failure %}
+              Automatic rollback: {{ 'COMPLETED' if rollback_health.rc == 0 else 'FAILED' }}
+              {% endif %}
+              
+              Check logs in: {{ upgrade_workspace }}/
+
+  post_tasks:
+    - name: Cleanup upgrade workspace
+      file:
+        path: "{{ upgrade_workspace }}"
+        state: absent
+      when: cleanup_workspace | default(true)
+
+    - name: Generate upgrade summary
+      debug:
+        msg: |
+          📊 Jenkins Upgrade Summary
+          ==========================
+          Team: {{ target_team }}
+          Version: {{ current_version }} → {{ target_version }}
+          Type: {{ upgrade_type | upper }}
+          Status: {{ 'SUCCESS' if ansible_failed_task is not defined else 'FAILED' }}
+          Environment: {{ upgrade_environment | upper }}
+          Timestamp: {{ ansible_date_time.iso8601 }}
+          
+          {% if ansible_failed_task is not defined %}
+          🎉 Upgrade completed successfully!
+          Access Jenkins: http://{{ ansible_default_ipv4.address }}:{{ jenkins_teams | selectattr('team_name', 'equalto', target_team) | first | attr('ports.web') }}
+          {% else %}
+          ❌ Upgrade failed - check workspace: {{ upgrade_workspace }}
+          {% endif %}
+          ==========================

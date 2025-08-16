@@ -1,0 +1,659 @@
+---
+# Universal Upgrade Orchestrator for Jenkins HA Infrastructure
+# Supports: Jenkins version, plugins, Job DSL, and infrastructure upgrades
+# Designed for zero-downtime operations across single and multi-VM deployments
+
+- name: Universal Jenkins Upgrade Orchestrator
+  hosts: "{{ target_hosts | default('jenkins_masters') }}"
+  become: yes
+  gather_facts: yes
+  serial: "{{ upgrade_batch_size | default(1) }}"  # For multi-VM coordination
+  vars:
+    # Core upgrade parameters
+    upgrade_type: "{{ upgrade_scenario | mandatory }}"  # jenkins_version, plugins, job_dsl, infrastructure
+    target_team: "{{ upgrade_team | default('all') }}"
+    upgrade_environment: "{{ target_environment | default('auto') }}"  # auto, blue, green
+    
+    # Architecture detection and coordination
+    deployment_mode: "{{ 'container' if (groups['jenkins_masters'] | length) == 1 else 'multi_vm' }}"
+    container_runtime: "{{ jenkins_master_container_runtime | default('docker') }}"
+    multi_vm_mode: "{{ enable_multi_vm | default(deployment_mode == 'multi_vm') }}"
+    container_mode: "{{ deployment_mode == 'container' }}"
+    coordination_timeout: "{{ vm_coordination_timeout | default(300) }}"
+    consensus_required: "{{ require_consensus | default(true) }}"
+    
+    # Upgrade-specific parameters
+    target_version: "{{ jenkins_target_version | default('') }}"
+    plugin_list: "{{ target_plugins | default('') }}"
+    plugin_update_strategy: "{{ plugin_strategy | default('security_only') }}"  # all, security_only, specific
+    dsl_source: "{{ job_dsl_source | default('embedded') }}"  # embedded, git, file
+    dsl_git_repo: "{{ job_dsl_git_repository | default('') }}"
+    dsl_git_branch: "{{ job_dsl_git_branch | default('main') }}"
+    
+    # Validation and safety
+    skip_validation: "{{ skip_upgrade_validation | default(false) }}"
+    validation_timeout: "{{ upgrade_validation_timeout | default(1800) }}"
+    enable_canary: "{{ enable_canary_deployment | default(true) }}"
+    canary_percentage: "{{ canary_traffic_percentage | default(10) }}"
+    auto_rollback: "{{ enable_auto_rollback | default(true) }}"
+    
+    # Operational settings
+    dry_run: "{{ dry_run_mode | default(false) }}"
+    maintenance_window: "{{ in_maintenance_window | default(false) }}"
+    notification_channels: "{{ alert_channels | default(['email']) }}"
+    
+    # Paths and workspace
+    upgrade_workspace: "/tmp/jenkins-upgrade-{{ upgrade_type }}-{{ ansible_date_time.epoch }}"
+    coordination_file: "{{ upgrade_workspace }}/coordination.json"
+    consensus_file: "{{ upgrade_workspace }}/consensus.json"
+
+  pre_tasks:
+    - name: Validate upgrade parameters
+      assert:
+        that:
+          - upgrade_type in ['jenkins_version', 'plugins', 'job_dsl', 'infrastructure']
+          - target_team == 'all' or target_team in jenkins_teams | map(attribute='team_name') | list
+          - upgrade_environment in ['auto', 'blue', 'green']
+          - not (upgrade_type == 'jenkins_version' and target_version == '')
+          - not (upgrade_type == 'plugins' and plugin_list == '' and plugin_update_strategy == 'specific')
+        fail_msg: |
+          Invalid upgrade parameters:
+          - upgrade_type must be: jenkins_version, plugins, job_dsl, or infrastructure
+          - target_team must be: all or valid team name
+          - upgrade_environment must be: auto, blue, or green
+          - jenkins_version upgrades require target_version
+          - plugin upgrades with 'specific' strategy require plugin_list
+
+    - name: Create upgrade workspace
+      file:
+        path: "{{ upgrade_workspace }}"
+        state: directory
+        mode: '0755'
+
+    - name: Initialize multi-VM coordination
+      block:
+        - name: Create coordination file
+          copy:
+            content: |
+              {
+                "upgrade_id": "{{ upgrade_type }}-{{ ansible_date_time.epoch }}",
+                "coordinator_host": "{{ inventory_hostname }}",
+                "total_hosts": {{ ansible_play_hosts | length }},
+                "upgrade_type": "{{ upgrade_type }}",
+                "target_team": "{{ target_team }}",
+                "started_at": "{{ ansible_date_time.iso8601 }}",
+                "status": "initializing",
+                "participating_hosts": {{ ansible_play_hosts | to_json }}
+              }
+            dest: "{{ coordination_file }}"
+            mode: '0644'
+
+        - name: Synchronize coordination across VMs
+          synchronize:
+            src: "{{ coordination_file }}"
+            dest: "{{ coordination_file }}"
+            mode: push
+          delegate_to: "{{ item }}"
+          loop: "{{ ansible_play_hosts }}"
+          when: item != inventory_hostname
+      when: multi_vm_mode and inventory_hostname == ansible_play_hosts[0]
+
+    - name: Display upgrade information
+      debug:
+        msg: |
+          🚀 Universal Jenkins Upgrade Initiated
+          =======================================
+          Upgrade Type: {{ upgrade_type | upper }}
+          Team(s): {{ target_team | upper }}
+          Environment: {{ upgrade_environment | upper }}
+          Deployment Mode: {{ deployment_mode | upper }}
+          {% if container_mode %}
+          Container Runtime: {{ container_runtime | upper }}
+          {% else %}
+          Multi-VM Mode: {{ 'ENABLED' if multi_vm_mode else 'DISABLED' }}
+          {% endif %}
+          Dry Run: {{ 'YES' if dry_run else 'NO' }}
+          {% if upgrade_type == 'jenkins_version' %}
+          Target Version: {{ target_version }}
+          {% elif upgrade_type == 'plugins' %}
+          Plugin Strategy: {{ plugin_update_strategy }}
+          Plugin List: {{ plugin_list if plugin_list else 'auto-detected' }}
+          {% elif upgrade_type == 'job_dsl' %}
+          DSL Source: {{ dsl_source }}
+          {% endif %}
+          =======================================
+
+  tasks:
+    # Phase 1: Pre-upgrade Assessment and Planning
+    - name: Pre-upgrade assessment and planning
+      block:
+        - name: Assess current environment state
+          script: >-
+            {{ jenkins_home_dir }}/scripts/environment-assessor.sh 
+            {{ target_team }}
+            {% if container_mode %}--container-mode --runtime {{ container_runtime }}{% endif %}
+          register: environment_assessment
+          failed_when: false
+
+        - name: Determine optimal upgrade strategy
+          set_fact:
+            upgrade_strategy: >-
+              {%- if upgrade_environment == 'auto' -%}
+                {%- if environment_assessment.stdout | regex_search('active_environment":\s*"([^"]*)"', '\1') -%}
+                  {{ 'green' if environment_assessment.stdout | regex_search('active_environment":\s*"blue"') else 'blue' }}
+                {%- else -%}
+                  green
+                {%- endif -%}
+              {%- else -%}
+                {{ upgrade_environment }}
+              {%- endif -%}
+            teams_to_upgrade: >-
+              {%- if target_team == 'all' -%}
+                {{ jenkins_teams | map(attribute='team_name') | list }}
+              {%- else -%}
+                [{{ target_team }}]
+              {%- endif -%}
+
+        - name: Container assessment for upgrade strategy
+          block:
+            - name: Assess container health and readiness
+              script: >-
+                {{ jenkins_home_dir }}/scripts/container-readiness-assessor.sh
+                --teams "{{ teams_to_upgrade | join(',') }}"
+                --runtime {{ container_runtime }}
+              register: container_assessment
+              when: container_mode
+
+            - name: Set container-specific assessment
+              set_fact:
+                local_assessment: |
+                  {
+                    "host": "{{ inventory_hostname }}",
+                    "deployment_mode": "{{ deployment_mode }}",
+                    "upgrade_strategy": "{{ upgrade_strategy }}",
+                    "teams_to_upgrade": {{ teams_to_upgrade | to_json }},
+                    "current_load": {{ ansible_processor_vcpus | int }},
+                    "available_memory": {{ ansible_memfree_mb | int }},
+                    "disk_space": {{ ansible_mounts | selectattr('mount', 'equalto', '/') | first | attr('size_available') | int }},
+                    {% if container_mode %}
+                    "container_runtime": "{{ container_runtime }}",
+                    "container_health": {{ container_assessment.stdout | from_json if container_assessment is defined else {} }},
+                    {% endif %}
+                    "readiness_score": {{ (ansible_memfree_mb | int / 1024 + ansible_mounts | selectattr('mount', 'equalto', '/') | first | attr('size_available') | int / 1000000000) | round(2) }}
+                  }
+          when: container_mode
+
+        - name: Multi-VM consensus for upgrade strategy
+          block:
+            - name: Collect VM-specific assessments
+              set_fact:
+                local_assessment: |
+                  {
+                    "host": "{{ inventory_hostname }}",
+                    "deployment_mode": "{{ deployment_mode }}",
+                    "upgrade_strategy": "{{ upgrade_strategy }}",
+                    "teams_to_upgrade": {{ teams_to_upgrade | to_json }},
+                    "current_load": {{ ansible_processor_vcpus | int }},
+                    "available_memory": {{ ansible_memfree_mb | int }},
+                    "disk_space": {{ ansible_mounts | selectattr('mount', 'equalto', '/') | first | attr('size_available') | int }},
+                    "readiness_score": {{ (ansible_memfree_mb | int / 1024 + ansible_mounts | selectattr('mount', 'equalto', '/') | first | attr('size_available') | int / 1000000000) | round(2) }}
+                  }
+              when: not container_mode
+
+            - name: Share assessment with coordination file
+              lineinfile:
+                path: "{{ coordination_file }}"
+                line: "{{ local_assessment }}"
+                insertafter: '"participating_hosts"'
+                state: present
+
+            - name: Wait for all VMs to complete assessment
+              wait_for:
+                path: "{{ coordination_file }}"
+                search_regex: '"readiness_score".*{{ ansible_play_hosts | length }}'
+                timeout: "{{ coordination_timeout }}"
+
+            - name: Elect primary coordinator
+              set_fact:
+                is_primary_coordinator: "{{ inventory_hostname == ansible_play_hosts[0] }}"
+                
+          when: multi_vm_mode and consensus_required
+
+        - name: Display upgrade strategy
+          debug:
+            msg: |
+              📋 Upgrade Strategy Determined:
+              Target Environment: {{ upgrade_strategy }}
+              Teams: {{ teams_to_upgrade | join(', ') }}
+              {% if multi_vm_mode %}
+              VM Role: {{ 'Primary Coordinator' if is_primary_coordinator | default(false) else 'Participant' }}
+              {% endif %}
+      tags: ['assessment']
+
+    # Phase 2: Upgrade Type-Specific Preparation
+    - name: Upgrade-specific preparation
+      block:
+        # Jenkins Version Upgrade Preparation
+        - name: Prepare Jenkins version upgrade
+          block:
+            - name: Validate target Jenkins version
+              uri:
+                url: "https://repo.jenkins-ci.org/public/org/jenkins-ci/main/jenkins-war/{{ target_version }}/jenkins-war-{{ target_version }}.war"
+                method: HEAD
+                timeout: 30
+              register: version_availability
+              failed_when: version_availability.status != 200
+
+            - name: Analyze version upgrade impact
+              script: "{{ jenkins_home_dir }}/scripts/version-impact-analyzer.sh {{ jenkins_version }} {{ target_version }}"
+              register: version_impact
+              
+            - name: Set upgrade complexity
+              set_fact:
+                upgrade_complexity: "{{ version_impact.stdout | from_json }}"
+                
+          when: upgrade_type == 'jenkins_version'
+
+        # Plugin Upgrade Preparation  
+        - name: Prepare plugin upgrade
+          block:
+            - name: Discover plugins for update
+              script: "{{ jenkins_home_dir }}/scripts/plugin-discovery.sh {{ plugin_update_strategy }}"
+              register: plugin_discovery
+              when: plugin_list == ''
+
+            - name: Set plugin upgrade list
+              set_fact:
+                plugins_to_upgrade: "{{ plugin_list.split(',') if plugin_list else plugin_discovery.stdout.split('\n') | select('match', '^[a-zA-Z].*') | list }}"
+
+            - name: Analyze plugin dependencies
+              script: "{{ jenkins_home_dir }}/scripts/plugin-dependency-analyzer.sh {{ plugins_to_upgrade | join(',') }}"
+              register: plugin_dependencies
+              
+          when: upgrade_type == 'plugins'
+
+        # Job DSL Upgrade Preparation
+        - name: Prepare Job DSL upgrade
+          block:
+            - name: Fetch DSL configuration
+              block:
+                - name: Clone DSL repository
+                  git:
+                    repo: "{{ dsl_git_repo }}"
+                    dest: "{{ upgrade_workspace }}/job-dsl"
+                    version: "{{ dsl_git_branch }}"
+                  when: dsl_source == 'git'
+
+                - name: Copy local DSL files
+                  copy:
+                    src: "{{ dsl_source }}"
+                    dest: "{{ upgrade_workspace }}/job-dsl/"
+                  when: dsl_source == 'file'
+
+            - name: Validate DSL syntax
+              script: "{{ jenkins_home_dir }}/scripts/dsl-syntax-validator.sh {{ upgrade_workspace }}/job-dsl"
+              register: dsl_validation
+              
+          when: upgrade_type == 'job_dsl'
+
+        # Infrastructure Upgrade Preparation
+        - name: Prepare infrastructure upgrade
+          block:
+            - name: Analyze infrastructure changes
+              script: "{{ jenkins_home_dir }}/scripts/infrastructure-change-analyzer.sh"
+              register: infrastructure_changes
+
+            - name: Validate infrastructure compatibility
+              script: "{{ jenkins_home_dir }}/scripts/infrastructure-compatibility-checker.sh"
+              register: infrastructure_compatibility
+              
+          when: upgrade_type == 'infrastructure'
+      tags: ['preparation']
+
+    # Phase 3: Comprehensive Validation
+    - name: Comprehensive upgrade validation
+      block:
+        - name: Run universal validation suite
+          script: >-
+            {{ jenkins_home_dir }}/scripts/universal-upgrade-validator.sh
+            --type {{ upgrade_type }}
+            --team {{ target_team }}
+            --environment {{ upgrade_strategy }}
+            {% if upgrade_type == 'jenkins_version' %}--version {{ target_version }}{% endif %}
+            {% if upgrade_type == 'plugins' %}--plugins "{{ plugins_to_upgrade | join(',') }}"{% endif %}
+            {% if upgrade_type == 'job_dsl' %}--dsl-path {{ upgrade_workspace }}/job-dsl{% endif %}
+            {% if container_mode %}--container-mode --runtime {{ container_runtime }}{% elif multi_vm_mode %}--multi-vm{% endif %}
+            {% if dry_run %}--dry-run{% endif %}
+          register: validation_results
+          timeout: "{{ validation_timeout }}"
+          failed_when: false
+
+        - name: Parse validation results
+          set_fact:
+            validation_report: "{{ validation_results.stdout | from_json }}"
+          when: validation_results.rc == 0
+
+        - name: Multi-VM validation consensus
+          block:
+            - name: Share validation results
+              copy:
+                content: |
+                  {
+                    "host": "{{ inventory_hostname }}",
+                    "validation_score": {{ validation_report.overall_score | default(0) }},
+                    "critical_issues": {{ validation_report.critical_issues | default(0) }},
+                    "warnings": {{ validation_report.warnings | default(0) }},
+                    "timestamp": "{{ ansible_date_time.iso8601 }}"
+                  }
+                dest: "{{ consensus_file }}.{{ inventory_hostname }}"
+                mode: '0644'
+
+            - name: Wait for all VM validations
+              wait_for:
+                path: "{{ consensus_file }}.{{ item }}"
+                timeout: "{{ validation_timeout }}"
+              loop: "{{ ansible_play_hosts }}"
+              when: is_primary_coordinator | default(false)
+
+            - name: Calculate consensus validation score
+              script: "{{ jenkins_home_dir }}/scripts/consensus-calculator.sh {{ consensus_file }}"
+              register: consensus_result
+              when: is_primary_coordinator | default(false)
+
+            - name: Distribute consensus decision
+              copy:
+                content: "{{ consensus_result.stdout }}"
+                dest: "{{ consensus_file }}"
+                mode: '0644'
+              when: is_primary_coordinator | default(false)
+
+            - name: Wait for consensus decision
+              wait_for:
+                path: "{{ consensus_file }}"
+                timeout: 60
+              when: not (is_primary_coordinator | default(false))
+
+            - name: Load consensus decision
+              slurp:
+                src: "{{ consensus_file }}"
+              register: consensus_data
+
+            - name: Set final validation result
+              set_fact:
+                final_validation: "{{ consensus_data.content | b64decode | from_json }}"
+                
+          when: multi_vm_mode
+
+        - name: Display validation summary
+          debug:
+            msg: |
+              📋 Validation Summary:
+              ======================
+              {% if multi_vm_mode %}
+              Consensus Score: {{ final_validation.consensus_score | default(validation_report.overall_score) }}/100
+              Participating VMs: {{ final_validation.participating_hosts | default([inventory_hostname]) | length }}
+              {% else %}
+              Validation Score: {{ validation_report.overall_score | default(0) }}/100
+              {% endif %}
+              Critical Issues: {{ validation_report.critical_issues | default(0) }}
+              Warnings: {{ validation_report.warnings | default(0) }}
+              Recommendation: {{ validation_report.recommendation | default('ABORT') }}
+              ======================
+
+        - name: Abort on validation failure
+          fail:
+            msg: |
+              ❌ Upgrade validation failed!
+              {% if multi_vm_mode %}
+              Consensus Score: {{ final_validation.consensus_score | default(0) }}/100
+              {% else %}
+              Validation Score: {{ validation_report.overall_score | default(0) }}/100
+              {% endif %}
+              
+              Critical Issues: {{ validation_report.critical_issues | default(0) }}
+              
+              To proceed anyway: -e skip_upgrade_validation=true
+          when:
+            - not skip_validation
+            - not dry_run
+            - (validation_report.overall_score | default(0)) < 70
+      when: not skip_validation
+      tags: ['validation']
+
+    # Phase 4: Coordinated Upgrade Execution
+    - name: Execute coordinated upgrade
+      block:
+        - name: Pre-upgrade backup
+          script: "{{ jenkins_home_dir }}/scripts/pre-upgrade-backup.sh {{ target_team }} {{ upgrade_type }}"
+          register: backup_result
+          when: not dry_run
+
+        - name: Execute container-mode upgrade
+          block:
+            - name: Run container upgrade coordinator
+              script: >-
+                {{ jenkins_home_dir }}/scripts/multi-vm-coordinator.sh
+                --operation upgrade
+                --team "{{ item }}"
+                --environment {{ upgrade_strategy }}
+                --upgrade-type {{ upgrade_type }}
+                {% if upgrade_type == 'jenkins_version' %}--target-version {{ target_version }}{% endif %}
+                {% if upgrade_type == 'plugins' %}--plugins-list "{{ plugins_to_upgrade | join(',') }}"{% endif %}
+                {% if upgrade_type == 'job_dsl' %}--dsl-source {{ dsl_source }}{% endif %}
+              register: container_upgrade_result
+              loop: "{{ teams_to_upgrade }}"
+              when: container_mode
+              
+            - name: Validate container upgrade success
+              fail:
+                msg: "Container upgrade failed for team {{ item.item }}: {{ item.stderr | default('Unknown error') }}"
+              when: container_mode and item.rc != 0
+              loop: "{{ container_upgrade_result.results | default([]) }}"
+          when: container_mode and not dry_run
+
+        - name: Execute multi-VM upgrade
+          block:
+            - name: Execute upgrade by type
+              include_tasks: "{{ playbook_dir }}/upgrade-handlers/{{ upgrade_type }}-upgrade.yml"
+              vars:
+                upgrade_env: "{{ upgrade_strategy }}"
+                team_list: "{{ teams_to_upgrade }}"
+          when: not container_mode and not dry_run
+
+        - name: Canary deployment validation
+          block:
+            - name: Configure canary traffic routing
+              script: >-
+                {{ jenkins_home_dir }}/scripts/canary-traffic-controller.sh
+                --action enable
+                --percentage {{ canary_percentage }}
+                --environment {{ upgrade_strategy }}
+                --teams "{{ teams_to_upgrade | join(',') }}"
+                {% if container_mode %}--container-mode --runtime {{ container_runtime }}{% endif %}
+              register: canary_setup
+              when: enable_canary
+
+            - name: Monitor canary metrics
+              script: >-
+                {{ jenkins_home_dir }}/scripts/canary-metrics-monitor.sh
+                --duration 300
+                --threshold 95
+                --environment {{ upgrade_strategy }}
+              register: canary_metrics
+              timeout: 400
+              when: enable_canary
+
+            - name: Evaluate canary success
+              set_fact:
+                canary_success: "{{ canary_metrics.stdout | from_json | attr('success') | default(false) }}"
+              when: enable_canary and canary_metrics is defined
+
+            - name: Abort on canary failure
+              fail:
+                msg: |
+                  ❌ Canary deployment failed!
+                  Success Rate: {{ canary_metrics.stdout | from_json | attr('success_rate') | default('N/A') }}%
+                  Error Rate: {{ canary_metrics.stdout | from_json | attr('error_rate') | default('N/A') }}%
+              when:
+                - enable_canary
+                - not (canary_success | default(false))
+                - not skip_validation
+          when: not dry_run and enable_canary
+
+        - name: Full traffic switch
+          script: >-
+            {{ jenkins_home_dir }}/scripts/traffic-switch-controller.sh
+            --action full_switch
+            --environment {{ upgrade_strategy }}
+            --teams "{{ teams_to_upgrade | join(',') }}"
+            {% if container_mode %}--container-mode --runtime {{ container_runtime }}{% elif multi_vm_mode %}--multi-vm{% endif %}
+          register: traffic_switch
+          when: not dry_run
+
+        - name: Post-upgrade validation
+          script: >-
+            {{ jenkins_home_dir }}/scripts/post-upgrade-validator.sh
+            --type {{ upgrade_type }}
+            --environment {{ upgrade_strategy }}
+            --teams "{{ teams_to_upgrade | join(',') }}"
+            {% if container_mode %}--container-mode --runtime {{ container_runtime }}{% endif %}
+          register: post_upgrade_validation
+          timeout: 300
+          when: not dry_run
+
+        - name: Update upgrade history
+          lineinfile:
+            path: "{{ jenkins_home_dir }}/upgrade-history.log"
+            line: >-
+              {{ ansible_date_time.iso8601 }}: {{ upgrade_type | upper }} upgrade completed - 
+              {% if upgrade_type == 'jenkins_version' %}{{ jenkins_version }} → {{ target_version }}{% endif %}
+              {% if upgrade_type == 'plugins' %}{{ plugins_to_upgrade | length }} plugins{% endif %}
+              {% if upgrade_type == 'job_dsl' %}Job DSL from {{ dsl_source }}{% endif %}
+              {% if upgrade_type == 'infrastructure' %}Infrastructure changes{% endif %}
+              (Teams: {{ teams_to_upgrade | join(',') }}, Environment: {{ upgrade_strategy }})
+            create: yes
+            mode: '0644'
+          when: not dry_run
+      rescue:
+        - name: Handle upgrade failure with coordinated rollback
+          block:
+            - name: Initiate emergency rollback
+              script: >-
+                {{ jenkins_home_dir }}/scripts/emergency-rollback-controller.sh
+                --type {{ upgrade_type }}
+                --teams "{{ teams_to_upgrade | join(',') }}"
+                {% if container_mode %}--container-mode --runtime {{ container_runtime }}{% elif multi_vm_mode %}--multi-vm{% endif %}
+              register: rollback_result
+              when: auto_rollback
+
+            - name: Log upgrade failure
+              copy:
+                content: |
+                  {
+                    "timestamp": "{{ ansible_date_time.iso8601 }}",
+                    "upgrade_type": "{{ upgrade_type }}",
+                    "teams": {{ teams_to_upgrade | to_json }},
+                    "failed_task": "{{ ansible_failed_task.name | default('unknown') }}",
+                    "error_message": "{{ ansible_failed_result.msg | default('unknown error') }}",
+                    "rollback_executed": {{ auto_rollback | to_json }},
+                    "rollback_success": {{ (rollback_result.rc == 0) if rollback_result is defined else false }}
+                  }
+                dest: "{{ upgrade_workspace }}/failure-report.json"
+                mode: '0644'
+
+            - name: Send failure notifications
+              script: >-
+                {{ jenkins_home_dir }}/scripts/notification-sender.sh
+                --type failure
+                --upgrade {{ upgrade_type }}
+                --teams "{{ teams_to_upgrade | join(',') }}"
+                --channels "{{ notification_channels | join(',') }}"
+                --report "{{ upgrade_workspace }}/failure-report.json"
+              when: notification_channels | length > 0
+
+            - name: Re-raise upgrade failure
+              fail:
+                msg: |
+                  ❌ {{ upgrade_type | upper }} upgrade failed!
+                  
+                  Failed Task: {{ ansible_failed_task.name | default('unknown') }}
+                  Teams: {{ teams_to_upgrade | join(', ') }}
+                  
+                  {% if auto_rollback %}
+                  Automatic Rollback: {{ 'SUCCESS' if rollback_result.rc == 0 else 'FAILED' }}
+                  {% endif %}
+                  
+                  Failure Details: {{ upgrade_workspace }}/failure-report.json
+      tags: ['execution']
+
+  post_tasks:
+    - name: Generate comprehensive upgrade report
+      template:
+        src: upgrade-completion-report.j2
+        dest: "{{ upgrade_workspace }}/completion-report.json"
+        mode: '0644'
+      vars:
+        upgrade_successful: "{{ ansible_failed_task is not defined }}"
+        completion_timestamp: "{{ ansible_date_time.iso8601 }}"
+
+    - name: Send success notifications
+      script: >-
+        {{ jenkins_home_dir }}/scripts/notification-sender.sh
+        --type success
+        --upgrade {{ upgrade_type }}
+        --teams "{{ teams_to_upgrade | join(',') }}"
+        --channels "{{ notification_channels | join(',') }}"
+        --report "{{ upgrade_workspace }}/completion-report.json"
+      when: 
+        - notification_channels | length > 0
+        - ansible_failed_task is not defined
+        - not dry_run
+
+    - name: Cleanup temporary files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ coordination_file }}"
+        - "{{ consensus_file }}"
+      when: cleanup_workspace | default(true)
+
+    - name: Display final upgrade summary
+      debug:
+        msg: |
+          📊 {{ upgrade_type | upper }} Upgrade Summary
+          ================================
+          {% if dry_run %}
+          🧪 DRY RUN MODE - No changes made
+          {% endif %}
+          Status: {{ 'SUCCESS' if ansible_failed_task is not defined else 'FAILED' }}
+          Type: {{ upgrade_type | upper }}
+          Teams: {{ teams_to_upgrade | join(', ') }}
+          Environment: {{ upgrade_strategy | upper }}
+          Deployment Mode: {{ deployment_mode | upper }}
+          {% if container_mode %}
+          Container Runtime: {{ container_runtime | upper }}
+          {% elif multi_vm_mode %}
+          Multi-VM Mode: ENABLED ({{ ansible_play_hosts | length }} VMs)
+          {% endif %}
+          {% if upgrade_type == 'jenkins_version' %}
+          Version: {{ jenkins_version }} → {{ target_version }}
+          {% elif upgrade_type == 'plugins' %}
+          Plugins Updated: {{ plugins_to_upgrade | length }}
+          {% elif upgrade_type == 'job_dsl' %}
+          DSL Source: {{ dsl_source }}
+          {% endif %}
+          
+          {% if ansible_failed_task is not defined and not dry_run %}
+          🎉 Upgrade completed successfully with zero downtime!
+          
+          Access Jenkins:
+          {% for team in teams_to_upgrade %}
+          {% if container_mode %}
+          • {{ team }}: http://{{ ansible_default_ipv4.address }}:{{ jenkins_teams | selectattr('team_name', 'equalto', team) | first | attr('ports.web') }} (Container: jenkins-{{ team }}-{{ upgrade_strategy }})
+          {% else %}
+          • {{ team }}: http://{{ ansible_default_ipv4.address }}:{{ jenkins_teams | selectattr('team_name', 'equalto', team) | first | attr('ports.web') }}
+          {% endif %}
+          {% endfor %}
+          {% endif %}
+          ================================

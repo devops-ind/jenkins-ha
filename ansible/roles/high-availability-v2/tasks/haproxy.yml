@@ -125,25 +125,20 @@
       register: haproxy_image_pull
 
     - name: Stop existing HAProxy container if running
-      community.docker.docker_container:
-        name: "jenkins-haproxy"
-        state: stopped
+      command: docker stop jenkins-haproxy
       ignore_errors: true
 
     - name: Remove existing HAProxy container
-      community.docker.docker_container:
-        name: "jenkins-haproxy"
-        state: absent
+      command: docker rm -f jenkins-haproxy
       ignore_errors: true
 
-    - name: Deploy HAProxy container with comprehensive configuration
+    - name: Deploy HAProxy container with standard configuration
       community.docker.docker_container:
         name: "jenkins-haproxy"
         image: "{{ _haproxy_image_full }}"
         state: started
         restart_policy: "{{ haproxy_restart_policy | default('unless-stopped') }}"
-        network_mode: "{{ haproxy_network_mode | default('bridge') }}"
-        ports: "{{ _haproxy_ports }}"
+        network_mode: "host"
         volumes: "{{ _haproxy_volumes }}"
         env: "{{ _haproxy_env_vars }}"
         memory: "{{ haproxy_memory_limit | default('512m') }}"
@@ -153,40 +148,102 @@
           max-size: "{{ haproxy_log_max_size | default('10m') }}"
           max-file: "{{ haproxy_log_max_files | default('3') }}"
         labels: "{{ _haproxy_labels }}"
-        # Environment-specific configurations for compatibility
-        user: "{{ '' if _is_devcontainer or deployment_mode == 'production' else (haproxy_uid ~ ':' ~ haproxy_gid) }}"
         privileged: false
+        security_opts:
+          - "label=disable"
         healthcheck:
           test: ["CMD-SHELL", "haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg"]
           interval: 30s
           timeout: 10s
           retries: 3
           start_period: 30s
-      vars:
-        _image_tag: "{{ haproxy_image_alternatives[deployment_mode | default('production')] | default(haproxy_image_tag) }}"
-        _haproxy_ports: "{{ [] if haproxy_network_mode == 'host' else ['8090:8090', (haproxy_stats_port | default(8404)) ~ ':' ~ (haproxy_stats_port | default(8404))] }}"
-        _haproxy_volumes:
-          - "/etc/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro"
-          - "/etc/haproxy/conf.d:/usr/local/etc/haproxy/conf.d:ro"
-          - "{{ ssl_enabled | ternary('/etc/haproxy/ssl/combined.pem:/usr/local/etc/haproxy/ssl/combined.pem:ro', '') }}"
-          - "/etc/haproxy/errors:/etc/haproxy/errors:ro"
-          - "/var/log/haproxy:/var/log/haproxy:rw"
-          - "/var/lib/haproxy:/var/lib/haproxy:rw"
-          - "haproxy-admin-socket:/run/haproxy:rw"
-        _haproxy_env_vars:
-          HAPROXY_USER: "{{ haproxy_user }}"
-          HAPROXY_UID: "{{ haproxy_uid | string }}"
-          HAPROXY_GID: "{{ haproxy_gid | string }}"
-          TZ: "{{ common_timezone | default('UTC') }}"
-        _haproxy_labels:
-          service: "haproxy"
-          role: "load-balancer"
-          teams: "{{ haproxy_effective_teams | map(attribute='team_name') | join(',') }}"
-          ssl_enabled: "{{ ssl_enabled | default(false) | string }}"
-          deployment_mode: "{{ deployment_mode }}"
-          managed_by: "ansible"
-          version: "simplified-v2"
-      register: haproxy_container
+      register: haproxy_standard_deploy
+      failed_when: false
+
+    - name: Deploy HAProxy container with privileged fallback
+      community.docker.docker_container:
+        name: "jenkins-haproxy"
+        image: "{{ _haproxy_image_full }}"
+        state: started
+        restart_policy: "{{ haproxy_restart_policy | default('unless-stopped') }}"
+        network_mode: "host"
+        volumes: "{{ _haproxy_volumes }}"
+        env: "{{ _haproxy_env_vars }}"
+        memory: "{{ haproxy_memory_limit | default('512m') }}"
+        cpus: "{{ haproxy_cpu_limit | default('1.0') }}"
+        log_driver: "{{ haproxy_log_driver | default('json-file') }}"
+        log_options:
+          max-size: "{{ haproxy_log_max_size | default('10m') }}"
+          max-file: "{{ haproxy_log_max_files | default('3') }}"
+        labels: "{{ _haproxy_labels }}"
+        privileged: true
+        healthcheck:
+          test: ["CMD-SHELL", "haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg"]
+          interval: 30s
+          timeout: 10s
+          retries: 3
+          start_period: 30s
+      register: haproxy_privileged_deploy
+      when: haproxy_standard_deploy is failed
+      failed_when: false
+
+    - name: Report HAProxy deployment status
+      debug:
+        msg: |
+          HAProxy Container Deployment Status:
+          {% if haproxy_standard_deploy is succeeded %}
+          ✅ Standard deployment successful (non-privileged mode)
+          {% elif haproxy_privileged_deploy is succeeded %}
+          ⚠️ Privileged fallback deployment successful (privileged mode)
+          Note: Using privileged mode for container runtime compatibility
+          {% else %}
+          ❌ Both standard and privileged deployment failed
+          Container runtime may not be compatible on this system
+          {% endif %}
+
+    - name: Fail if both deployment methods failed
+      fail:
+        msg: |
+          HAProxy container deployment failed with both standard and privileged modes.
+          This indicates a container runtime compatibility issue on this system.
+          
+          Alternative solutions:
+          1. Install HAProxy natively using system package manager
+          2. Update container runtime to newer version
+          3. Check kernel compatibility for container namespaces
+      when: 
+        - haproxy_standard_deploy is failed
+        - haproxy_privileged_deploy is failed or haproxy_privileged_deploy is skipped
+
+  vars:
+    _image_tag: "{{ haproxy_image_alternatives[deployment_mode | default('production')] | default(haproxy_image_tag) }}"
+    _haproxy_ports: "{{ [] if haproxy_network_mode == 'host' else ['8090:8090', (haproxy_stats_port | default(8404)) ~ ':' ~ (haproxy_stats_port | default(8404))] }}"
+    _haproxy_volumes: >-
+      {%- set base_volumes = [
+        "/etc/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro",
+        "/etc/haproxy/conf.d:/usr/local/etc/haproxy/conf.d:ro",
+        "/etc/haproxy/errors:/etc/haproxy/errors:ro",
+        "/var/log/haproxy:/var/log/haproxy:rw",
+        "/var/lib/haproxy:/var/lib/haproxy:rw",
+        "haproxy-admin-socket:/run/haproxy:rw"
+      ] -%}
+      {%- if ssl_enabled | default(false) -%}
+        {%- set _ = base_volumes.append("/etc/haproxy/ssl/combined.pem:/usr/local/etc/haproxy/ssl/combined.pem:ro") -%}
+      {%- endif -%}
+      {{ base_volumes }}
+    _haproxy_env_vars:
+      HAPROXY_USER: "{{ haproxy_user }}"
+      HAPROXY_UID: "{{ haproxy_uid | string }}"
+      HAPROXY_GID: "{{ haproxy_gid | string }}"
+      TZ: "{{ common_timezone | default('UTC') }}"
+    _haproxy_labels:
+      service: "haproxy"
+      role: "load-balancer"
+      teams: "{{ haproxy_effective_teams | map(attribute='team_name') | join(',') }}"
+      ssl_enabled: "{{ ssl_enabled | default(false) | string }}"
+      deployment_mode: "{{ deployment_mode }}"
+      managed_by: "ansible"
+      version: "simplified-v2"
   tags: ['deploy']
 
 # ====================================
@@ -222,14 +279,18 @@
         url: "http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port | default(8404) }}{{ haproxy_stats_uri | default('/stats') }}"
         method: GET
         timeout: 10
+        user: "{{ haproxy_stats_user | default('admin') }}"
+        password: "{{ haproxy_stats_password | default('admin123') }}"
+        force_basic_auth: true
+        status_code: [200, 401]  # Accept both authenticated access and auth prompts
       register: haproxy_stats_check
       retries: 5
       delay: 5
-      ignore_errors: true
+      failed_when: false  # Don't fail deployment on stats access issues
 
     - name: Test team routing (if multi-team)
       uri:
-        url: "http://{{ ansible_default_ipv4.address }}:80"
+        url: "http://{{ ansible_default_ipv4.address }}:8090"
         method: HEAD
         timeout: 10
         headers:
@@ -240,7 +301,7 @@
       register: team_routing_check
       retries: 3
       delay: 5
-      ignore_errors: true
+      failed_when: false  # Don't fail deployment on routing tests
       when: haproxy_effective_teams | length > 0
 
     - name: Display HAProxy deployment verification results

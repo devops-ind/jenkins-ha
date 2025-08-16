@@ -50,7 +50,7 @@ frontend jenkins_https
     bind {{ vip_address | default('*') }}:443 ssl crt {{ ssl_certificate_path }}
 {% else %}
 frontend jenkins_http
-    bind {{ vip_address | default('*') }}:{{ jenkins_port | default(80) }}
+    bind {{ vip_address | default('*') }}:8090
 {% endif %}
     
     # Enable stats on frontend
@@ -126,8 +126,13 @@ backend jenkins_backend_jenkins
     {% for team in jenkins_teams %}
     {% if team.team_name == 'jenkins' %}
     {% for host in groups['jenkins_masters'] | default([]) %}
+    {% if team.active_environment | default('blue') == 'blue' %}
     server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }}
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) + 100 }} check inter {{ haproxy_check_interval | default('5s') }} backup
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 10 }} check inter {{ haproxy_check_interval | default('5s') }} backup
+    {% else %}
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 10 }} check inter {{ haproxy_check_interval | default('5s') }} backup
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }}
+    {% endif %}
     {% endfor %}
     {% endif %}
     {% endfor %}
@@ -146,9 +151,13 @@ backend jenkins_backend_{{ team.team_name }}
     {% if groups['jenkins_masters'] is defined and groups['jenkins_masters'] | length > 0 %}
     {% for host in groups['jenkins_masters'] %}
     {% if team.blue_green_enabled | default(true) %}
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }}{% if team.active_environment | default('blue') == 'blue' %} {% else %} backup{% endif %}
-
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 10 }} check inter {{ haproxy_check_interval | default('5s') }}{% if team.active_environment | default('blue') == 'green' %} {% else %} backup{% endif %}
+    {% if team.active_environment | default('blue') == 'blue' %}
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }}
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 10 }} check inter {{ haproxy_check_interval | default('5s') }} backup
+    {% else %}
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 10 }} check inter {{ haproxy_check_interval | default('5s') }} backup
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }}
+    {% endif %}
 
     {% else %}
     server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }}
@@ -157,9 +166,13 @@ backend jenkins_backend_{{ team.team_name }}
     {% else %}
     # Localhost fallback for {{ team.team_name }}
     {% if team.blue_green_enabled | default(true) %}
-    server {{ team.team_name }}-localhost-blue 127.0.0.1:{{ team.ports.web | default(8080) }} check{% if team.active_environment | default('blue') == 'blue' %} {% else %} backup{% endif %}
-
-    server {{ team.team_name }}-localhost-green 127.0.0.1:{{ (team.ports.web | default(8080)) + 10 }} check{% if team.active_environment | default('blue') == 'green' %} {% else %} backup{% endif %}
+    {% if team.active_environment | default('blue') == 'blue' %}
+    server {{ team.team_name }}-localhost-blue 127.0.0.1:{{ team.ports.web | default(8080) }} check
+    server {{ team.team_name }}-localhost-green 127.0.0.1:{{ (team.ports.web | default(8080)) + 10 }} check backup
+    {% else %}
+    server {{ team.team_name }}-localhost-blue 127.0.0.1:{{ (team.ports.web | default(8080)) + 10 }} check backup
+    server {{ team.team_name }}-localhost-green 127.0.0.1:{{ team.ports.web | default(8080) }} check
+    {% endif %}
 
     {% else %}
     server {{ team.team_name }}-localhost 127.0.0.1:{{ team.ports.web | default(8080) }} check

@@ -28,6 +28,8 @@ haproxy_image_alternatives:
 haproxy_network_mode: "bridge"
 haproxy_stats_port: 8404
 haproxy_stats_uri: "/stats"
+haproxy_stats_user: "admin"
+haproxy_stats_password: "admin123"
 
 # ====================================
 # USER AND SECURITY CONFIGURATION

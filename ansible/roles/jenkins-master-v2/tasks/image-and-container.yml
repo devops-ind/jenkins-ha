@@ -108,6 +108,10 @@
           path: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}"
           dockerfile: Dockerfile
           pull: yes
+          args:
+            BASE_IMAGE: "{{ jenkins_master_base_image_name }}:{{ jenkins_master_base_image_tag }}"
+            BUILD_DATE: "{{ ansible_date_time.iso8601 }}"
+            VCS_REF: "{{ ansible_date_time.epoch }}"
         state: present
         force_source: "{{ jenkins_master_force_custom_rebuild | default(false) }}"
       loop: "{{ jenkins_teams_config }}"
@@ -127,7 +131,7 @@
       community.docker.docker_container:
         name: "jenkins-{{ item.team_name }}-blue"
         image: "{{ _jenkins_image }}"
-        state: "{{ 'started' if item.active_environment == 'blue' else 'stopped' }}"
+        state: started
         restart_policy: "{{ jenkins_master_restart_policy }}"
         networks:
           - name: "{{ jenkins_master_network_name }}"
@@ -175,7 +179,7 @@
       community.docker.docker_container:
         name: "jenkins-{{ item.team_name }}-green"
         image: "{{ _jenkins_image }}"
-        state: "{{ 'started' if item.active_environment == 'green' else 'stopped' }}"
+        state: started
         restart_policy: "{{ jenkins_master_restart_policy }}"
         networks:
           - name: "{{ jenkins_master_network_name }}"

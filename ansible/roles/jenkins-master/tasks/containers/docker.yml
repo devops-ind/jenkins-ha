@@ -93,8 +93,8 @@
     _jenkins_team_custom_image_available: "{{ jenkins_custom_image_registry is defined and item.team_name in jenkins_custom_image_registry }}"
     _jenkins_fallback_image: "{{ jenkins_master_image_registry }}/{{ jenkins_master_image_name }}:{{ jenkins_master_image_tag }}"
     _green_ports:
-      - "{{ (item.ports.web + 100) | string }}:{{ jenkins_master_port | string }}"
-      - "{{ (item.ports.agent + 100) | string }}:{{ jenkins_jnlp_port | string }}"
+      - "{{ (item.ports.web + 10) | string }}:{{ jenkins_master_port | string }}"
+      - "{{ (item.ports.agent + 10) | string }}:{{ jenkins_jnlp_port | string }}"
     _green_volumes: "{{ _base_green_volumes + (_socket_volume if jenkins_socket_available | default(false) else []) }}"
     _base_green_volumes:
       - "jenkins-{{ item.team_name }}-green-home:{{ jenkins_master_container_home }}"

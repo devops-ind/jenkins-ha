@@ -111,34 +111,29 @@
 
     - name: Check port availability for all teams
       wait_for:
-        port: "{{ item.1 }}"
+        port: "{{ item.port }}"
         host: "{{ ansible_default_ipv4.address }}"
         state: stopped
         timeout: 3
-      with_nested:
-        - "{{ jenkins_teams_config }}"
-        - "{{ ['ports.web', 'ports.agent'] }}"
-      vars:
-        port_value: "{{ item.0[item.1] }}"
       loop: >-
         {%- set result = [] -%}
         {%- for team in jenkins_teams_config -%}
-          {%- set _ = result.append([team.team_name, team.ports.web]) -%}
-          {%- set _ = result.append([team.team_name, team.ports.agent]) -%}
+          {%- set _ = result.append({'team': team.team_name, 'port': team.ports.web, 'type': 'web'}) -%}
+          {%- set _ = result.append({'team': team.team_name, 'port': team.ports.agent, 'type': 'agent'}) -%}
         {%- endfor -%}
         {{ result }}
       loop_control:
-        label: "{{ item.0 }}:{{ item.1 }}"
+        label: "{{ item.team }}:{{ item.type }}:{{ item.port }}"
       failed_when: false
       register: port_check
 
     - name: Warn about potential port conflicts
       debug:
-        msg: "Warning: Port {{ item.item.1 }} for team {{ item.item.0 }} may be in use"
+        msg: "Warning: Port {{ item.item.port }} ({{ item.item.type }}) for team {{ item.item.team }} may be in use"
       loop: "{{ port_check.results }}"
       when: item.failed is defined and item.failed
       loop_control:
-        label: "{{ item.item.0 }}:{{ item.item.1 }}"
+        label: "{{ item.item.team }}:{{ item.item.type }}:{{ item.item.port }}"
   tags: ['setup', 'network']
 
 # ====================================

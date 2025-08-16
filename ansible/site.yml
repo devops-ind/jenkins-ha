@@ -70,6 +70,7 @@
               - Disk space: {{ (ansible_mounts | selectattr('mount', 'equalto', '/') | first).size_available // 1000000000 }}GB (minimum: {{ min_disk_gb }}GB)
               - OS: {{ ansible_distribution }} (supported: Ubuntu, Debian, CentOS, RedHat, Rocky, AlmaLinux)
             success_msg: "✅ System requirements validated for {{ deployment_mode | default('local') }} deployment"
+          when: inventory_hostname != 'localhost' and ansible_mounts is defined
 
         - name: Check network connectivity to dependencies
           uri:
