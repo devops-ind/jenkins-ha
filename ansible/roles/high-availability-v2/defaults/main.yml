@@ -26,6 +26,7 @@ haproxy_image_alternatives:
 # NETWORK CONFIGURATION
 # ====================================
 haproxy_network_mode: "bridge"
+haproxy_frontend_port: 8000  # Frontend port that doesn't conflict with Jenkins containers
 haproxy_stats_port: 8404
 haproxy_stats_uri: "/stats"
 haproxy_stats_user: "admin"

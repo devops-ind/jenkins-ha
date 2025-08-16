@@ -125,6 +125,26 @@
 # CONTAINER DEPLOYMENT PHASE
 # ====================================
 
+# Pre-deployment: Handle port migration for existing containers
+- name: Stop and remove existing blue containers for port migration
+  command: docker rm -f jenkins-{{ item.team_name }}-blue
+  loop: "{{ jenkins_teams_config }}"
+  loop_control:
+    label: "remove-{{ item.team_name }}-blue"
+  when: item.blue_green_enabled | default(true)
+  ignore_errors: true
+  tags: ['containers', 'migration']
+
+- name: Stop and remove existing green containers for port migration
+  command: docker rm -f jenkins-{{ item.team_name }}-green
+  loop: "{{ jenkins_teams_config }}"
+  loop_control:
+    label: "remove-{{ item.team_name }}-green"
+  when: item.blue_green_enabled | default(true)
+  ignore_errors: true
+  tags: ['containers', 'migration']
+
+
 - name: Deploy Jenkins blue-green containers
   block:
     - name: Deploy Jenkins Blue Environment containers
@@ -135,7 +155,7 @@
         restart_policy: "{{ jenkins_master_restart_policy }}"
         networks:
           - name: "{{ jenkins_master_network_name }}"
-        ports: "{{ _blue_ports if item.active_environment == 'blue' else [] }}"
+        ports: "{{ _blue_ports }}"
         volumes: "{{ _blue_volumes }}"
         env: "{{ _jenkins_env_vars | combine({'JENKINS_ENVIRONMENT': 'blue', 'JENKINS_TEAM': item.team_name}) }}"
         memory: "{{ item.resources.memory }}"
@@ -149,7 +169,7 @@
           environment: "blue"
           active: "{{ (item.active_environment == 'blue') | string }}"
         healthcheck:
-          test: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_master_port }}/login"]
+          test: ["CMD-SHELL", "pgrep -f jenkins.war > /dev/null || exit 1"]
           interval: 30s
           timeout: 10s
           retries: 3
@@ -183,7 +203,7 @@
         restart_policy: "{{ jenkins_master_restart_policy }}"
         networks:
           - name: "{{ jenkins_master_network_name }}"
-        ports: "{{ _green_ports if item.active_environment == 'green' else [] }}"
+        ports: "{{ _green_ports }}"
         volumes: "{{ _green_volumes }}"
         env: "{{ _jenkins_env_vars | combine({'JENKINS_ENVIRONMENT': 'green', 'JENKINS_TEAM': item.team_name}) }}"
         memory: "{{ item.resources.memory }}"
@@ -197,7 +217,7 @@
           environment: "green"
           active: "{{ (item.active_environment == 'green') | string }}"
         healthcheck:
-          test: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_master_port }}/login"]
+          test: ["CMD-SHELL", "pgrep -f jenkins.war > /dev/null || exit 1"]
           interval: 30s
           timeout: 10s
           retries: 3
@@ -211,8 +231,8 @@
             {{ jenkins_master_image_registry }}/{{ jenkins_master_image_name }}:{{ jenkins_master_image_tag }}
           {%- endif -%}
         _green_ports:
-          - "{{ item.ports.web | string }}:{{ jenkins_master_port | string }}"
-          - "{{ item.ports.agent | string }}:{{ jenkins_jnlp_port | string }}"
+          - "{{ (item.ports.web + 10) | string }}:{{ jenkins_master_port | string }}"
+          - "{{ (item.ports.agent + 10) | string }}:{{ jenkins_jnlp_port | string }}"
         _green_volumes:
           - "jenkins-{{ item.team_name }}-green-home:{{ jenkins_master_container_home }}"
           - "jenkins-{{ item.team_name }}-shared:{{ jenkins_master_shared_path }}"

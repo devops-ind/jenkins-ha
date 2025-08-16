@@ -23,6 +23,8 @@
 - ✅ Resolved container runtime compatibility issues
 - ✅ Created comprehensive troubleshooting procedures
 - ✅ Generated operational management scripts
+- ✅ **NEW**: Implemented intelligent cleanup for orphaned team resources
+- ✅ **NEW**: Achieved fully declarative infrastructure management
 
 ---
 
@@ -1889,5 +1891,125 @@ This comprehensive troubleshooting guide provides detailed solutions for the mos
 2. **Course Creation:** "Advanced Ansible for Production Infrastructure"
 3. **Consulting Services:** Infrastructure simplification consulting
 4. **Open Source:** Simplified role templates and frameworks
+
+---
+
+## 🧹 Phase 6: Intelligent Infrastructure Cleanup Implementation
+
+### Challenge: Configuration Drift and Orphaned Resources
+
+**Problem Identified:**
+When teams are removed from `jenkins_teams.yml`, their Jenkins containers and resources remain running, leading to:
+- Resource waste (CPU, memory, storage)
+- Configuration drift (running infrastructure ≠ declared configuration)
+- Manual cleanup overhead
+- Operational complexity
+
+### Solution: Intelligent Cleanup System
+
+**Implementation Summary:**
+- **New Task File**: `cleanup-orphaned-resources.yml` (178 lines)
+- **Integration**: Added as Phase 0 in jenkins-master-v2 role
+- **Safety Features**: Dry-run mode, preservation options, comprehensive logging
+- **Result**: Fully declarative infrastructure that auto-aligns with configuration
+
+### Technical Implementation
+
+#### Discovery and Analysis Engine
+```yaml
+# Discover all Jenkins containers
+docker ps -a --filter "name=jenkins-" --format "{{.Names}}" | grep -E "jenkins-.*-(blue|green)$"
+
+# Extract team names using regex
+discovered_teams: >-
+  {{
+    discovered_containers.stdout_lines 
+    | map('regex_replace', '^jenkins-(.+)-(blue|green)$', '\1') 
+    | unique | list
+  }}
+
+# Identify orphans
+orphaned_teams: "{{ discovered_teams | difference(current_teams) }}"
+```
+
+#### Safe Cleanup Execution
+```yaml
+# Remove containers, volumes, and images for orphaned teams
+for container in jenkins-{{ item }}-blue jenkins-{{ item }}-green; do
+  docker rm -f "$container" || true
+done
+```
+
+### Configuration Options Added
+```yaml
+jenkins_cleanup_enabled: true          # Enable automatic cleanup
+jenkins_cleanup_dry_run: false         # Test mode without changes  
+jenkins_cleanup_preserve_volumes: false # Keep volumes for data recovery
+jenkins_cleanup_preserve_images: false  # Keep images to save rebuild time
+```
+
+### Real-World Testing Results
+
+**Test Scenario:**
+1. Initial: 3 teams (`devops`, `developer`, `dev-qa`) 
+2. Removed `developer` from configuration
+3. Result: Automatic cleanup of developer resources
+
+**Before Cleanup:**
+```
+jenkins-devops-blue      Up 35 minutes (healthy)
+jenkins-devops-green     Up 33 minutes (healthy) 
+jenkins-developer-blue   Up 61 minutes (healthy)  # ← Orphaned
+jenkins-developer-green  Up 60 minutes (healthy)  # ← Orphaned
+jenkins-dev-qa-blue      Up 34 minutes (healthy)
+jenkins-dev-qa-green     Up 32 minutes (healthy)
+```
+
+**After Cleanup:**
+```
+jenkins-devops-blue      Up 20 minutes (healthy)
+jenkins-devops-green     Up 18 minutes (healthy)
+jenkins-dev-qa-blue      Up 19 minutes (healthy)  
+jenkins-dev-qa-green     Up 17 minutes (healthy)
+# developer containers automatically removed ✅
+```
+
+### Benefits Achieved
+
+1. **Infrastructure as Code Compliance**
+   - ✅ Fully declarative: infrastructure matches configuration exactly
+   - ✅ Idempotent: multiple runs produce same result
+   - ✅ Zero manual intervention required
+
+2. **Operational Excellence**
+   - ✅ Automatic resource cleanup
+   - ✅ Cost optimization through resource efficiency
+   - ✅ Reduced operational toil
+
+3. **Safety and Reliability**
+   - ✅ Dry-run mode for safe testing
+   - ✅ Granular preservation controls
+   - ✅ Comprehensive audit trail
+
+### Blog Post Opportunities
+
+**"From Manual to Magical: Intelligent Infrastructure Cleanup"**
+- Configuration drift challenges
+- Building self-healing infrastructure  
+- Ansible patterns for resource lifecycle management
+
+**"Achieving Zero-Drift Jenkins Infrastructure"**
+- Declarative infrastructure principles
+- Container lifecycle automation
+- Enterprise-grade cleanup strategies
+
+### Documentation Created
+- **`INTELLIGENT_JENKINS_CLEANUP_GUIDE.md`**: Complete implementation guide with examples
+- **Updated role documentation**: Configuration options and usage patterns
+- **Test scenarios**: Real-world validation and results
+
+This enhancement transforms our Jenkins infrastructure from "deploy and forget" to truly declarative Infrastructure as Code, where the running state automatically aligns with the declared configuration.
+
+---
 
 This project provides rich material for a comprehensive blog series that can establish you as a thought leader in infrastructure automation and simplification. The combination of technical depth, real-world problems, and practical solutions makes it highly valuable to the DevOps community.

@@ -27,6 +27,12 @@
       Container Runtime: {{ jenkins_master_container_runtime }}
   tags: ['always']
 
+# Phase 0: Intelligent cleanup of orphaned team resources
+- name: Cleanup orphaned team resources phase
+  import_tasks: cleanup-orphaned-resources.yml
+  when: jenkins_cleanup_enabled | default(true)
+  tags: ['cleanup', 'remove-teams', 'orphaned-resources']
+
 # Phase 1: System setup, validation, and infrastructure preparation
 - name: Setup and validation phase
   import_tasks: setup-and-validate.yml

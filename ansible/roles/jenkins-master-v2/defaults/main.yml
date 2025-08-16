@@ -43,7 +43,7 @@ jenkins_master_log_max_files: "3"
 # ====================================
 jenkins_master_env_vars:
   JAVA_OPTS: "-Djenkins.install.runSetupWizard=false -Dhudson.DNSMultiCast.disabled=true"
-  JENKINS_OPTS: "--httpPort={{ jenkins_master_port }}"
+  JENKINS_OPTS: "--httpPort={{ jenkins_master_port }} --httpListenAddress=0.0.0.0"
   CASC_JENKINS_CONFIG: "{{ jenkins_master_container_home }}/casc_configs"
   TZ: "{{ common_timezone | default('UTC') }}"
 
@@ -51,6 +51,15 @@ jenkins_master_env_vars:
 # HEALTH CHECK CONFIGURATION
 # ====================================
 jenkins_master_health_check_retries: 30
+
+# ====================================
+# TEAM CLEANUP CONFIGURATION
+# ====================================
+# Intelligent cleanup of orphaned team resources
+jenkins_cleanup_enabled: true                    # Enable automatic cleanup of orphaned teams
+jenkins_cleanup_dry_run: false                   # Set to true to see what would be removed without actually removing
+jenkins_cleanup_preserve_volumes: false          # Set to true to keep volumes for removed teams (for data recovery)
+jenkins_cleanup_preserve_images: false           # Set to true to keep custom images for removed teams (to save rebuild time)
 jenkins_master_health_check_delay: 10
 jenkins_master_health_check_timeout: 60
 

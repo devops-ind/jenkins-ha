@@ -50,7 +50,7 @@ frontend jenkins_https
     bind {{ vip_address | default('*') }}:443 ssl crt {{ ssl_certificate_path }}
 {% else %}
 frontend jenkins_http
-    bind {{ vip_address | default('*') }}:8090
+    bind {{ vip_address | default('*') }}:{{ haproxy_frontend_port | default('8000') }}
 {% endif %}
     
     # Enable stats on frontend
