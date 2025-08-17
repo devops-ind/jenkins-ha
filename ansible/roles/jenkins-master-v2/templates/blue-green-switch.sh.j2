@@ -76,7 +76,7 @@ health_check() {
     while [[ $attempt -le $max_attempts ]]; do
         local check_port=$WEB_PORT
         if [[ "$environment" == "green" ]]; then
-            check_port=$((WEB_PORT + 10))
+            check_port=$((WEB_PORT + 100))
         fi
         
         if curl -f -s "http://localhost:${check_port}/login" &>/dev/null; then

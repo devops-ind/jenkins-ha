@@ -196,8 +196,8 @@
             {{ jenkins_master_image_registry }}/{{ jenkins_master_image_name }}:{{ jenkins_master_image_tag }}
           {%- endif -%}
         _green_ports:
-          - "{{ (item.ports.web + 10) | string }}:{{ jenkins_master_port | string }}"
-          - "{{ (item.ports.agent + 10) | string }}:{{ jenkins_jnlp_port | string }}"
+          - "{{ (item.ports.web + 100) | string }}:{{ jenkins_master_port | string }}"
+          - "{{ (item.ports.agent + 100) | string }}:{{ jenkins_jnlp_port | string }}"
         _green_volumes:
           - "jenkins-{{ item.team_name }}-green-home:{{ jenkins_master_container_home }}"
           - "jenkins-{{ item.team_name }}-shared:{{ jenkins_master_shared_path }}"

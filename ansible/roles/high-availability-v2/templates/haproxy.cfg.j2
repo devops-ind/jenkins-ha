@@ -128,9 +128,9 @@ backend jenkins_backend_jenkins
     {% for host in groups['jenkins_masters'] | default([]) %}
     {% if team.active_environment | default('blue') == 'blue' %}
     server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }}
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 10 }} check inter {{ haproxy_check_interval | default('5s') }} backup
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 100 }} check inter {{ haproxy_check_interval | default('5s') }} backup
     {% else %}
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 10 }} check inter {{ haproxy_check_interval | default('5s') }} backup
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 100 }} check inter {{ haproxy_check_interval | default('5s') }} backup
     server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }}
     {% endif %}
     {% endfor %}
@@ -153,9 +153,9 @@ backend jenkins_backend_{{ team.team_name }}
     {% if team.blue_green_enabled | default(true) %}
     {% if team.active_environment | default('blue') == 'blue' %}
     server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }}
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 10 }} check inter {{ haproxy_check_interval | default('5s') }} backup
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 100 }} check inter {{ haproxy_check_interval | default('5s') }} backup
     {% else %}
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 10 }} check inter {{ haproxy_check_interval | default('5s') }} backup
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 100 }} check inter {{ haproxy_check_interval | default('5s') }} backup
     server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }}
     {% endif %}
 
@@ -168,9 +168,9 @@ backend jenkins_backend_{{ team.team_name }}
     {% if team.blue_green_enabled | default(true) %}
     {% if team.active_environment | default('blue') == 'blue' %}
     server {{ team.team_name }}-localhost-blue 127.0.0.1:{{ team.ports.web | default(8080) }} check
-    server {{ team.team_name }}-localhost-green 127.0.0.1:{{ (team.ports.web | default(8080)) + 10 }} check backup
+    server {{ team.team_name }}-localhost-green 127.0.0.1:{{ (team.ports.web | default(8080)) + 100 }} check backup
     {% else %}
-    server {{ team.team_name }}-localhost-blue 127.0.0.1:{{ (team.ports.web | default(8080)) + 10 }} check backup
+    server {{ team.team_name }}-localhost-blue 127.0.0.1:{{ (team.ports.web | default(8080)) + 100 }} check backup
     server {{ team.team_name }}-localhost-green 127.0.0.1:{{ team.ports.web | default(8080) }} check
     {% endif %}
 

@@ -100,7 +100,7 @@ backend jenkins_backend_{{ team.team_name }}_blue
     {% if team.active_environment | default('blue') == 'blue' %}
     server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check
     {% else %}
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 10 }} check
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 100 }} check
     {% endif %}
     {% endfor %}
     http-response set-header X-Jenkins-Team {{ team.team_name }}
@@ -113,7 +113,7 @@ backend jenkins_backend_{{ team.team_name }}_green
     {% if team.active_environment | default('blue') == 'green' %}
     server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check
     {% else %}
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 10 }} check
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 100 }} check
     {% endif %}
     {% endfor %}
     http-response set-header X-Jenkins-Team {{ team.team_name }}
