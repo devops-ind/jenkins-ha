@@ -85,19 +85,6 @@
         jenkins_current_team: "{{ item }}"
       when: jenkins_master_team_plugins_enabled | default(true)
 
-    - name: Generate team-specific JCasC configurations
-      template:
-        src: casc-config-team.yml.j2
-        dest: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}/casc-configs/jenkins.yml"
-        owner: "{{ jenkins_user }}"
-        group: "{{ jenkins_user }}"
-        mode: '0644'
-      loop: "{{ jenkins_teams_config }}"
-      loop_control:
-        label: "{{ item.team_name }}"
-      vars:
-        jenkins_current_team: "{{ item }}"
-      when: jenkins_master_team_configs_enabled | default(true)
 
     - name: Build custom Jenkins images
       community.docker.docker_image:
