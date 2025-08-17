@@ -44,19 +44,17 @@
 
 - name: Build custom Jenkins images for teams
   block:
-    - name: Create custom image build directories
+    - name: Create custom image build directories for teams
       file:
-        path: "{{ jenkins_master_custom_build_dir }}/{{ item.0.team_name }}/{{ item.1 }}"
+        path: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}"
         state: directory
         owner: "{{ jenkins_user }}"
         group: "{{ jenkins_user }}"
         mode: '0755'
         recurse: yes
-      with_nested:
-        - "{{ jenkins_teams_config }}"
-        - ["casc-configs", "seed-jobs", "scripts"]
+      loop: "{{ jenkins_teams_config }}"
       loop_control:
-        label: "{{ item.0.team_name }}/{{ item.1 }}"
+        label: "{{ item.team_name }}"
 
     - name: Generate team-specific Dockerfiles
       template:
