@@ -81,7 +81,7 @@
 
     - name: Create team-specific directory structure
       file:
-        path: "{{ jenkins_home_dir }}/{{ item.0.team_name }}/{{ item.1 }}/casc_configs"
+        path: "{{ jenkins_home_dir }}/{{ item.0.team_name }}/{{ item.1 }}/{{ item.2 }}"
         state: directory
         owner: "{{ jenkins_user }}"
         group: "{{ jenkins_user }}"
@@ -90,8 +90,9 @@
       with_nested:
         - "{{ jenkins_teams_config }}"
         - ['blue', 'green']
+        - ['casc_configs', 'seed-jobs']
       loop_control:
-        label: "{{ item.0.team_name }}/{{ item.1 }}"
+        label: "{{ item.0.team_name }}/{{ item.1 }}/{{ item.2 }}"
   tags: ['setup', 'config']
 
 # ====================================
@@ -182,6 +183,24 @@
     jenkins_current_team: "{{ item.0 }}"
     jenkins_current_environment: "{{ item.1 }}"
   tags: ['setup', 'config', 'jcasc']
+
+- name: Generate team-specific seed job DSL
+  template:
+    src: seed-job-dsl.groovy.j2
+    dest: "{{ jenkins_home_dir }}/{{ item.0.team_name }}/{{ item.1 }}/seed-jobs/seedJob.groovy"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_user }}"
+    mode: '0644'
+  with_nested:
+    - "{{ jenkins_teams_config }}"
+    - ['blue', 'green']
+  loop_control:
+    label: "{{ item.0.team_name }}/{{ item.1 }}"
+  vars:
+    jenkins_current_team: "{{ item.0 }}"
+    jenkins_current_environment: "{{ item.1 }}"
+  when: jenkins_master_team_seed_jobs_enabled | default(true)
+  tags: ['setup', 'config', 'seed-jobs']
 
 - name: Copy Jenkins initialization scripts
   copy:

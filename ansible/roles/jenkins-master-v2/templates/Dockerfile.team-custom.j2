@@ -30,7 +30,7 @@ RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/team-plugins.txt
 
 {% if jenkins_master_team_configs_enabled | default(true) %}
 # Copy team-specific Jenkins Configuration as Code
-COPY casc-configs/ /var/jenkins_home/casc_configs/
+COPY casc_configs/ /var/jenkins_home/casc_configs/
 {% endif %}
 
 {% if jenkins_master_team_seed_jobs_enabled | default(true) %}
