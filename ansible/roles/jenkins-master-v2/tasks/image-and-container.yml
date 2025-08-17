@@ -1,7 +1,7 @@
 ---
 # Simplified Jenkins Master - Combined Image Building and Container Deployment
 # Consolidates: custom-image-build.yml (287 lines) + container.yml (12 lines) + volumes.yml (26 lines) + volumes/docker.yml (33 lines) + containers/docker.yml (109 lines)
-# Total: ~467 lines → ~200 lines (57% reduction)
+# Total: ~467 lines → ~180 lines (61% reduction)
 
 # ====================================
 # VOLUME MANAGEMENT PHASE
@@ -109,26 +109,6 @@
 # ====================================
 # CONTAINER DEPLOYMENT PHASE
 # ====================================
-
-# Pre-deployment: Handle port migration for existing containers
-- name: Stop and remove existing blue containers for port migration
-  command: docker rm -f jenkins-{{ item.team_name }}-blue
-  loop: "{{ jenkins_teams_config }}"
-  loop_control:
-    label: "remove-{{ item.team_name }}-blue"
-  when: item.blue_green_enabled | default(true)
-  ignore_errors: true
-  tags: ['containers', 'migration']
-
-- name: Stop and remove existing green containers for port migration
-  command: docker rm -f jenkins-{{ item.team_name }}-green
-  loop: "{{ jenkins_teams_config }}"
-  loop_control:
-    label: "remove-{{ item.team_name }}-green"
-  when: item.blue_green_enabled | default(true)
-  ignore_errors: true
-  tags: ['containers', 'migration']
-
 
 - name: Deploy Jenkins blue-green containers
   block:
