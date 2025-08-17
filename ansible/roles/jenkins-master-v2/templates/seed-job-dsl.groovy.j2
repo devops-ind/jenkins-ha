@@ -1,11 +1,12 @@
 /*
- * Seed Job DSL for Team: {{ item.team_name }}
+ * Seed Job DSL for Team: {{ jenkins_current_team.team_name }}
+ * Environment: {{ jenkins_current_environment }}
  * This script creates the initial job structure and pipelines for the team
  */
 
 // Team-specific job creation
-def teamName = '{{ item.team_name }}'
-def teamDisplayName = '{{ item.team_name | title }}'
+def teamName = '{{ jenkins_current_team.team_name }}'
+def teamDisplayName = '{{ jenkins_current_team.team_name | title }}'
 
 // Create team folder structure
 folder(teamDisplayName) {
@@ -31,9 +32,9 @@ folder("${teamDisplayName}/Monitoring") {
     description("Monitoring and health check jobs for ${teamName}")
 }
 
-{% if item.seed_jobs is defined and item.seed_jobs | length > 0 %}
+{% if jenkins_current_team.seed_jobs is defined and jenkins_current_team.seed_jobs | length > 0 %}
 // Team-specific seed jobs
-{% for seed_job in item.seed_jobs %}
+{% for seed_job in jenkins_current_team.seed_jobs %}
 {% if seed_job.type == 'pipeline' %}
 pipelineJob("${teamDisplayName}/{{ seed_job.folder | default('Applications') }}/{{ seed_job.name }}") {
     displayName('{{ seed_job.display_name | default(seed_job.name) }}')
@@ -61,7 +62,12 @@ pipelineJob("${teamDisplayName}/{{ seed_job.folder | default('Applications') }}/
         cps {
             script('''
                 pipeline {
-                    agent { label '{{ item.team_name }}-maven' }
+                    agent { 
+                        label '{{ jenkins_current_team.team_name }}-maven maven-{{ jenkins_current_team.team_name }}' 
+                        // For containerized builds, use: '{{ jenkins_current_team.team_name }}-dind docker-{{ jenkins_current_team.team_name }}'
+                        // For Python builds, use: '{{ jenkins_current_team.team_name }}-python python-{{ jenkins_current_team.team_name }}'
+                        // For Node.js builds, use: '{{ jenkins_current_team.team_name }}-nodejs nodejs-{{ jenkins_current_team.team_name }}'
+                    }
                     
                     stages {
                         stage('Checkout') {
@@ -158,7 +164,7 @@ freeStyleJob("${teamDisplayName}/{{ seed_job.folder | default('Applications') }}
     displayName('{{ seed_job.display_name | default(seed_job.name) }}')
     description('{{ seed_job.description | default("Auto-generated freestyle job for " + seed_job.name) }}')
     
-    label('{{ item.team_name }}-{{ seed_job.agent_label | default("maven") }}')
+    label('{{ jenkins_current_team.team_name }}-{{ seed_job.agent_label | default("maven") }} {{ seed_job.agent_label | default("maven") }}-{{ jenkins_current_team.team_name }}')
     
     {% if seed_job.git_url is defined %}
     scm {
@@ -209,69 +215,35 @@ pipelineJob("${teamDisplayName}/Monitoring/team-health-check") {
     description("Health monitoring for ${teamName} team infrastructure")
     
     definition {
-        cps {
-            script('''
-                pipeline {
-                    agent { label '{{ item.team_name }}-maven' }
-                    
-                    triggers {
-                        cron('H/15 * * * *')  // Every 15 minutes
+        cpsScm {
+            scm {
+                git {
+                    remote {
+                        url('{{ jenkins_infrastructure_git_repo | default("https://github.com/your-org/jenkins-ha.git") }}')
                     }
-                    
-                    stages {
-                        stage('Jenkins Health') {
-                            steps {
-                                script {
-                                    def health = jenkins.model.Jenkins.instance.computer.collect { 
-                                        "${it.displayName}: ${it.isOnline() ? 'Online' : 'Offline'}" 
-                                    }.join('\\n')
-                                    
-                                    echo "Jenkins Nodes Status:\\n${health}"
-                                }
-                            }
-                        }
-                        
-                        stage('Agent Connectivity') {
-                            steps {
-                                echo 'Checking Docker agent connectivity...'
-                                sh '''
-                                    docker ps || echo "Docker not available"
-                                    echo "Team: {{ item.team_name }}"
-                                    echo "Environment: {{ item.active_environment }}"
-                                '''
-                            }
-                        }
-                        
-                        stage('Storage Check') {
-                            steps {
-                                echo 'Checking workspace storage...'
-                                sh '''
-                                    df -h $WORKSPACE || echo "Workspace check failed"
-                                    du -sh $JENKINS_HOME/workspace || echo "Workspace size check failed"
-                                '''
-                            }
-                        }
-                    }
-                    
-                    post {
-                        failure {
-                            echo 'Health check failed - team {{ item.team_name }} may need attention'
-                        }
-                    }
+                    branch('{{ jenkins_infrastructure_git_branch | default("main") }}')
                 }
-            ''')
-            sandbox()
+            }
+            scriptPath('pipelines/Jenkinsfile.health-check')
         }
+    }
+    
+    triggers {
+        cron('H/15 * * * *')  // Every 15 minutes
     }
     
     properties {
         buildDiscarder {
             strategy {
                 logRotator {
-                    numToKeepStr('5')
+                    numToKeepStr('20')
                     daysToKeepStr('7')
                 }
             }
+        }
+        parameters {
+            stringParam('TEAM_NAME', '{{ jenkins_current_team.team_name }}', 'Team name for health check')
+            stringParam('ENVIRONMENT', '{{ jenkins_current_team.active_environment }}', 'Environment to check')
         }
     }
 }
@@ -285,7 +257,7 @@ pipelineJob("${teamDisplayName}/Infrastructure/blue-green-switch") {
         cps {
             script('''
                 pipeline {
-                    agent { label '{{ item.team_name }}-maven' }
+                    agent { label '{{ jenkins_current_team.team_name }}-maven maven-{{ jenkins_current_team.team_name }}' }
                     
                     parameters {
                         choice(
@@ -308,8 +280,8 @@ pipelineJob("${teamDisplayName}/Infrastructure/blue-green-switch") {
                                         error('Environment switch not confirmed')
                                     }
                                     
-                                    echo "Switching {{ item.team_name }} to ${params.TARGET_ENVIRONMENT} environment"
-                                    echo "Current environment: {{ item.active_environment }}"
+                                    echo "Switching {{ jenkins_current_team.team_name }} to ${params.TARGET_ENVIRONMENT} environment"
+                                    echo "Current environment: {{ jenkins_current_team.active_environment }}"
                                 }
                             }
                         }
@@ -317,32 +289,65 @@ pipelineJob("${teamDisplayName}/Infrastructure/blue-green-switch") {
                         stage('Pre-Switch Health Check') {
                             steps {
                                 echo "Checking ${params.TARGET_ENVIRONMENT} environment health..."
-                                // Add actual health checks here
+                                sh '''
+                                    # Run the actual blue-green health check script
+                                    if [ -f "{{ jenkins_home_dir }}/{{ jenkins_current_team.team_name }}/scripts/blue-green-healthcheck.sh" ]; then
+                                        bash {{ jenkins_home_dir }}/{{ jenkins_current_team.team_name }}/scripts/blue-green-healthcheck.sh ${TARGET_ENVIRONMENT}
+                                    else
+                                        echo "Health check script not found, skipping..."
+                                    fi
+                                '''
                             }
                         }
                         
                         stage('Switch Environment') {
                             steps {
                                 echo "Performing environment switch to ${params.TARGET_ENVIRONMENT}..."
-                                // Add actual switch logic here
-                                // This would typically call Ansible playbooks
+                                sh '''
+                                    # Call the actual blue-green switch script
+                                    if [ -f "{{ jenkins_home_dir }}/{{ jenkins_current_team.team_name }}/scripts/blue-green-switch.sh" ]; then
+                                        bash {{ jenkins_home_dir }}/{{ jenkins_current_team.team_name }}/scripts/blue-green-switch.sh ${TARGET_ENVIRONMENT}
+                                    else
+                                        echo "ERROR: Blue-green switch script not found!"
+                                        exit 1
+                                    fi
+                                '''
                             }
                         }
                         
                         stage('Post-Switch Verification') {
                             steps {
                                 echo "Verifying ${params.TARGET_ENVIRONMENT} environment is active..."
-                                // Add verification steps here
+                                sh '''
+                                    # Verify the switch was successful
+                                    sleep 30  # Allow time for containers to stabilize
+                                    
+                                    # Check if the target environment is responding
+                                    {% raw %}
+                                    if [ "${TARGET_ENVIRONMENT}" = "green" ]; then
+                                        CHECK_PORT=$(({{ jenkins_current_team.ports.web }} + 100))
+                                    else
+                                        CHECK_PORT={{ jenkins_current_team.ports.web }}
+                                    fi
+                                    {% endraw %}
+                                    
+                                    if curl -f -s "http://localhost:${CHECK_PORT}/login" > /dev/null; then
+                                        echo "SUCCESS: ${TARGET_ENVIRONMENT} environment is responding on port ${CHECK_PORT}"
+                                    else
+                                        echo "ERROR: ${TARGET_ENVIRONMENT} environment is not responding on port ${CHECK_PORT}"
+                                        exit 1
+                                    fi
+                                '''
                             }
                         }
                     }
                     
                     post {
                         success {
-                            echo "Successfully switched {{ item.team_name }} to ${params.TARGET_ENVIRONMENT}"
+                            echo "Successfully switched {{ jenkins_current_team.team_name }} to ${params.TARGET_ENVIRONMENT}"
                         }
                         failure {
-                            echo "Failed to switch {{ item.team_name }} to ${params.TARGET_ENVIRONMENT}"
+                            echo "Failed to switch {{ jenkins_current_team.team_name }} to ${params.TARGET_ENVIRONMENT}"
                         }
                     }
                 }
@@ -359,6 +364,151 @@ pipelineJob("${teamDisplayName}/Infrastructure/blue-green-switch") {
                     daysToKeepStr('30')
                 }
             }
+        }
+    }
+}
+
+// Infrastructure Pipeline Jobs
+pipelineJob("${teamDisplayName}/Infrastructure/backup") {
+    displayName('Backup Operations')
+    description("Automated backup operations for ${teamName} team")
+    
+    definition {
+        cpsScm {
+            scm {
+                git {
+                    remote {
+                        url('{{ jenkins_infrastructure_git_repo | default("https://github.com/your-org/jenkins-ha.git") }}')
+                    }
+                    branch('{{ jenkins_infrastructure_git_branch | default("main") }}')
+                }
+            }
+            scriptPath('pipelines/Jenkinsfile.backup')
+        }
+    }
+    
+    triggers {
+        cron('H 2 * * *')  // Daily at 2 AM
+    }
+    
+    properties {
+        buildDiscarder {
+            strategy {
+                logRotator {
+                    numToKeepStr('10')
+                    daysToKeepStr('30')
+                }
+            }
+        }
+        parameters {
+            stringParam('TEAM_NAME', '{{ jenkins_current_team.team_name }}', 'Team name for backup operations')
+            choiceParam('BACKUP_TYPE', ['incremental', 'full'], 'Type of backup to perform')
+        }
+    }
+}
+
+pipelineJob("${teamDisplayName}/Infrastructure/monitoring-setup") {
+    displayName('Monitoring Setup')
+    description("Setup and configure monitoring for ${teamName} team")
+    
+    definition {
+        cpsScm {
+            scm {
+                git {
+                    remote {
+                        url('{{ jenkins_infrastructure_git_repo | default("https://github.com/your-org/jenkins-ha.git") }}')
+                    }
+                    branch('{{ jenkins_infrastructure_git_branch | default("main") }}')
+                }
+            }
+            scriptPath('pipelines/Jenkinsfile.monitoring')
+        }
+    }
+    
+    properties {
+        buildDiscarder {
+            strategy {
+                logRotator {
+                    numToKeepStr('5')
+                    daysToKeepStr('30')
+                }
+            }
+        }
+        parameters {
+            stringParam('TEAM_NAME', '{{ jenkins_current_team.team_name }}', 'Team name for monitoring setup')
+            booleanParam('ENABLE_ALERTS', true, 'Enable alerting for this team')
+        }
+    }
+}
+
+pipelineJob("${teamDisplayName}/Infrastructure/security-scan") {
+    displayName('Security Scan')
+    description("Security scanning for ${teamName} team infrastructure")
+    
+    definition {
+        cpsScm {
+            scm {
+                git {
+                    remote {
+                        url('{{ jenkins_infrastructure_git_repo | default("https://github.com/your-org/jenkins-ha.git") }}')
+                    }
+                    branch('{{ jenkins_infrastructure_git_branch | default("main") }}')
+                }
+            }
+            scriptPath('pipelines/Jenkinsfile.security-scan')
+        }
+    }
+    
+    triggers {
+        cron('H 1 * * 1')  // Weekly on Monday at 1 AM
+    }
+    
+    properties {
+        buildDiscarder {
+            strategy {
+                logRotator {
+                    numToKeepStr('20')
+                    daysToKeepStr('60')
+                }
+            }
+        }
+        parameters {
+            stringParam('TEAM_NAME', '{{ jenkins_current_team.team_name }}', 'Team name for security scan')
+            choiceParam('SCAN_TYPE', ['container', 'infrastructure', 'both'], 'Type of security scan')
+        }
+    }
+}
+
+pipelineJob("${teamDisplayName}/Infrastructure/disaster-recovery-test") {
+    displayName('Disaster Recovery Test')
+    description("Test disaster recovery procedures for ${teamName} team")
+    
+    definition {
+        cpsScm {
+            scm {
+                git {
+                    remote {
+                        url('{{ jenkins_infrastructure_git_repo | default("https://github.com/your-org/jenkins-ha.git") }}')
+                    }
+                    branch('{{ jenkins_infrastructure_git_branch | default("main") }}')
+                }
+            }
+            scriptPath('pipelines/Jenkinsfile.disaster-recovery')
+        }
+    }
+    
+    properties {
+        buildDiscarder {
+            strategy {
+                logRotator {
+                    numToKeepStr('5')
+                    daysToKeepStr('90')
+                }
+            }
+        }
+        parameters {
+            stringParam('TEAM_NAME', '{{ jenkins_current_team.team_name }}', 'Team name for DR test')
+            booleanParam('DRY_RUN', true, 'Perform dry run only')
         }
     }
 }
