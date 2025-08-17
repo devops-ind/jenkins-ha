@@ -28,7 +28,15 @@ COPY team-plugins.txt /usr/share/jenkins/ref/team-plugins.txt
 RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/team-plugins.txt
 {% endif %}
 
+{% if jenkins_master_team_configs_enabled | default(true) %}
+# Copy team-specific Jenkins Configuration as Code
+COPY casc-configs/ /var/jenkins_home/casc_configs/
+{% endif %}
 
+{% if jenkins_master_team_seed_jobs_enabled | default(true) %}
+# Copy team-specific seed jobs
+COPY seed-jobs/ /var/jenkins_home/init.groovy.d/
+{% endif %}
 
 # Create team-specific directories
 RUN mkdir -p /var/jenkins_home/jobs \
