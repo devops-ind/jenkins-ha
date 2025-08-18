@@ -7,11 +7,18 @@ set -euo pipefail
 # Configuration
 TEAM_NAME="{{ item.team_name }}"
 JENKINS_HOME="{{ jenkins_home_dir }}"
+CONFIG_DIR="{{ jenkins_master_custom_build_dir }}"
+STATE_FILE="${CONFIG_DIR}/${TEAM_NAME}/blue-green-state.json"
 COORDINATOR_PORT="{{ multi_vm_coordinator_port | default(8765) }}"
 CONSENSUS_TIMEOUT="{{ consensus_timeout | default(300) }}"
 HEARTBEAT_INTERVAL="{{ heartbeat_interval | default(30) }}"
-COORDINATOR_STATE_DIR="{{ jenkins_home_dir }}/coordination"
+COORDINATOR_STATE_DIR="${CONFIG_DIR}/coordination"
 CONTAINER_RUNTIME="{{ jenkins_master_container_runtime | default('docker') }}"
+
+# Team-specific configuration
+BLUE_CONTAINER="jenkins-${TEAM_NAME}-blue"
+GREEN_CONTAINER="jenkins-${TEAM_NAME}-green"
+TEAM_CONFIG_PATH="${CONFIG_DIR}/${TEAM_NAME}"
 
 # Architecture detection
 VMS=({% for host in groups['jenkins_masters'] %}"{{ host }}"{% if not loop.last %} {% endif %}{% endfor %})
@@ -23,7 +30,7 @@ if [[ $VM_COUNT -eq 1 ]]; then
     DEPLOYMENT_MODE="container"
     log "Detected container-based deployment (single VM: ${VMS[0]})"
     # Container-based coordination
-    CONTAINERS=("jenkins-${TEAM_NAME}-blue" "jenkins-${TEAM_NAME}-green")
+    CONTAINERS=("$BLUE_CONTAINER" "$GREEN_CONTAINER")
     IS_COORDINATOR="true"  # Single VM is always coordinator
 else
     DEPLOYMENT_MODE="multi_vm"

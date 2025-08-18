@@ -9,7 +9,14 @@ CONTAINER_RUNTIME="{{ jenkins_master_container_runtime }}"
 WEB_PORT="{{ item.ports.web }}"
 AGENT_PORT="{{ item.ports.agent }}"
 JENKINS_HOME="{{ jenkins_home_dir }}"
-STATE_FILE="${JENKINS_HOME}/${TEAM_NAME}/blue-green-state.json"
+CONFIG_DIR="{{ jenkins_master_custom_build_dir }}"
+STATE_FILE="${CONFIG_DIR}/${TEAM_NAME}/blue-green-state.json"
+
+# Port configurations for blue-green environments
+BLUE_WEB_PORT="${WEB_PORT}"
+GREEN_WEB_PORT="$((WEB_PORT + 100))"
+BLUE_AGENT_PORT="${AGENT_PORT}"
+GREEN_AGENT_PORT="$((AGENT_PORT + 100))"
 
 # Colors for output
 RED='\033[0;31m'
@@ -26,10 +33,13 @@ warn() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 info() { echo -e "${CYAN}[INFO]${NC} $1"; }
 
 get_current_environment() {
+    # Try new location first, fallback to old location
     if [[ -f "$STATE_FILE" ]]; then
         grep -o '"active_environment":\s*"[^"]*"' "$STATE_FILE" | cut -d'"' -f4
+    elif [[ -f "${JENKINS_HOME}/${TEAM_NAME}/blue-green-state.json" ]]; then
+        grep -o '"active_environment":\s*"[^"]*"' "${JENKINS_HOME}/${TEAM_NAME}/blue-green-state.json" | cut -d'"' -f4
     else
-        echo "blue"
+        echo "blue"  # Default fallback
     fi
 }
 

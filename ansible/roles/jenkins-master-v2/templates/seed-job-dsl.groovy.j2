@@ -1,13 +1,16 @@
 /*
- * Seed Job DSL for Team: {{ jenkins_current_team.team_name }}
- * Configured Environment: {{ jenkins_current_environment }} (team's active environment setting)
+ * Seed Job DSL for Team: {{ (jenkins_current_team | default(jenkins_master_config) | default(item)).team_name }}
+ * Configured Environment: {{ jenkins_current_environment | default((jenkins_current_team | default(jenkins_master_config) | default(item)).active_environment) | default('blue') }} (team's active environment setting)
  * Runtime Environment: Determined by JENKINS_ENVIRONMENT container variable
  * This script creates the initial job structure and pipelines for the team
  */
 
+{%- set team_config = jenkins_current_team | default(jenkins_master_config) | default(item) -%}
+{%- set current_env = jenkins_current_environment | default(team_config.active_environment) | default('blue') -%}
+
 // Team-specific job creation with error handling and validation
-def teamName = '{{ jenkins_current_team.team_name }}'
-def teamDisplayName = '{{ jenkins_current_team.team_name | title }}'
+def teamName = '{{ team_config.team_name }}'
+def teamDisplayName = '{{ team_config.team_name | title }}'
 
 // Configuration validation and error handling
 try {
@@ -17,11 +20,11 @@ try {
     }
     
     println("🔧 Creating jobs for team: ${teamDisplayName}")
-    println("📝 Configured Environment: {{ jenkins_current_environment }} (actual environment determined at runtime)")
+    println("📝 Configured Environment: {{ current_env }} (actual environment determined at runtime)")
     
     // Validate and set safe defaults
-    def activeEnvironment = '{{ jenkins_current_team.active_environment | default("blue") }}'
-    def maxAgents = '{{ jenkins_current_team.resources.max_agents | default(10) }}'
+    def activeEnvironment = '{{ team_config.active_environment | default("blue") }}'
+    def maxAgents = '{{ team_config.resources.max_agents | default(10) }}'
     
     println("✅ Team configuration validated successfully")
     
@@ -79,9 +82,9 @@ try {
     println("❌ Failed to create Monitoring folder: ${e.message}")
 }
 
-{% if jenkins_current_team.seed_jobs is defined and jenkins_current_team.seed_jobs | length > 0 %}
+{% if team_config.seed_jobs is defined and team_config.seed_jobs | length > 0 %}
 // Team-specific seed jobs
-{% for seed_job in jenkins_current_team.seed_jobs %}
+{% for seed_job in team_config.seed_jobs %}
 {% if seed_job.type == 'pipeline' %}
 pipelineJob("${teamDisplayName}/{{ seed_job.folder | default('Applications') }}/{{ seed_job.name }}") {
     displayName('{{ seed_job.display_name | default(seed_job.name) }}')
@@ -110,10 +113,10 @@ pipelineJob("${teamDisplayName}/{{ seed_job.folder | default('Applications') }}/
             script('''
                 pipeline {
                     agent { 
-                        label '{{ jenkins_current_team.team_name }}-maven maven-{{ jenkins_current_team.team_name }}' 
-                        // For containerized builds, use: '{{ jenkins_current_team.team_name }}-dind docker-{{ jenkins_current_team.team_name }}'
-                        // For Python builds, use: '{{ jenkins_current_team.team_name }}-python python-{{ jenkins_current_team.team_name }}'
-                        // For Node.js builds, use: '{{ jenkins_current_team.team_name }}-nodejs nodejs-{{ jenkins_current_team.team_name }}'
+                        label '{{ team_config.team_name }}-maven maven-{{ team_config.team_name }}' 
+                        // For containerized builds, use: '{{ team_config.team_name }}-dind docker-{{ team_config.team_name }}'
+                        // For Python builds, use: '{{ team_config.team_name }}-python python-{{ team_config.team_name }}'
+                        // For Node.js builds, use: '{{ team_config.team_name }}-nodejs nodejs-{{ team_config.team_name }}'
                     }
                     
                     stages {
@@ -211,7 +214,7 @@ freeStyleJob("${teamDisplayName}/{{ seed_job.folder | default('Applications') }}
     displayName('{{ seed_job.display_name | default(seed_job.name) }}')
     description('{{ seed_job.description | default("Auto-generated freestyle job for " + seed_job.name) }}')
     
-    label('{{ jenkins_current_team.team_name }}-{{ seed_job.agent_label | default("maven") }} {{ seed_job.agent_label | default("maven") }}-{{ jenkins_current_team.team_name }}')
+    label('{{ team_config.team_name }}-{{ seed_job.agent_label | default("maven") }} {{ seed_job.agent_label | default("maven") }}-{{ team_config.team_name }}')
     
     {% if seed_job.git_url is defined %}
     scm {
@@ -265,7 +268,7 @@ pipelineJob("${teamDisplayName}/Monitoring/sli-dashboard") {
         cps {
             script('''
                 pipeline {
-                    agent { label '{{ jenkins_current_team.team_name }}-python python-{{ jenkins_current_team.team_name }}' }
+                    agent { label '{{ team_config.team_name }}-python python-{{ team_config.team_name }}' }
                     
                     options {
                         buildDiscarder(logRotator(numToKeepStr: '50'))
@@ -275,7 +278,7 @@ pipelineJob("${teamDisplayName}/Monitoring/sli-dashboard") {
                     stages {
                         stage('SLI Collection') {
                             steps {
-                                echo "📊 Collecting SLI metrics for {{ jenkins_current_team.team_name }}"
+                                echo "📊 Collecting SLI metrics for {{ team_config.team_name }}"
                                 script {
                                     // Collect deployment frequency
                                     def deploymentFreq = sh(
@@ -337,8 +340,8 @@ job("${teamDisplayName}/Infrastructure/blue-green-status") {
     steps {
         shell('''
             echo "=== Blue-Green Environment Status ==="
-            echo "Team: {{ jenkins_current_team.team_name }}"
-            echo "Active Environment: {{ jenkins_current_team.active_environment }}"
+            echo "Team: {{ team_config.team_name }}"
+            echo "Active Environment: {{ team_config.active_environment }}"
             echo "Timestamp: $(date)"
             
             # Add health checks for both environments
@@ -351,7 +354,7 @@ job("${teamDisplayName}/Infrastructure/blue-green-status") {
             # Check if blue-green health check script exists and run it
             if [ -f "/shared/jenkins/scripts/blue-green-healthcheck.sh" ]; then
                 echo "Running comprehensive health check..."
-                bash /shared/jenkins/scripts/blue-green-healthcheck.sh {{ jenkins_current_team.active_environment }}
+                bash /shared/jenkins/scripts/blue-green-healthcheck.sh {{ team_config.active_environment }}
             else
                 echo "Health check script not found at /shared/jenkins/scripts/blue-green-healthcheck.sh"
             fi
@@ -407,8 +410,8 @@ pipelineJob("${teamDisplayName}/Monitoring/team-health-check") {
             }
         }
         parameters {
-            stringParam('TEAM_NAME', '{{ jenkins_current_team.team_name }}', 'Team name for health check')
-            stringParam('ENVIRONMENT', '{{ jenkins_current_team.active_environment }}', 'Environment to check')
+            stringParam('TEAM_NAME', '{{ team_config.team_name }}', 'Team name for health check')
+            stringParam('ENVIRONMENT', '{{ team_config.active_environment }}', 'Environment to check')
         }
     }
 }
@@ -422,7 +425,7 @@ pipelineJob("${teamDisplayName}/Infrastructure/blue-green-switch") {
         cps {
             script('''
                 pipeline {
-                    agent { label '{{ jenkins_current_team.team_name }}-maven maven-{{ jenkins_current_team.team_name }}' }
+                    agent { label '{{ team_config.team_name }}-maven maven-{{ team_config.team_name }}' }
                     
                     parameters {
                         choice(
@@ -445,8 +448,8 @@ pipelineJob("${teamDisplayName}/Infrastructure/blue-green-switch") {
                                         error('Environment switch not confirmed')
                                     }
                                     
-                                    echo "Switching {{ jenkins_current_team.team_name }} to ${params.TARGET_ENVIRONMENT} environment"
-                                    echo "Current environment: {{ jenkins_current_team.active_environment }}"
+                                    echo "Switching {{ team_config.team_name }} to ${params.TARGET_ENVIRONMENT} environment"
+                                    echo "Current environment: {{ team_config.active_environment }}"
                                 }
                             }
                         }
@@ -456,8 +459,8 @@ pipelineJob("${teamDisplayName}/Infrastructure/blue-green-switch") {
                                 echo "Checking ${params.TARGET_ENVIRONMENT} environment health..."
                                 sh '''
                                     # Run the actual blue-green health check script
-                                    if [ -f "{{ jenkins_home_dir }}/{{ jenkins_current_team.team_name }}/scripts/blue-green-healthcheck.sh" ]; then
-                                        bash {{ jenkins_home_dir }}/{{ jenkins_current_team.team_name }}/scripts/blue-green-healthcheck.sh ${TARGET_ENVIRONMENT}
+                                    if [ -f "{{ jenkins_home_dir }}/{{ team_config.team_name }}/scripts/blue-green-healthcheck.sh" ]; then
+                                        bash {{ jenkins_home_dir }}/{{ team_config.team_name }}/scripts/blue-green-healthcheck.sh ${TARGET_ENVIRONMENT}
                                     else
                                         echo "Health check script not found, skipping..."
                                     fi
@@ -470,8 +473,8 @@ pipelineJob("${teamDisplayName}/Infrastructure/blue-green-switch") {
                                 echo "Performing environment switch to ${params.TARGET_ENVIRONMENT}..."
                                 sh '''
                                     # Call the actual blue-green switch script
-                                    if [ -f "{{ jenkins_home_dir }}/{{ jenkins_current_team.team_name }}/scripts/blue-green-switch.sh" ]; then
-                                        bash {{ jenkins_home_dir }}/{{ jenkins_current_team.team_name }}/scripts/blue-green-switch.sh ${TARGET_ENVIRONMENT}
+                                    if [ -f "{{ jenkins_home_dir }}/{{ team_config.team_name }}/scripts/blue-green-switch.sh" ]; then
+                                        bash {{ jenkins_home_dir }}/{{ team_config.team_name }}/scripts/blue-green-switch.sh ${TARGET_ENVIRONMENT}
                                     else
                                         echo "ERROR: Blue-green switch script not found!"
                                         exit 1
@@ -490,9 +493,9 @@ pipelineJob("${teamDisplayName}/Infrastructure/blue-green-switch") {
                                     # Check if the target environment is responding
                                     {% raw %}
                                     if [ "${TARGET_ENVIRONMENT}" = "green" ]; then
-                                        CHECK_PORT=$(({{ jenkins_current_team.ports.web }} + 100))
+                                        CHECK_PORT=$(({{ team_config.ports.web }} + 100))
                                     else
-                                        CHECK_PORT={{ jenkins_current_team.ports.web }}
+                                        CHECK_PORT={{ team_config.ports.web }}
                                     fi
                                     {% endraw %}
                                     
@@ -509,10 +512,10 @@ pipelineJob("${teamDisplayName}/Infrastructure/blue-green-switch") {
                     
                     post {
                         success {
-                            echo "Successfully switched {{ jenkins_current_team.team_name }} to ${params.TARGET_ENVIRONMENT}"
+                            echo "Successfully switched {{ team_config.team_name }} to ${params.TARGET_ENVIRONMENT}"
                         }
                         failure {
-                            echo "Failed to switch {{ jenkins_current_team.team_name }} to ${params.TARGET_ENVIRONMENT}"
+                            echo "Failed to switch {{ team_config.team_name }} to ${params.TARGET_ENVIRONMENT}"
                         }
                     }
                 }
@@ -566,7 +569,7 @@ pipelineJob("${teamDisplayName}/Infrastructure/backup") {
             }
         }
         parameters {
-            stringParam('TEAM_NAME', '{{ jenkins_current_team.team_name }}', 'Team name for backup operations')
+            stringParam('TEAM_NAME', '{{ team_config.team_name }}', 'Team name for backup operations')
             choiceParam('BACKUP_TYPE', ['incremental', 'full'], 'Type of backup to perform')
         }
     }
@@ -600,7 +603,7 @@ pipelineJob("${teamDisplayName}/Infrastructure/monitoring-setup") {
             }
         }
         parameters {
-            stringParam('TEAM_NAME', '{{ jenkins_current_team.team_name }}', 'Team name for monitoring setup')
+            stringParam('TEAM_NAME', '{{ team_config.team_name }}', 'Team name for monitoring setup')
             booleanParam('ENABLE_ALERTS', true, 'Enable alerting for this team')
         }
     }
@@ -638,7 +641,7 @@ pipelineJob("${teamDisplayName}/Infrastructure/security-scan") {
             }
         }
         parameters {
-            stringParam('TEAM_NAME', '{{ jenkins_current_team.team_name }}', 'Team name for security scan')
+            stringParam('TEAM_NAME', '{{ team_config.team_name }}', 'Team name for security scan')
             choiceParam('SCAN_TYPE', ['container', 'infrastructure', 'both'], 'Type of security scan')
         }
     }
@@ -672,7 +675,7 @@ pipelineJob("${teamDisplayName}/Infrastructure/disaster-recovery-test") {
             }
         }
         parameters {
-            stringParam('TEAM_NAME', '{{ jenkins_current_team.team_name }}', 'Team name for DR test')
+            stringParam('TEAM_NAME', '{{ team_config.team_name }}', 'Team name for DR test')
             booleanParam('DRY_RUN', true, 'Perform dry run only')
         }
     }
@@ -691,8 +694,8 @@ try {
     println("📋 Environment Details:")
     println("   • Team Name: ${teamName}")
     println("   • Display Name: ${teamDisplayName}")
-    println("   • Environment: {{ jenkins_current_environment }}")
-    println("   • Active Environment: {{ jenkins_current_team.active_environment | default('blue') }}")
+    println("   • Environment: {{ current_env }}")
+    println("   • Active Environment: {{ team_config.active_environment | default('blue') }}")
     
     // Folder creation summary
     println("")
@@ -717,9 +720,9 @@ try {
     println("     - sli-dashboard (SLI monitoring & alerting)")
     println("     - team-health-check (Team health monitoring)")
     
-    {% if jenkins_current_team.seed_jobs is defined and jenkins_current_team.seed_jobs | length > 0 %}
+    {% if team_config.seed_jobs is defined and team_config.seed_jobs | length > 0 %}
     println("   • Application Jobs:")
-    {% for seed_job in jenkins_current_team.seed_jobs %}
+    {% for seed_job in team_config.seed_jobs %}
     println("     - {{ seed_job.name }} ({{ seed_job.description | default('Application pipeline') }})")
     {% endfor %}
     {% else %}

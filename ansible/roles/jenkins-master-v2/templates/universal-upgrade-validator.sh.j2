@@ -8,9 +8,24 @@ set -euo pipefail
 # Configuration
 TEAM_NAME="{{ item.team_name }}"
 JENKINS_HOME="{{ jenkins_home_dir }}"
+CONFIG_DIR="{{ jenkins_master_custom_build_dir }}"
+STATE_FILE="${CONFIG_DIR}/${TEAM_NAME}/blue-green-state.json"
 CONTAINER_RUNTIME="{{ jenkins_master_container_runtime }}"
 VALIDATION_TIMEOUT="{{ upgrade_validation_timeout | default(1800) }}"
 MULTI_VM_MODE="${MULTI_VM_MODE:-false}"
+
+# Team-specific paths and configuration
+BLUE_CONTAINER="jenkins-${TEAM_NAME}-blue"
+GREEN_CONTAINER="jenkins-${TEAM_NAME}-green"
+TEAM_CONFIG_PATH="${CONFIG_DIR}/${TEAM_NAME}"
+BLUE_CONFIG_PATH="${TEAM_CONFIG_PATH}/blue"
+GREEN_CONFIG_PATH="${TEAM_CONFIG_PATH}/green"
+
+# Team port configuration
+BASE_WEB_PORT="{{ item.ports.web }}"
+BASE_AGENT_PORT="{{ item.ports.agent }}"
+BLUE_WEB_PORT="${BASE_WEB_PORT}"
+GREEN_WEB_PORT="$((BASE_WEB_PORT + 100))"
 
 # Colors and formatting
 RED='\033[0;31m'

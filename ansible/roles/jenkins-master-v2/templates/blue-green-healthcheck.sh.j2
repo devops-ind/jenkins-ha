@@ -9,6 +9,7 @@ CONTAINER_RUNTIME="{{ jenkins_master_container_runtime }}"
 WEB_PORT="{{ item.ports.web }}"
 AGENT_PORT="{{ item.ports.agent }}"
 JENKINS_HOME="{{ jenkins_home_dir }}"
+CONFIG_DIR="{{ jenkins_master_custom_build_dir }}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -28,11 +29,14 @@ health_check() {
     local total_checks=0
     
     if [[ -z "$environment" ]]; then
-        # Get current active environment
-        if [[ -f "${JENKINS_HOME}/${TEAM_NAME}/blue-green-state.json" ]]; then
+        # Get current active environment from state file
+        if [[ -f "${CONFIG_DIR}/${TEAM_NAME}/blue-green-state.json" ]]; then
+            environment=$(grep -o '"active_environment":\s*"[^"]*"' "${CONFIG_DIR}/${TEAM_NAME}/blue-green-state.json" | cut -d'"' -f4)
+        elif [[ -f "${JENKINS_HOME}/${TEAM_NAME}/blue-green-state.json" ]]; then
+            # Fallback to old location for backward compatibility
             environment=$(grep -o '"active_environment":\s*"[^"]*"' "${JENKINS_HOME}/${TEAM_NAME}/blue-green-state.json" | cut -d'"' -f4)
         else
-            environment="blue"
+            environment="blue"  # Default fallback
         fi
     fi
     
@@ -74,27 +78,36 @@ health_check() {
     
     echo -e "\n${BLUE}=== Network Connectivity ===${NC}"
     
+    # Determine actual ports based on environment
+    local actual_web_port=$WEB_PORT
+    local actual_agent_port=$AGENT_PORT
+    
+    if [[ "$environment" == "green" ]]; then
+        actual_web_port=$((WEB_PORT + 100))
+        actual_agent_port=$((AGENT_PORT + 100))
+    fi
+    
     # Check 4: Web port accessibility
     ((total_checks++))
-    if curl -f -s --max-time 10 "http://localhost:${WEB_PORT}/login" &>/dev/null; then
-        success "✓ Web interface accessible on port $WEB_PORT"
+    if curl -f -s --max-time 10 "http://localhost:${actual_web_port}/login" &>/dev/null; then
+        success "✓ Web interface accessible on port $actual_web_port ($environment)"
     else
-        error "✗ Web interface not accessible on port $WEB_PORT"
+        error "✗ Web interface not accessible on port $actual_web_port ($environment)"
         ((failed_checks++))
     fi
     
     # Check 5: Agent port accessibility
     ((total_checks++))
-    if timeout 5 bash -c "echo >/dev/tcp/localhost/${AGENT_PORT}" 2>/dev/null; then
-        success "✓ Agent port $AGENT_PORT is accessible"
+    if timeout 5 bash -c "echo >/dev/tcp/localhost/${actual_agent_port}" 2>/dev/null; then
+        success "✓ Agent port $actual_agent_port is accessible ($environment)"
     else
-        error "✗ Agent port $AGENT_PORT is not accessible"
+        error "✗ Agent port $actual_agent_port is not accessible ($environment)"
         ((failed_checks++))
     fi
     
     # Check 6: Jenkins API
     ((total_checks++))
-    local api_response=$(curl -s --max-time 10 "http://localhost:${WEB_PORT}/api/json" || echo "")
+    local api_response=$(curl -s --max-time 10 "http://localhost:${actual_web_port}/api/json" || echo "")
     if [[ -n "$api_response" ]] && echo "$api_response" | grep -q '"mode"'; then
         success "✓ Jenkins API is responding"
     else

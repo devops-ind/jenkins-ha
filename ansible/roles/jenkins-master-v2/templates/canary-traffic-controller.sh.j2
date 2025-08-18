@@ -7,12 +7,22 @@ set -euo pipefail
 # Configuration
 TEAM_NAME="{{ item.team_name }}"
 JENKINS_HOME="{{ jenkins_home_dir }}"
-HAPROXY_STATS_URL="http://{{ groups['load_balancers'][0] }}:{{ haproxy_stats_port }}/stats"
-HAPROXY_ADMIN_URL="http://{{ groups['load_balancers'][0] }}:{{ haproxy_admin_port }}"
+CONFIG_DIR="{{ jenkins_master_custom_build_dir }}"
+STATE_FILE="${CONFIG_DIR}/${TEAM_NAME}/blue-green-state.json"
+HAPROXY_STATS_URL="http://{{ groups['load_balancers'][0] }}:{{ haproxy_stats_port | default(8404) }}/stats"
+HAPROXY_ADMIN_URL="http://{{ groups['load_balancers'][0] }}:{{ haproxy_admin_port | default(8405) }}"
 CONTAINER_RUNTIME="{{ jenkins_master_container_runtime }}"
 VALIDATION_TIMEOUT="{{ canary_validation_timeout | default(900) }}"
 TRAFFIC_INCREMENT="{{ canary_traffic_increment | default(10) }}"
 VALIDATION_INTERVAL="{{ canary_validation_interval | default(60) }}"
+
+# Team-specific port configuration
+BASE_WEB_PORT="{{ item.ports.web }}"
+BASE_AGENT_PORT="{{ item.ports.agent }}"
+BLUE_WEB_PORT="${BASE_WEB_PORT}"
+GREEN_WEB_PORT="$((BASE_WEB_PORT + 100))"
+BLUE_AGENT_PORT="${BASE_AGENT_PORT}"
+GREEN_AGENT_PORT="$((BASE_AGENT_PORT + 100))"
 
 # Colors and formatting
 RED='\033[0;31m'

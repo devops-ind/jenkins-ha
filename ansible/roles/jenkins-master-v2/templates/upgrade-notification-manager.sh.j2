@@ -7,10 +7,18 @@ set -euo pipefail
 # Configuration
 TEAM_NAME="{{ item.team_name }}"
 JENKINS_HOME="{{ jenkins_home_dir }}"
-NOTIFICATION_CONFIG="{{ jenkins_home_dir }}/config/notification-config.json"
+CONFIG_DIR="{{ jenkins_master_custom_build_dir }}"
+STATE_FILE="${CONFIG_DIR}/${TEAM_NAME}/blue-green-state.json"
+NOTIFICATION_CONFIG="${CONFIG_DIR}/config/notification-config.json"
+TEAM_CONFIG_PATH="${CONFIG_DIR}/${TEAM_NAME}"
 WEBHOOK_TIMEOUT="{{ notification_webhook_timeout | default(30) }}"
 RETRY_ATTEMPTS="{{ notification_retry_attempts | default(3) }}"
 RETRY_DELAY="{{ notification_retry_delay | default(5) }}"
+
+# Team-specific notification settings  
+TEAM_SLACK_CHANNEL="{{ item.slack_channel | default('#jenkins-alerts') }}"
+TEAM_EMAIL_LIST="{{ item.notification_emails | default('') }}"
+UPGRADE_LOG_DIR="${CONFIG_DIR}/${TEAM_NAME}/upgrade-logs"
 
 # Notification channels
 SLACK_WEBHOOK_URL="{{ slack_webhook_url | default('') }}"

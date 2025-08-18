@@ -163,3 +163,6 @@ LABEL jenkins.team="{{ item.team_name }}" \
       jenkins.tier="{{ item.labels.tier | default('development') }}" \
       jenkins.ports.web="{{ item.ports.web | default('8080') }}" \
       jenkins.ports.agent="{{ item.ports.agent | default('50000') }}"
+
+# Use custom entrypoint for environment switching
+ENTRYPOINT ["/usr/local/bin/jenkins-entrypoint.sh"]
