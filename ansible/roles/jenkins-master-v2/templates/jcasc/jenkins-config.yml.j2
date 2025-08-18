@@ -41,6 +41,11 @@ jenkins:
             dockerTemplateBase:
               image: "{{ jenkins_master_image_registry }}/jenkins/maven-agent:{{ jenkins_master_dynamic_agent_image_tag }}"
               network: "{{ jenkins_master_network_name }}"
+              mounts:
+                - "type=bind,source=/var/run/docker.sock,destination=/var/run/docker.sock"
+                - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-shared,destination={{ jenkins_master_shared_path }}"
+                - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-m2-cache,destination=/home/jenkins/.m2"
+                - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-cache,destination=/home/jenkins/.cache"
             remoteFs: "/home/jenkins/agent"
             connector:
               attach:
@@ -60,6 +65,11 @@ jenkins:
             dockerTemplateBase:
               image: "{{ jenkins_master_image_registry }}/jenkins/python-agent:{{ jenkins_master_dynamic_agent_image_tag }}"
               network: "{{ jenkins_master_network_name }}"
+              mounts:
+                - "type=bind,source=/var/run/docker.sock,destination=/var/run/docker.sock"
+                - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-shared,destination={{ jenkins_master_shared_path }}"
+                - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-pip-cache,destination=/home/jenkins/.cache/pip"
+                - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-cache,destination=/home/jenkins/.cache"
             remoteFs: "/home/jenkins/agent"
             connector:
               attach:
@@ -79,6 +89,11 @@ jenkins:
             dockerTemplateBase:
               image: "{{ jenkins_master_image_registry }}/jenkins/nodejs-agent:{{ jenkins_master_dynamic_agent_image_tag }}"
               network: "{{ jenkins_master_network_name }}"
+              mounts:
+                - "type=bind,source=/var/run/docker.sock,destination=/var/run/docker.sock"
+                - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-shared,destination={{ jenkins_master_shared_path }}"
+                - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-npm-cache,destination=/home/jenkins/.npm"
+                - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-cache,destination=/home/jenkins/.cache"
             remoteFs: "/home/jenkins/agent"
             connector:
               attach:

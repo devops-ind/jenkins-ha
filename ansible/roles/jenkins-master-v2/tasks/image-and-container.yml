@@ -36,6 +36,22 @@
       loop: "{{ jenkins_teams_config }}"
       loop_control:
         label: "{{ item.team_name }}-shared"
+
+    - name: Create Jenkins cache volumes for dynamic agents
+      community.docker.docker_volume:
+        name: "jenkins-{{ item.0.team_name }}-{{ item.1 }}"
+        driver: "local"
+        state: present
+        labels:
+          team: "{{ item.0.team_name }}"
+          type: "agent-cache"
+          cache_type: "{{ item.1 }}"
+          managed_by: "ansible"
+      with_nested:
+        - "{{ jenkins_teams_config }}"
+        - ['m2-cache', 'pip-cache', 'npm-cache', 'docker-cache', 'cache']
+      loop_control:
+        label: "{{ item.0.team_name }}-{{ item.1 }}"
   tags: ['volumes', 'docker']
 
 # ====================================

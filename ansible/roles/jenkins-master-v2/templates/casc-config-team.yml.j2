@@ -64,6 +64,9 @@ jenkins:
               image: "jenkins/jenkins-agent-maven:{{ jenkins_agent_image_tag | default('latest') }}"
               mounts:
                 - "type=bind,source=/var/run/docker.sock,destination=/var/run/docker.sock"
+                - "type=volume,source=jenkins-{{ item.team_name }}-shared,destination={{ jenkins_master_shared_path | default('/shared/jenkins') }}"
+                - "type=volume,source=jenkins-{{ item.team_name }}-m2-cache,destination=/home/jenkins/.m2"
+                - "type=volume,source=jenkins-{{ item.team_name }}-cache,destination=/home/jenkins/.cache"
             remoteFs: "/home/jenkins/agent"
             connector:
               attach:
@@ -77,6 +80,9 @@ jenkins:
               image: "jenkins/jenkins-agent-python:{{ jenkins_agent_image_tag | default('latest') }}"
               mounts:
                 - "type=bind,source=/var/run/docker.sock,destination=/var/run/docker.sock"
+                - "type=volume,source=jenkins-{{ item.team_name }}-shared,destination={{ jenkins_master_shared_path | default('/shared/jenkins') }}"
+                - "type=volume,source=jenkins-{{ item.team_name }}-pip-cache,destination=/home/jenkins/.cache/pip"
+                - "type=volume,source=jenkins-{{ item.team_name }}-cache,destination=/home/jenkins/.cache"
             remoteFs: "/home/jenkins/agent"
             connector:
               attach:
@@ -90,6 +96,9 @@ jenkins:
               image: "jenkins/jenkins-agent-nodejs:{{ jenkins_agent_image_tag | default('latest') }}"
               mounts:
                 - "type=bind,source=/var/run/docker.sock,destination=/var/run/docker.sock"
+                - "type=volume,source=jenkins-{{ item.team_name }}-shared,destination={{ jenkins_master_shared_path | default('/shared/jenkins') }}"
+                - "type=volume,source=jenkins-{{ item.team_name }}-npm-cache,destination=/home/jenkins/.npm"
+                - "type=volume,source=jenkins-{{ item.team_name }}-cache,destination=/home/jenkins/.cache"
             remoteFs: "/home/jenkins/agent"
             connector:
               attach:
@@ -104,6 +113,9 @@ jenkins:
               privileged: true
               mounts:
                 - "type=bind,source=/var/run/docker.sock,destination=/var/run/docker.sock"
+                - "type=volume,source=jenkins-{{ item.team_name }}-shared,destination={{ jenkins_master_shared_path | default('/shared/jenkins') }}"
+                - "type=volume,source=jenkins-{{ item.team_name }}-docker-cache,destination=/var/lib/docker"
+                - "type=volume,source=jenkins-{{ item.team_name }}-cache,destination=/home/jenkins/.cache"
             remoteFs: "/home/jenkins/agent"
             connector:
               attach:
