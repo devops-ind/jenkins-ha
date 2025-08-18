@@ -1,6 +1,7 @@
 /*
  * Seed Job DSL for Team: {{ jenkins_current_team.team_name }}
- * Environment: {{ jenkins_current_environment }}
+ * Configured Environment: {{ jenkins_current_environment }} (team's active environment setting)
+ * Runtime Environment: Determined by JENKINS_ENVIRONMENT container variable
  * This script creates the initial job structure and pipelines for the team
  */
 
@@ -16,7 +17,7 @@ try {
     }
     
     println("🔧 Creating jobs for team: ${teamDisplayName}")
-    println("📝 Environment: {{ jenkins_current_environment }}")
+    println("📝 Configured Environment: {{ jenkins_current_environment }} (actual environment determined at runtime)")
     
     // Validate and set safe defaults
     def activeEnvironment = '{{ jenkins_current_team.active_environment | default("blue") }}'

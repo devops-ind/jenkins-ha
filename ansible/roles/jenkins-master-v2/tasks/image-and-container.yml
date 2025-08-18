@@ -60,7 +60,7 @@
 
 - name: Build custom Jenkins images for teams
   block:
-    - name: Create custom image build directories for teams
+    - name: Verify team directories exist (created in setup-and-validate)
       file:
         path: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}"
         state: directory
@@ -85,18 +85,20 @@
       vars:
         jenkins_current_team: "{{ item }}"
 
-    - name: Generate team-specific plugins list
+    - name: Generate team-specific plugins list for blue/green environments
       template:
         src: team-plugins.txt.j2
-        dest: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}/plugins.txt"
+        dest: "{{ jenkins_master_custom_build_dir }}/{{ item.0.team_name }}/{{ item.1 }}/plugins.txt"
         owner: "{{ jenkins_user }}"
         group: "{{ jenkins_user }}"
         mode: '0644'
-      loop: "{{ jenkins_teams_config }}"
+      with_nested:
+        - "{{ jenkins_teams_config }}"
+        - ['blue', 'green']
       loop_control:
-        label: "{{ item.team_name }}"
+        label: "{{ item.0.team_name }}/{{ item.1 }}"
       vars:
-        jenkins_current_team: "{{ item }}"
+        jenkins_current_team: "{{ item.0 }}"
       when: jenkins_master_team_plugins_enabled | default(true)
 
 

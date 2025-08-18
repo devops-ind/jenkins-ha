@@ -94,17 +94,19 @@
       loop_control:
         label: "{{ item.0.team_name }}/{{ item.1 }}/{{ item.2 }}"
         
-    - name: Create build directory structure for teams
+    - name: Create persistent directory structure for teams with blue/green environments
       file:
-        path: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}"
+        path: "{{ jenkins_master_custom_build_dir }}/{{ item.0.team_name }}/{{ item.1 }}"
         state: directory
         owner: "{{ jenkins_user }}"
         group: "{{ jenkins_user }}"
         mode: '0755'
         recurse: yes
-      loop: "{{ jenkins_teams_config }}"
+      with_nested:
+        - "{{ jenkins_teams_config }}"
+        - ['blue', 'green']
       loop_control:
-        label: "{{ item.team_name }}"
+        label: "{{ item.0.team_name }}/{{ item.1 }}"
   tags: ['setup', 'config']
 
 # ====================================
@@ -179,34 +181,39 @@
 # JENKINS CONFIGURATION FILES
 # ====================================
 
-- name: Generate Jenkins Configuration as Code files for Docker builds
+- name: Generate Jenkins Configuration as Code files for blue/green environments
   template:
     src: jcasc/jenkins-config.yml.j2
-    dest: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}/jenkins.yaml"
+    dest: "{{ jenkins_master_custom_build_dir }}/{{ item.0.team_name }}/{{ item.1 }}/jenkins.yaml"
     owner: "{{ jenkins_user }}"
     group: "{{ jenkins_user }}"
     mode: '0644'
-  loop: "{{ jenkins_teams_config }}"
+  with_nested:
+    - "{{ jenkins_teams_config }}"
+    - ['blue', 'green']
   loop_control:
-    label: "{{ item.team_name }}"
+    label: "{{ item.0.team_name }}/{{ item.1 }}"
   vars:
-    jenkins_current_team: "{{ item }}"
-    jenkins_current_environment: "runtime"  # Environment determined at runtime
+    jenkins_current_team: "{{ item.0 }}"
+    jenkins_current_environment: "{{ item.1 }}"  # Actual blue/green environment for this config
+    jenkins_master_config: "{{ item.0 }}"  # For JCasC template compatibility
   tags: ['setup', 'config', 'jcasc']
 
-- name: Generate team-specific seed job DSL for Docker builds
+- name: Generate team-specific seed job DSL for blue/green environments
   template:
     src: seed-job-dsl.groovy.j2
-    dest: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}/seedJob.groovy"
+    dest: "{{ jenkins_master_custom_build_dir }}/{{ item.0.team_name }}/{{ item.1 }}/seedJob.groovy"
     owner: "{{ jenkins_user }}"
     group: "{{ jenkins_user }}"
     mode: '0644'
-  loop: "{{ jenkins_teams_config }}"
+  with_nested:
+    - "{{ jenkins_teams_config }}"
+    - ['blue', 'green']
   loop_control:
-    label: "{{ item.team_name }}"
+    label: "{{ item.0.team_name }}/{{ item.1 }}"
   vars:
-    jenkins_current_team: "{{ item }}"
-    jenkins_current_environment: "runtime"  # Environment determined at runtime
+    jenkins_current_team: "{{ item.0 }}"
+    jenkins_current_environment: "{{ item.1 }}"  # Actual blue/green environment for this config
   when: jenkins_master_team_seed_jobs_enabled | default(true)
   tags: ['setup', 'config', 'seed-jobs']
 

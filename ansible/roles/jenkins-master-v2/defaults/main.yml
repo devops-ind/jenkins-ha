@@ -135,7 +135,7 @@ jenkins_master_prometheus_metrics: true
 # ====================================
 jenkins_master_build_custom_images: true
 jenkins_master_custom_image_prefix: "jenkins-custom"
-jenkins_master_custom_build_dir: "/tmp/jenkins-custom-build"
+jenkins_master_custom_build_dir: "{{ jenkins_home_dir }}"  # Use persistent jenkins_home_dir location
 
 # Base image configuration
 jenkins_master_base_image_name: "jenkins/jenkins"

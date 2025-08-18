@@ -20,24 +20,37 @@ LABEL maintainer="DevOps Team" \
 # Switch to root for customizations
 USER root
 
-{% if jenkins_master_team_plugins_enabled | default(true) and (item.custom_plugins is defined and item.custom_plugins | length > 0) %}
-# Copy team-specific plugins list
-COPY team-plugins.txt /usr/share/jenkins/ref/team-plugins.txt
+{% if jenkins_master_team_plugins_enabled | default(true) %}
+# Copy team-specific plugins list (use blue environment as they're identical)
+COPY blue/plugins.txt /usr/share/jenkins/ref/plugins.txt
 
 # Install team-specific plugins
-RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/team-plugins.txt
+RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt
 {% endif %}
 
 {% if jenkins_master_team_configs_enabled | default(true) %}
-# Copy team-specific Jenkins Configuration as Code (single config per team)
-COPY jenkins.yaml /var/jenkins_home/casc_configs/jenkins.yaml
+# Copy team-specific Jenkins Configuration as Code for both environments
+# Create directories first
+RUN mkdir -p /var/jenkins_home/casc_configs
+COPY blue/jenkins.yaml /var/jenkins_home/casc_configs/blue-jenkins.yaml
+COPY green/jenkins.yaml /var/jenkins_home/casc_configs/green-jenkins.yaml
+
+# Create symlink to active environment config (determined at runtime)
+# Container startup script will update this symlink based on JENKINS_ENVIRONMENT
+RUN ln -sf blue-jenkins.yaml /var/jenkins_home/casc_configs/jenkins.yaml
 {% endif %}
 
 {% if jenkins_master_team_seed_jobs_enabled | default(true) %}
 # Copy team-specific seed jobs to DSL directory (not init.groovy.d to prevent auto-execution)
-# DSL files can be loaded manually via Job DSL plugin UI when needed  
-COPY seedJob.groovy /var/jenkins_home/dsl-scripts/seedJob.groovy
+# DSL files can be loaded manually via Job DSL plugin UI when needed
+RUN mkdir -p /var/jenkins_home/dsl-scripts
+COPY blue/seedJob.groovy /var/jenkins_home/dsl-scripts/blue-seedJob.groovy
+COPY green/seedJob.groovy /var/jenkins_home/dsl-scripts/green-seedJob.groovy
+
+# Create symlink to active environment seed job (determined at runtime)
+RUN ln -sf blue-seedJob.groovy /var/jenkins_home/dsl-scripts/seedJob.groovy
 {% endif %}
+
 
 # Create team-specific directories
 RUN mkdir -p /var/jenkins_home/jobs \
@@ -46,10 +59,62 @@ RUN mkdir -p /var/jenkins_home/jobs \
     && mkdir -p /var/jenkins_home/logs \
     && mkdir -p /var/jenkins_home/dsl-scripts
 
+# Create startup script to handle environment switching
+RUN cat > /usr/local/bin/switch-environment.sh << 'EOF'
+#!/bin/bash
+# Switch Jenkins configuration based on JENKINS_ENVIRONMENT variable
+
+ENVIRONMENT=${JENKINS_ENVIRONMENT:-blue}
+CASC_DIR="/var/jenkins_home/casc_configs"
+DSL_DIR="/var/jenkins_home/dsl-scripts"
+
+echo "🔄 Switching to ${ENVIRONMENT} environment configuration"
+
+# Update JCasC symlink
+if [ -f "${CASC_DIR}/${ENVIRONMENT}-jenkins.yaml" ]; then
+    ln -sf "${ENVIRONMENT}-jenkins.yaml" "${CASC_DIR}/jenkins.yaml"
+    echo "✅ JCasC config: ${ENVIRONMENT}-jenkins.yaml"
+else
+    echo "⚠️ JCasC config not found: ${CASC_DIR}/${ENVIRONMENT}-jenkins.yaml"
+fi
+
+# Update DSL symlink
+if [ -f "${DSL_DIR}/${ENVIRONMENT}-seedJob.groovy" ]; then
+    ln -sf "${ENVIRONMENT}-seedJob.groovy" "${DSL_DIR}/seedJob.groovy"
+    echo "✅ Seed job DSL: ${ENVIRONMENT}-seedJob.groovy"
+else
+    echo "⚠️ Seed job DSL not found: ${DSL_DIR}/${ENVIRONMENT}-seedJob.groovy"
+fi
+
+echo "🚀 Environment switch to ${ENVIRONMENT} completed"
+EOF
+
+RUN chmod +x /usr/local/bin/switch-environment.sh
+
 # Set permissions for jenkins user
 RUN chown -R jenkins:jenkins /var/jenkins_home
 
 # Switch back to jenkins user
+USER jenkins
+
+# Create custom entrypoint that switches environment before starting Jenkins
+RUN cat > /usr/local/bin/jenkins-entrypoint.sh << 'EOF'
+#!/bin/bash
+# Custom Jenkins entrypoint with environment switching
+
+echo "🐳 Starting Jenkins {{ item.team_name }} container"
+echo "👥 Team: ${JENKINS_TEAM:-{{ item.team_name }}}"
+echo "🌍 Environment: ${JENKINS_ENVIRONMENT:-blue}"
+
+# Switch to the correct environment configuration
+/usr/local/bin/switch-environment.sh
+
+# Start Jenkins with original entrypoint
+exec /usr/local/bin/jenkins.sh "$@"
+EOF
+
+USER root
+RUN chmod +x /usr/local/bin/jenkins-entrypoint.sh
 USER jenkins
 
 # Team-specific environment variables
