@@ -46,7 +46,7 @@ jenkins:
                 - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-shared,destination={{ jenkins_master_shared_path }}"
                 - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-m2-cache,destination=/home/jenkins/.m2"
                 - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-cache,destination=/home/jenkins/.cache"
-            remoteFs: "/home/jenkins/agent"
+            remoteFs: "{{ jenkins_master_shared_path }}"
             connector:
               attach:
                 user: "jenkins"
@@ -70,7 +70,7 @@ jenkins:
                 - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-shared,destination={{ jenkins_master_shared_path }}"
                 - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-pip-cache,destination=/home/jenkins/.cache/pip"
                 - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-cache,destination=/home/jenkins/.cache"
-            remoteFs: "/home/jenkins/agent"
+            remoteFs: "{{ jenkins_master_shared_path }}"
             connector:
               attach:
                 user: "jenkins"
@@ -94,7 +94,7 @@ jenkins:
                 - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-shared,destination={{ jenkins_master_shared_path }}"
                 - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-npm-cache,destination=/home/jenkins/.npm"
                 - "type=volume,source=jenkins-{{ jenkins_master_config.team_name }}-cache,destination=/home/jenkins/.cache"
-            remoteFs: "/home/jenkins/agent"
+            remoteFs: "{{ jenkins_master_shared_path }}"
             connector:
               attach:
                 user: "jenkins"
