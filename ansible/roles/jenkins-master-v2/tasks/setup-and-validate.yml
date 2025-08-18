@@ -93,6 +93,20 @@
         - ['casc_configs', 'seed-jobs']
       loop_control:
         label: "{{ item.0.team_name }}/{{ item.1 }}/{{ item.2 }}"
+        
+    - name: Create build directory structure for teams
+      file:
+        path: "{{ jenkins_master_custom_build_dir }}/{{ item.0.team_name }}/{{ item.1 }}"
+        state: directory
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_user }}"
+        mode: '0755'
+        recurse: yes
+      with_nested:
+        - "{{ jenkins_teams_config }}"
+        - ['blue', 'green', 'casc_configs', 'seed-jobs']
+      loop_control:
+        label: "{{ item.0.team_name }}/{{ item.1 }}"
   tags: ['setup', 'config']
 
 # ====================================
@@ -167,10 +181,10 @@
 # JENKINS CONFIGURATION FILES
 # ====================================
 
-- name: Generate Jenkins Configuration as Code files
+- name: Generate Jenkins Configuration as Code files for Docker builds
   template:
     src: jcasc/jenkins-config.yml.j2
-    dest: "{{ jenkins_home_dir }}/{{ item.0.team_name }}/{{ item.1 }}/casc_configs/jenkins.yaml"
+    dest: "{{ jenkins_master_custom_build_dir }}/{{ item.0.team_name }}/{{ item.1 }}/jenkins.yaml"
     owner: "{{ jenkins_user }}"
     group: "{{ jenkins_user }}"
     mode: '0644'
@@ -184,10 +198,10 @@
     jenkins_current_environment: "{{ item.1 }}"
   tags: ['setup', 'config', 'jcasc']
 
-- name: Generate team-specific seed job DSL
+- name: Generate team-specific seed job DSL for Docker builds
   template:
     src: seed-job-dsl.groovy.j2
-    dest: "{{ jenkins_home_dir }}/{{ item.0.team_name }}/{{ item.1 }}/seed-jobs/seedJob.groovy"
+    dest: "{{ jenkins_master_custom_build_dir }}/{{ item.0.team_name }}/{{ item.1 }}/seedJob.groovy"
     owner: "{{ jenkins_user }}"
     group: "{{ jenkins_user }}"
     mode: '0644'
