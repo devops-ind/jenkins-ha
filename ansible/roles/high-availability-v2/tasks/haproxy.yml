@@ -76,20 +76,8 @@
       notify: restart haproxy container
       register: haproxy_main_config
 
-    - name: Generate team-specific backend configurations
-      template:
-        src: haproxy-team-backend.cfg.j2
-        dest: "/etc/haproxy/conf.d/{{ item.team_name }}-backend.cfg"
-        owner: root
-        group: "{{ haproxy_user }}"
-        mode: '0644'
-      loop: "{{ haproxy_effective_teams }}"
-      loop_control:
-        label: "{{ item.team_name }}"
-      become: yes
-      notify: restart haproxy container
-      when: haproxy_effective_teams | length > 0
-      register: haproxy_team_configs
+    # Team backend configurations are now generated in main haproxy.cfg.j2
+    # Removed separate team-backend template generation for simplicity
 
     - name: Create HAProxy stats configuration
       copy:

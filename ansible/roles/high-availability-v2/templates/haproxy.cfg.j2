@@ -76,96 +76,53 @@ frontend jenkins_http
     use_backend grafana_backend if { hdr_beg(host) -i grafana.{{ jenkins_domain }} }
     use_backend node_exporter_backend if { hdr_beg(host) -i node-exporter.{{ jenkins_domain }} }
     
-    # Team-based routing using subdomain matching
-    # jenkins.{{ jenkins_domain }} -> jenkins team (default)
-    use_backend jenkins_backend_jenkins if { hdr_beg(host) -i jenkins.{{ jenkins_domain }} }
-    
+    # Team-based routing - specific subdomains first
     {% if jenkins_teams is defined and jenkins_teams | length > 0 %}
-    # Dynamic team routing based on inventory configuration
     {% for team in jenkins_teams %}
+    {% if team.team_name != 'devops' %}
     use_backend jenkins_backend_{{ team.team_name }} if { hdr_beg(host) -i {{ team.team_name }}.{{ jenkins_domain }} }
+    {% endif %}
     {% endfor %}
-    {% else %}
-    # Default team configurations (fallback)
-    use_backend jenkins_backend_dev if { hdr_beg(host) -i dev.{{ jenkins_domain }} }
-    use_backend jenkins_backend_staging if { hdr_beg(host) -i staging.{{ jenkins_domain }} }
-    use_backend jenkins_backend_prod if { hdr_beg(host) -i prod.{{ jenkins_domain }} }
     {% endif %}
     
-    # Default backend for *.{{ jenkins_domain }} (catches all other subdomains)
-    default_backend jenkins_backend_default
+    # DevOps team handles both devops.jenkins.example.com AND jenkins.example.com (default)
+    use_backend jenkins_backend_devops if { hdr_beg(host) -i devops.{{ jenkins_domain }} }
+    
+    # Default backend - routes to devops team
+    default_backend jenkins_backend_devops
 
 # =============================================================================
 # BACKEND CONFIGURATION - Team-Specific Jenkins Masters
 # =============================================================================
 
-# Default backend (jenkins team)
-backend jenkins_backend_default
-    balance {{ backend_balance_method | default('roundrobin') }}
-    option httpchk GET /login
-    http-check expect status 200
-    
-    {% if jenkins_teams is defined and jenkins_teams | length > 0 and groups['jenkins_masters'] is defined and groups['jenkins_masters'] | length > 0 %}
-    # Primary team (usually jenkins or first team)
-    {% set primary_team = jenkins_teams[0] %}
-    {% for host in groups['jenkins_masters'] %}
-    server {{ primary_team.team_name }}-{{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ primary_team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}
-    {% endfor %}
-    {% elif groups['jenkins_masters'] is defined and groups['jenkins_masters'] | length > 0 %}
-    # Fallback configuration
-    {% for host in groups['jenkins_masters'] %}
-    server jenkins-{{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:8080 check
-    {% endfor %}
-    {% else %}
-    # No Jenkins masters defined - localhost fallback
-    server jenkins-localhost 127.0.0.1:8080 check
-    {% endif %}
-
-# Jenkins team backend (explicit)
-backend jenkins_backend_jenkins
-    balance {{ backend_balance_method | default('roundrobin') }}
-    option httpchk GET /login
-    http-check expect status 200
-    
-    {% if jenkins_teams is defined %}
-    {% for team in jenkins_teams %}
-    {% if team.team_name == 'jenkins' %}
-    {% for host in groups['jenkins_masters'] | default([]) %}
-    {% if team.active_environment | default('blue') == 'blue' %}
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }}
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 100 }} check inter {{ haproxy_check_interval | default('5s') }} backup
-    {% else %}
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 100 }} check inter {{ haproxy_check_interval | default('5s') }} backup
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }}
-    {% endif %}
-    {% endfor %}
-    {% endif %}
-    {% endfor %}
-    {% endif %}
+# =============================================================================
+# JENKINS TEAM BACKENDS - Simplified Multi-Team Configuration
+# =============================================================================
 
 {% if jenkins_teams is defined and jenkins_teams | length > 0 %}
-# Dynamic team backends based on inventory
+# Generate backend for each team
 {% for team in jenkins_teams %}
-{% if team.team_name != 'jenkins' %}
 backend jenkins_backend_{{ team.team_name }}
     balance {{ backend_balance_method | default('roundrobin') }}
     option httpchk GET /login
     http-check expect status 200
     
-    # Blue-Green configuration for {{ team.team_name }} team
+    # Blue-Green deployment configuration for {{ team.team_name }} team
     {% if groups['jenkins_masters'] is defined and groups['jenkins_masters'] | length > 0 %}
     {% for host in groups['jenkins_masters'] %}
     {% if team.blue_green_enabled | default(true) %}
     {% if team.active_environment | default('blue') == 'blue' %}
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }}
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 100 }} check inter {{ haproxy_check_interval | default('5s') }} backup
+    # Blue environment active, green as backup
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 100 }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }} backup
     {% else %}
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 100 }} check inter {{ haproxy_check_interval | default('5s') }} backup
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }}
+    # Green environment active, blue as backup
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 100 }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }} backup
     {% endif %}
-
     {% else %}
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }}
+    # Blue-green disabled, single environment
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}
     {% endif %}
     {% endfor %}
     {% else %}
@@ -175,10 +132,9 @@ backend jenkins_backend_{{ team.team_name }}
     server {{ team.team_name }}-localhost-blue 127.0.0.1:{{ team.ports.web | default(8080) }} check
     server {{ team.team_name }}-localhost-green 127.0.0.1:{{ (team.ports.web | default(8080)) + 100 }} check backup
     {% else %}
-    server {{ team.team_name }}-localhost-blue 127.0.0.1:{{ (team.ports.web | default(8080)) + 100 }} check backup
     server {{ team.team_name }}-localhost-green 127.0.0.1:{{ team.ports.web | default(8080) }} check
+    server {{ team.team_name }}-localhost-blue 127.0.0.1:{{ (team.ports.web | default(8080)) + 100 }} check backup
     {% endif %}
-
     {% else %}
     server {{ team.team_name }}-localhost 127.0.0.1:{{ team.ports.web | default(8080) }} check
     {% endif %}
@@ -187,35 +143,26 @@ backend jenkins_backend_{{ team.team_name }}
     # Team-specific headers
     http-response set-header X-Jenkins-Team {{ team.team_name }}
     http-response set-header X-Jenkins-Environment {{ team.active_environment | default('blue') }}
+    {% if team.labels is defined and team.labels.role is defined %}
+    http-response set-header X-Team-Role {{ team.labels.role }}
+    {% endif %}
 
-{% endif %}
 {% endfor %}
 {% else %}
-# Static team backends (fallback when no teams defined)
-backend jenkins_backend_dev
-    balance roundrobin
+# Fallback single team backend
+backend jenkins_backend_devops
+    balance {{ backend_balance_method | default('roundrobin') }}
     option httpchk GET /login
     http-check expect status 200
-    {% for host in groups['jenkins_masters'] | default([]) %}
-    server dev-{{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:8080 check
+    {% if groups['jenkins_masters'] is defined and groups['jenkins_masters'] | length > 0 %}
+    {% for host in groups['jenkins_masters'] %}
+    server devops-{{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:8080 check
     {% endfor %}
-
-backend jenkins_backend_staging
-    balance roundrobin
-    option httpchk GET /login
-    http-check expect status 200
-    {% for host in groups['jenkins_masters'] | default([]) %}
-    server staging-{{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:8081 check
-    {% endfor %}
-
-backend jenkins_backend_prod
-    balance roundrobin
-    option httpchk GET /login
-    http-check expect status 200
-    {% for host in groups['jenkins_masters'] | default([]) %}
-    server prod-{{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:8082 check
-    {% endfor %}
+    {% else %}
+    server devops-localhost 127.0.0.1:8080 check
+    {% endif %}
 {% endif %}
+
 
 # =============================================================================
 # MONITORING SERVICES BACKENDS

@@ -95,6 +95,7 @@ monitoring_domain: "jenkins.example.com"  # Monitoring services use same base do
 monitoring_wildcard_domain: "*.jenkins.example.com"
 
 # Multi-team configuration for production HAProxy load balancing
+# devops is the default team (handles jenkins.example.com + devops.jenkins.example.com)
 jenkins_teams:
   - team_name: "devops"
     blue_green_enabled: true
@@ -109,7 +110,8 @@ jenkins_teams:
     labels:
       tier: "production"
       environment: "prod"
-  - team_name: "developer"
+      role: "default"
+  - team_name: "ma"
     blue_green_enabled: true
     active_environment: "blue"
     ports:
@@ -122,7 +124,8 @@ jenkins_teams:
     labels:
       tier: "production"
       environment: "prod"
-  - team_name: "jenkins"
+      role: "marketing-analytics"
+  - team_name: "ba"
     blue_green_enabled: true
     active_environment: "blue"
     ports:
@@ -135,6 +138,21 @@ jenkins_teams:
     labels:
       tier: "production"
       environment: "prod"
+      role: "business-analytics"
+  - team_name: "tw"
+    blue_green_enabled: true
+    active_environment: "blue"
+    ports:
+      web: 8083
+      agent: 50003
+    resources:
+      memory: "2g"
+      cpu: "1.0"
+    env_vars: {}
+    labels:
+      tier: "production"
+      environment: "prod"
+      role: "test-qa"
 
 # Timezone
 common_timezone: "UTC"
