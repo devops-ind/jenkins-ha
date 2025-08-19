@@ -56,6 +56,7 @@ haproxy_log_max_files: "3"
 # SSL/TLS CONFIGURATION
 # ====================================
 ssl_enabled: false
+ssl_certificate_path: "/etc/haproxy/ssl/combined.pem"
 # ssl_cert_path: "/path/to/certificate.pem"
 # ssl_key_path: "/path/to/private.key"  # Optional if key is in cert file
 
@@ -72,6 +73,7 @@ haproxy_check_timeout: "10s"
 # ====================================
 keepalived_enabled: false
 # jenkins_vip: "192.168.1.100"  # Define to enable VIP
+vip_address: "*"  # Virtual IP address or '*' for any interface
 keepalived_priority: 100  # Higher value = master (100-255)
 keepalived_advert_int: 1
 keepalived_auth_pass: "{{ vault_keepalived_auth_pass | default('changeme123') }}"
@@ -80,8 +82,9 @@ keepalived_auth_pass: "{{ vault_keepalived_auth_pass | default('changeme123') }}
 # TEAM ROUTING CONFIGURATION
 # ====================================
 team_routing_enabled: true
-# jenkins_domain: "devops.example.com"  # Required for multi-team
+jenkins_domain: "devops.example.com"  # Default domain for multi-team routing
 # jenkins_wildcard_domain: "*.devops.example.com"
+backend_balance_method: "roundrobin"  # Load balancing algorithm
 
 # ====================================
 # MONITORING CONFIGURATION
@@ -112,6 +115,23 @@ haproxy_default_labels:
 # These settings ensure compatibility with existing configurations
 haproxy_deployment_mode: "{{ 'multi-team' if jenkins_teams is defined and jenkins_teams | length > 0 else 'single-team' }}"
 haproxy_effective_teams: "{{ jenkins_teams if jenkins_teams is defined and jenkins_teams | length > 0 else [] }}"
+
+# ====================================
+# DEFAULT TEAM CONFIGURATION STRUCTURE
+# ====================================
+# Default values for team configuration to ensure template compatibility
+jenkins_teams_defaults:
+  blue_green_enabled: true
+  active_environment: "blue"
+  ports:
+    web: 8080
+    agent: 50000
+  resources:
+    memory: "2g"
+    cpu: "1.0"
+  env_vars: {}
+  labels:
+    tier: "production"
 
 # ====================================
 # OPERATIONAL SETTINGS

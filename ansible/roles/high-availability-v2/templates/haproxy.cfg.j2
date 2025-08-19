@@ -71,6 +71,11 @@ frontend jenkins_http
     http-request set-header X-Forwarded-For %[src]
     http-request set-header X-Real-IP %[src]
     
+    # Monitoring services routing (high priority - checked first)
+    use_backend prometheus_backend if { hdr_beg(host) -i prometheus.{{ jenkins_domain }} }
+    use_backend grafana_backend if { hdr_beg(host) -i grafana.{{ jenkins_domain }} }
+    use_backend node_exporter_backend if { hdr_beg(host) -i node-exporter.{{ jenkins_domain }} }
+    
     # Team-based routing using subdomain matching
     # jenkins.{{ jenkins_domain }} -> jenkins team (default)
     use_backend jenkins_backend_jenkins if { hdr_beg(host) -i jenkins.{{ jenkins_domain }} }
@@ -211,6 +216,58 @@ backend jenkins_backend_prod
     server prod-{{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:8082 check
     {% endfor %}
 {% endif %}
+
+# =============================================================================
+# MONITORING SERVICES BACKENDS
+# =============================================================================
+
+# Prometheus backend
+backend prometheus_backend
+    balance {{ backend_balance_method | default('roundrobin') }}
+    option httpchk GET /api/v1/status/config
+    http-check expect status 200
+    {% if groups['monitoring'] is defined and groups['monitoring'] | length > 0 %}
+    {% for host in groups['monitoring'] %}
+    server prometheus-{{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ prometheus_port | default(9090) }} check inter {{ haproxy_check_interval | default('5s') }}
+    {% endfor %}
+    {% else %}
+    server prometheus-localhost 127.0.0.1:{{ prometheus_port | default(9090) }} check
+    {% endif %}
+    # Prometheus-specific headers
+    http-response set-header X-Service-Type prometheus
+    http-response set-header X-Service-Version {{ prometheus_version | default('latest') }}
+
+# Grafana backend
+backend grafana_backend
+    balance {{ backend_balance_method | default('roundrobin') }}
+    option httpchk GET /api/health
+    http-check expect status 200
+    {% if groups['monitoring'] is defined and groups['monitoring'] | length > 0 %}
+    {% for host in groups['monitoring'] %}
+    server grafana-{{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ grafana_port | default(9300) }} check inter {{ haproxy_check_interval | default('5s') }}
+    {% endfor %}
+    {% else %}
+    server grafana-localhost 127.0.0.1:{{ grafana_port | default(9300) }} check
+    {% endif %}
+    # Grafana-specific headers
+    http-response set-header X-Service-Type grafana
+    http-response set-header X-Service-Version {{ grafana_version | default('latest') }}
+
+# Node Exporter backend
+backend node_exporter_backend
+    balance {{ backend_balance_method | default('roundrobin') }}
+    option httpchk GET /metrics
+    http-check expect status 200
+    {% if groups['monitoring'] is defined and groups['monitoring'] | length > 0 %}
+    {% for host in groups['monitoring'] %}
+    server node-exporter-{{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ node_exporter_port | default(9100) }} check inter {{ haproxy_check_interval | default('5s') }}
+    {% endfor %}
+    {% else %}
+    server node-exporter-localhost 127.0.0.1:{{ node_exporter_port | default(9100) }} check
+    {% endif %}
+    # Node Exporter headers
+    http-response set-header X-Service-Type node-exporter
+    http-response set-header Content-Type "text/plain; version=0.0.4; charset=utf-8"
 
 # =============================================================================
 # STATISTICS AND MONITORING

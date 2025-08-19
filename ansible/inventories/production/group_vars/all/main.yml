@@ -24,11 +24,17 @@ haproxy_image_tag: "2.8"  # Use stable Debian-based image
 haproxy_stats_user: "admin"
 haproxy_stats_password: "{{ vault_haproxy_stats_password | default('admin123') }}"
 
-# Monitoring configuration
+# Monitoring configuration with domain routing
 monitoring_enabled: true
 prometheus_retention: "15d"  # Production retention
+prometheus_port: 9090
+prometheus_domain: "prometheus.{{ monitoring_domain }}"
 grafana_admin_user: "admin"
 grafana_admin_password: "{{ vault_grafana_admin_password | default('admin123') }}"
+grafana_port: 9300  # Production port
+grafana_domain: "grafana.{{ monitoring_domain }}"
+node_exporter_port: 9100
+node_exporter_domain: "node-exporter.{{ monitoring_domain }}"
 
 # Backup configuration
 backup_enabled: true
@@ -81,6 +87,54 @@ haproxy_uid: 1004
 # HAProxy should bind to port 8090 (HTTP), avoiding privileged port 80 in host networking
 jenkins_port: 8090
 haproxy_gid: 1004
+
+# Domain configuration for production
+jenkins_domain: "jenkins.example.com"
+jenkins_wildcard_domain: "*.jenkins.example.com"
+monitoring_domain: "jenkins.example.com"  # Monitoring services use same base domain
+monitoring_wildcard_domain: "*.jenkins.example.com"
+
+# Multi-team configuration for production HAProxy load balancing
+jenkins_teams:
+  - team_name: "devops"
+    blue_green_enabled: true
+    active_environment: "blue"
+    ports:
+      web: 8080
+      agent: 50000
+    resources:
+      memory: "2g"
+      cpu: "1.0"
+    env_vars: {}
+    labels:
+      tier: "production"
+      environment: "prod"
+  - team_name: "developer"
+    blue_green_enabled: true
+    active_environment: "blue"
+    ports:
+      web: 8081
+      agent: 50001
+    resources:
+      memory: "2g"
+      cpu: "1.0"
+    env_vars: {}
+    labels:
+      tier: "production"
+      environment: "prod"
+  - team_name: "jenkins"
+    blue_green_enabled: true
+    active_environment: "blue"
+    ports:
+      web: 8082
+      agent: 50002
+    resources:
+      memory: "2g"
+      cpu: "1.0"
+    env_vars: {}
+    labels:
+      tier: "production"
+      environment: "prod"
 
 # Timezone
 common_timezone: "UTC"
