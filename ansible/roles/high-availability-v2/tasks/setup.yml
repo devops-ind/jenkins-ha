@@ -125,35 +125,46 @@
 # SSL/TLS CONFIGURATION
 # ====================================
 
-- name: Configure SSL/TLS certificates
+- name: Configure SSL/TLS certificates for HAProxy
   block:
-    - name: Check SSL certificate file existence
-      stat:
-        path: "{{ ssl_cert_path }}"
-      register: ssl_cert_stat
+    # Generate dynamic SSL certificates based on jenkins_teams
+    - name: Generate SSL certificates for multi-team HAProxy setup
+      include_tasks: ssl-certificates.yml
+      when: ssl_enabled | default(false)
 
-    - name: Validate SSL certificate exists
-      fail:
-        msg: "SSL certificate not found at {{ ssl_cert_path }}"
-      when: not ssl_cert_stat.stat.exists
+    # Legacy SSL certificate handling (if ssl_cert_path is provided)
+    - name: Handle legacy SSL certificate configuration
+      block:
+        - name: Check legacy SSL certificate file existence
+          stat:
+            path: "{{ ssl_cert_path }}"
+          register: ssl_cert_stat
 
-    - name: Create combined SSL certificate for HAProxy
-      shell: |
-        cat "{{ ssl_cert_path }}" > /etc/haproxy/ssl/combined.pem
-        {% if ssl_key_path is defined and ssl_key_path != ssl_cert_path %}
-        cat "{{ ssl_key_path }}" >> /etc/haproxy/ssl/combined.pem
-        {% endif %}
-        chmod 640 /etc/haproxy/ssl/combined.pem
-        chown root:{{ haproxy_user }} /etc/haproxy/ssl/combined.pem
-      become: yes
-      notify: restart haproxy container
-      register: ssl_cert_combined
+        - name: Validate legacy SSL certificate exists
+          fail:
+            msg: "Legacy SSL certificate not found at {{ ssl_cert_path }}"
+          when: not ssl_cert_stat.stat.exists
 
-    - name: Verify combined SSL certificate
-      stat:
-        path: "/etc/haproxy/ssl/combined.pem"
-      register: combined_cert_stat
-      failed_when: not combined_cert_stat.stat.exists
+        - name: Create combined SSL certificate for HAProxy (legacy mode)
+          shell: |
+            cat "{{ ssl_cert_path }}" > /etc/haproxy/ssl/combined.pem
+            {% if ssl_key_path is defined and ssl_key_path != ssl_cert_path %}
+            cat "{{ ssl_key_path }}" >> /etc/haproxy/ssl/combined.pem
+            {% endif %}
+            chmod 640 /etc/haproxy/ssl/combined.pem
+            chown root:{{ haproxy_user }} /etc/haproxy/ssl/combined.pem
+          become: yes
+          notify: restart haproxy container
+          register: ssl_cert_combined
+
+        - name: Verify combined SSL certificate (legacy mode)
+          stat:
+            path: "/etc/haproxy/ssl/combined.pem"
+          register: combined_cert_stat
+          failed_when: not combined_cert_stat.stat.exists
+      when: 
+        - ssl_cert_path is defined
+        - ssl_cert_path != ""
   when: ssl_enabled | default(false)
   tags: ['ssl']
 

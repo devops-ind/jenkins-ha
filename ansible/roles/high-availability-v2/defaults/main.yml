@@ -57,6 +57,23 @@ haproxy_log_max_files: "3"
 # ====================================
 ssl_enabled: false
 ssl_certificate_path: "/etc/haproxy/ssl/combined.pem"
+
+# Dynamic SSL certificate generation (used when ssl_enabled is true)
+ssl_certificate_dir: "/etc/ssl/certs"
+ssl_private_key_dir: "/etc/ssl/private"
+ssl_ca_dir: "/etc/ssl/ca"
+ssl_csr_dir: "/etc/ssl/csr"
+ssl_validity_days: 365
+
+# SSL certificate details
+ssl_country: "US"
+ssl_state: "California"
+ssl_city: "San Francisco"
+ssl_organization: "Jenkins HA Infrastructure"
+ssl_organizational_unit: "DevOps Team"
+ssl_email: "devops@{{ jenkins_domain | default('devops.local') }}"
+
+# Legacy SSL certificate paths (for existing certificates)
 # ssl_cert_path: "/path/to/certificate.pem"
 # ssl_key_path: "/path/to/private.key"  # Optional if key is in cert file
 

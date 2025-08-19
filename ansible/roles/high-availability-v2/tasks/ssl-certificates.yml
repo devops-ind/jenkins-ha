@@ -1,0 +1,220 @@
+---
+# Dynamic SSL Certificate Generation for HAProxy Multi-Team Setup
+# Generates wildcard and team-specific SSL certificates based on jenkins_teams configuration
+
+- name: Debug SSL certificate generation for HAProxy
+  debug:
+    msg: |
+      Generating SSL certificates for HAProxy multi-team setup:
+      - Domain: {{ jenkins_domain | default('devops.local') }}
+      - Wildcard Domain: {{ jenkins_wildcard_domain | default('*.devops.local') }}
+      - Environment: {{ deployment_environment | default('local') }}
+      - SSL Enabled: {{ ssl_enabled | default(false) }}
+      - Teams: {{ jenkins_teams | map(attribute='team_name') | list | join(', ') if jenkins_teams is defined else 'None' }}
+  tags: ['ssl', 'debug']
+
+- name: Create SSL directories for HAProxy certificates
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: "{{ haproxy_user | default('haproxy') }}"
+  loop:
+    - "{{ ssl_certificate_dir | default('/etc/ssl/certs') }}"
+    - "{{ ssl_private_key_dir | default('/etc/ssl/private') }}"
+    - "{{ ssl_ca_dir | default('/etc/ssl/ca') }}"
+    - "{{ ssl_csr_dir | default('/etc/ssl/csr') }}"
+    - "/etc/haproxy/ssl"
+  become: yes
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'directories']
+
+- name: Set secure permissions on SSL private key directory
+  file:
+    path: "{{ ssl_private_key_dir | default('/etc/ssl/private') }}"
+    mode: '0700'
+    owner: root
+    group: "{{ haproxy_user | default('haproxy') }}"
+  become: yes
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'permissions']
+
+# Generate dynamic Subject Alternative Names (SAN) list based on jenkins_teams
+- name: Generate dynamic SAN list for SSL certificate
+  set_fact:
+    ssl_dynamic_san_list: >-
+      {{ 
+        [
+          "DNS:" + (jenkins_wildcard_domain | default('*.devops.local')),
+          "DNS:" + (jenkins_domain | default('devops.local')),
+          "DNS:jenkins." + (jenkins_domain | default('devops.local'))
+        ] +
+        (jenkins_teams | default([]) | map('extract', ['team_name']) | map('regex_replace', '^(.*)$', 'DNS:\\1jenkins.' + (jenkins_domain | default('devops.local'))) | list) +
+        [
+          "DNS:prometheus." + (jenkins_domain | default('devops.local')),
+          "DNS:grafana." + (jenkins_domain | default('devops.local')), 
+          "DNS:node-exporter." + (jenkins_domain | default('devops.local'))
+        ]
+      }}
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'san-generation']
+
+- name: Display generated SAN list
+  debug:
+    msg: |
+      Generated SSL Certificate SAN list:
+      {% for san in ssl_dynamic_san_list %}
+      - {{ san }}
+      {% endfor %}
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'debug']
+
+- name: Generate wildcard private key for HAProxy
+  openssl_privatekey:
+    path: "{{ ssl_private_key_dir | default('/etc/ssl/private') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.key"
+    size: 2048
+    type: RSA
+    mode: '0600'
+    owner: root
+    group: "{{ haproxy_user | default('haproxy') }}"
+  become: yes
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'private-key']
+
+- name: Generate wildcard certificate signing request for HAProxy
+  openssl_csr:
+    path: "{{ ssl_csr_dir | default('/etc/ssl/csr') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.csr"
+    privatekey_path: "{{ ssl_private_key_dir | default('/etc/ssl/private') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.key"
+    common_name: "{{ jenkins_wildcard_domain | default('*.devops.local') }}"
+    country_name: "{{ ssl_country | default('US') }}"
+    state_or_province_name: "{{ ssl_state | default('California') }}"
+    locality_name: "{{ ssl_city | default('San Francisco') }}"
+    organization_name: "{{ ssl_organization | default('Jenkins HA Infrastructure') }}"
+    organizational_unit_name: "{{ ssl_organizational_unit | default('DevOps Team') }}"
+    email_address: "{{ ssl_email | default('devops@' + (jenkins_domain | default('devops.local'))) }}"
+    subject_alt_name: "{{ ssl_dynamic_san_list }}"
+    key_usage:
+      - digitalSignature
+      - keyEncipherment
+      - nonRepudiation
+    extended_key_usage:
+      - serverAuth
+      - clientAuth
+  become: yes
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'csr']
+
+- name: Generate self-signed wildcard certificate for HAProxy
+  openssl_certificate:
+    path: "{{ ssl_certificate_dir | default('/etc/ssl/certs') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.crt"
+    privatekey_path: "{{ ssl_private_key_dir | default('/etc/ssl/private') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.key"
+    csr_path: "{{ ssl_csr_dir | default('/etc/ssl/csr') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.csr"
+    provider: selfsigned
+    selfsigned_not_after: "+{{ ssl_validity_days | default(365) }}d"
+    selfsigned_digest: sha256
+    mode: '0644'
+    owner: root
+    group: "{{ haproxy_user | default('haproxy') }}"
+  become: yes
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'certificate']
+
+- name: Create HAProxy SSL certificate bundle (cert + key)
+  shell: |
+    cat {{ ssl_certificate_dir | default('/etc/ssl/certs') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.crt {{ ssl_private_key_dir | default('/etc/ssl/private') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.key > /etc/haproxy/ssl/wildcard-{{ jenkins_domain | default('devops.local') }}-haproxy.pem
+  become: yes
+  when: ssl_enabled | default(false)
+  notify: restart haproxy container
+  tags: ['ssl', 'haproxy-bundle']
+
+- name: Set secure permissions on HAProxy SSL bundle
+  file:
+    path: "/etc/haproxy/ssl/wildcard-{{ jenkins_domain | default('devops.local') }}-haproxy.pem"
+    mode: '0600'
+    owner: root
+    group: "{{ haproxy_user | default('haproxy') }}"
+  become: yes
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'permissions']
+
+- name: Create symbolic link for HAProxy SSL certificate path
+  file:
+    src: "/etc/haproxy/ssl/wildcard-{{ jenkins_domain | default('devops.local') }}-haproxy.pem"
+    dest: "{{ ssl_certificate_path | default('/etc/haproxy/ssl/combined.pem') }}"
+    state: link
+    force: yes
+  become: yes
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'symlink']
+
+- name: Generate dynamic /etc/hosts entries for local testing
+  set_fact:
+    ssl_hosts_entries: >-
+      {{
+        [
+          "127.0.0.1 jenkins." + (jenkins_domain | default('devops.local'))
+        ] +
+        (jenkins_teams | default([]) | map('extract', ['team_name']) | map('regex_replace', '^(.*)$', '127.0.0.1 \\1jenkins.' + (jenkins_domain | default('devops.local'))) | list) +
+        [
+          "127.0.0.1 prometheus." + (jenkins_domain | default('devops.local')),
+          "127.0.0.1 grafana." + (jenkins_domain | default('devops.local')),
+          "127.0.0.1 node-exporter." + (jenkins_domain | default('devops.local'))
+        ]
+      }}
+  when: 
+    - ssl_enabled | default(false)
+    - deployment_environment == 'local'
+  tags: ['ssl', 'hosts-generation']
+
+- name: Display SSL certificate information and setup instructions
+  debug:
+    msg: |
+      ====================================
+      SSL Certificate Configuration Complete
+      ====================================
+      
+      Certificate Details:
+      - Certificate: {{ ssl_certificate_dir | default('/etc/ssl/certs') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.crt
+      - Private Key: {{ ssl_private_key_dir | default('/etc/ssl/private') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.key
+      - HAProxy Bundle: /etc/haproxy/ssl/wildcard-{{ jenkins_domain | default('devops.local') }}-haproxy.pem
+      - Symbolic Link: {{ ssl_certificate_path | default('/etc/haproxy/ssl/combined.pem') }}
+      
+      Wildcard Domain: {{ jenkins_wildcard_domain | default('*.devops.local') }}
+      
+      Supported Team Subdomains:
+      {% if jenkins_teams is defined and jenkins_teams | length > 0 %}
+      {% for team in jenkins_teams %}
+      - {{ team.team_name }}jenkins.{{ jenkins_domain | default('devops.local') }} ({{ team.labels.role | default(team.team_name + ' team') }})
+      {% endfor %}
+      {% else %}
+      - jenkins.{{ jenkins_domain | default('devops.local') }} (default single-team setup)
+      {% endif %}
+      
+      Monitoring Services:
+      - prometheus.{{ jenkins_domain | default('devops.local') }}
+      - grafana.{{ jenkins_domain | default('devops.local') }}
+      - node-exporter.{{ jenkins_domain | default('devops.local') }}
+      
+      {% if deployment_environment == 'local' %}
+      ====================================
+      Local Development Setup
+      ====================================
+      
+      Add these entries to your /etc/hosts file for local testing:
+      {% for entry in ssl_hosts_entries %}
+      {{ entry }}
+      {% endfor %}
+      
+      Then access your services via HTTPS:
+      {% if jenkins_teams is defined and jenkins_teams | length > 0 %}
+      {% for team in jenkins_teams %}
+      - https://{{ team.team_name }}jenkins.{{ jenkins_domain | default('devops.local') }}
+      {% endfor %}
+      {% endif %}
+      - https://prometheus.{{ jenkins_domain | default('devops.local') }}
+      - https://grafana.{{ jenkins_domain | default('devops.local') }}
+      {% endif %}
+      ====================================
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'info']
