@@ -1,0 +1,134 @@
+---
+# Generate wildcard SSL certificates for local development
+# Creates *.devops.local wildcard certificate for multi-team Jenkins HA
+
+- name: Debug wildcard SSL generation for local environment
+  debug:
+    msg: |
+      Generating wildcard SSL certificate for local development:
+      - Domain: {{ jenkins_wildcard_domain | default('*.devops.local') }}
+      - Jenkins Domain: {{ jenkins_domain | default('devops.local') }}
+      - Environment: {{ deployment_environment | default('local') }}
+  tags: ['ssl', 'wildcard', 'debug']
+
+- name: Create wildcard SSL directories for local development
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  loop:
+    - "{{ ssl_certificate_dir }}"
+    - "{{ ssl_private_key_dir }}"
+    - "{{ ssl_ca_dir }}"
+    - "{{ ssl_csr_dir }}"
+  become: yes
+  when: deployment_environment == 'local'
+  tags: ['ssl', 'wildcard', 'directories']
+
+- name: Generate wildcard private key for local development
+  openssl_privatekey:
+    path: "{{ ssl_private_key_dir }}/wildcard-{{ jenkins_domain | default('devops.local') }}.key"
+    size: 2048
+    type: RSA
+    mode: '0600'
+    owner: root
+    group: root
+  become: yes
+  when: deployment_environment == 'local'
+  tags: ['ssl', 'wildcard', 'private-key']
+
+- name: Generate wildcard certificate signing request for local development
+  openssl_csr:
+    path: "{{ ssl_csr_dir }}/wildcard-{{ jenkins_domain | default('devops.local') }}.csr"
+    privatekey_path: "{{ ssl_private_key_dir }}/wildcard-{{ jenkins_domain | default('devops.local') }}.key"
+    common_name: "{{ jenkins_wildcard_domain | default('*.devops.local') }}"
+    country_name: "US"
+    state_or_province_name: "California"
+    locality_name: "San Francisco"
+    organization_name: "Local Development"
+    organizational_unit_name: "DevOps Team"
+    email_address: "devops@local.dev"
+    subject_alt_name:
+      - "DNS:{{ jenkins_wildcard_domain | default('*.devops.local') }}"
+      - "DNS:{{ jenkins_domain | default('devops.local') }}"
+      - "DNS:jenkins.{{ jenkins_domain | default('devops.local') }}"
+      - "DNS:majenkins.{{ jenkins_domain | default('devops.local') }}"
+      - "DNS:bajenkins.{{ jenkins_domain | default('devops.local') }}"
+      - "DNS:twjenkins.{{ jenkins_domain | default('devops.local') }}"
+      - "DNS:prometheus.{{ jenkins_domain | default('devops.local') }}"
+      - "DNS:grafana.{{ jenkins_domain | default('devops.local') }}"
+      - "DNS:node-exporter.{{ jenkins_domain | default('devops.local') }}"
+    key_usage:
+      - digitalSignature
+      - keyEncipherment
+      - nonRepudiation
+    extended_key_usage:
+      - serverAuth
+      - clientAuth
+  become: yes
+  when: deployment_environment == 'local'
+  tags: ['ssl', 'wildcard', 'csr']
+
+- name: Generate self-signed wildcard certificate for local development
+  openssl_certificate:
+    path: "{{ ssl_certificate_dir }}/wildcard-{{ jenkins_domain | default('devops.local') }}.crt"
+    privatekey_path: "{{ ssl_private_key_dir }}/wildcard-{{ jenkins_domain | default('devops.local') }}.key"
+    csr_path: "{{ ssl_csr_dir }}/wildcard-{{ jenkins_domain | default('devops.local') }}.csr"
+    provider: selfsigned
+    selfsigned_not_after: "+365d"
+    selfsigned_digest: sha256
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  when: deployment_environment == 'local'
+  tags: ['ssl', 'wildcard', 'certificate']
+
+- name: Create HAProxy SSL certificate bundle for wildcard
+  shell: |
+    cat {{ ssl_certificate_dir }}/wildcard-{{ jenkins_domain | default('devops.local') }}.crt {{ ssl_private_key_dir }}/wildcard-{{ jenkins_domain | default('devops.local') }}.key > {{ ssl_certificate_dir }}/wildcard-{{ jenkins_domain | default('devops.local') }}-haproxy.pem
+  become: yes
+  when: deployment_environment == 'local'
+  tags: ['ssl', 'wildcard', 'haproxy-bundle']
+
+- name: Set secure permissions on HAProxy SSL bundle
+  file:
+    path: "{{ ssl_certificate_dir }}/wildcard-{{ jenkins_domain | default('devops.local') }}-haproxy.pem"
+    mode: '0600'
+    owner: root
+    group: root
+  become: yes
+  when: deployment_environment == 'local'
+  tags: ['ssl', 'wildcard', 'permissions']
+
+- name: Display wildcard SSL certificate information
+  debug:
+    msg: |
+      Wildcard SSL Certificate Generated for Local Development:
+      
+      Certificate: {{ ssl_certificate_dir }}/wildcard-{{ jenkins_domain | default('devops.local') }}.crt
+      Private Key: {{ ssl_private_key_dir }}/wildcard-{{ jenkins_domain | default('devops.local') }}.key
+      HAProxy Bundle: {{ ssl_certificate_dir }}/wildcard-{{ jenkins_domain | default('devops.local') }}-haproxy.pem
+      
+      Wildcard Domain: {{ jenkins_wildcard_domain | default('*.devops.local') }}
+      
+      Supported Subdomains:
+      - jenkins.{{ jenkins_domain | default('devops.local') }} (DevOps team)
+      - majenkins.{{ jenkins_domain | default('devops.local') }} (MA team)
+      - bajenkins.{{ jenkins_domain | default('devops.local') }} (BA team)  
+      - twjenkins.{{ jenkins_domain | default('devops.local') }} (TW team)
+      - prometheus.{{ jenkins_domain | default('devops.local') }}
+      - grafana.{{ jenkins_domain | default('devops.local') }}
+      - node-exporter.{{ jenkins_domain | default('devops.local') }}
+      
+      Note: Add these domains to your /etc/hosts file for local testing:
+      127.0.0.1 jenkins.{{ jenkins_domain | default('devops.local') }}
+      127.0.0.1 majenkins.{{ jenkins_domain | default('devops.local') }}
+      127.0.0.1 bajenkins.{{ jenkins_domain | default('devops.local') }}
+      127.0.0.1 twjenkins.{{ jenkins_domain | default('devops.local') }}
+      127.0.0.1 prometheus.{{ jenkins_domain | default('devops.local') }}
+      127.0.0.1 grafana.{{ jenkins_domain | default('devops.local') }}
+  when: deployment_environment == 'local'
+  tags: ['ssl', 'wildcard', 'info']

@@ -92,6 +92,12 @@
   when: not ca_private_key_stat.stat.exists or ssl_force_regenerate | default(false)
   tags: ['ssl', 'ca', 'certificate']
 
+# Wildcard SSL certificate for local development
+- name: Generate wildcard SSL certificate for local development
+  include_tasks: generate-wildcard-ssl.yml
+  when: deployment_environment == 'local' and ssl_enabled | default(false)
+  tags: ['ssl', 'wildcard', 'local']
+
 # Service-specific SSL certificates
 - name: Generate SSL certificates for services
   include_tasks: generate-service-certificate.yml

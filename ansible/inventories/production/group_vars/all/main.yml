@@ -24,17 +24,17 @@ haproxy_image_tag: "2.8"  # Use stable Debian-based image
 haproxy_stats_user: "admin"
 haproxy_stats_password: "{{ vault_haproxy_stats_password | default('admin123') }}"
 
-# Monitoring configuration with domain routing
+# Monitoring configuration with domain routing (corrected domains)
 monitoring_enabled: true
 prometheus_retention: "15d"  # Production retention
 prometheus_port: 9090
-prometheus_domain: "prometheus.{{ monitoring_domain }}"
+prometheus_domain: "prometheus.{{ monitoring_domain }}"  # prometheus.devops.example.com
 grafana_admin_user: "admin"
 grafana_admin_password: "{{ vault_grafana_admin_password | default('admin123') }}"
 grafana_port: 9300  # Production port
-grafana_domain: "grafana.{{ monitoring_domain }}"
+grafana_domain: "grafana.{{ monitoring_domain }}"  # grafana.devops.example.com
 node_exporter_port: 9100
-node_exporter_domain: "node-exporter.{{ monitoring_domain }}"
+node_exporter_domain: "node-exporter.{{ monitoring_domain }}"  # node-exporter.devops.example.com
 
 # Backup configuration
 backup_enabled: true
@@ -88,14 +88,15 @@ haproxy_uid: 1004
 jenkins_port: 8090
 haproxy_gid: 1004
 
-# Domain configuration for production
-jenkins_domain: "jenkins.example.com"
-jenkins_wildcard_domain: "*.jenkins.example.com"
-monitoring_domain: "jenkins.example.com"  # Monitoring services use same base domain
-monitoring_wildcard_domain: "*.jenkins.example.com"
+# Domain configuration for production (corrected structure)
+jenkins_domain: "devops.example.com"
+jenkins_wildcard_domain: "*.devops.example.com"
+monitoring_domain: "devops.example.com"  # Monitoring services use same base domain
+monitoring_wildcard_domain: "*.devops.example.com"
 
 # Multi-team configuration for production HAProxy load balancing
-# devops is the default team (handles jenkins.example.com + devops.jenkins.example.com)
+# devops is the default team (handles jenkins.devops.example.com as default)
+# Team subdomain format: {team}jenkins.devops.example.com
 jenkins_teams:
   - team_name: "devops"
     blue_green_enabled: true

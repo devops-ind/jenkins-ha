@@ -29,10 +29,17 @@ shared_storage_enabled: false  # Disabled for local dev
 jenkins_enable_security: true
 jenkins_security_realm: "local"  # Keep default local auth
 jenkins_authorization_strategy: "logged_in_users_can_do_anything"
-enable_ssl: false  # Disabled for local development
-ssl_enabled: false  # Disable SSL for HAProxy
+enable_ssl: true  # Enable SSL for local development testing
+ssl_enabled: true  # Enable SSL for HAProxy with wildcard certificate
 jenkins_enable_csrf: false  # Disabled for easier local development
 jenkins_admin_password: "admin123"  # Simple password for local dev
+
+# SSL Configuration for local development
+ssl_certificate_dir: "/etc/ssl/certs"
+ssl_private_key_dir: "/etc/ssl/private"
+ssl_ca_dir: "/etc/ssl/ca"
+ssl_csr_dir: "/etc/ssl/csr"
+ssl_certificate_path: "/etc/ssl/certs/wildcard-{{ jenkins_domain }}-haproxy.pem"
 
 # Local backup configuration (minimal for development)
 jenkins_backup_enabled: false  # Disabled for local dev
@@ -111,9 +118,10 @@ jenkins_ha_enabled: true
 jenkins_cluster_size: 1
 jenkins_load_balancer_enabled: true
 
-# Multi-team configuration for HAProxy load balancing
+# Multi-team configuration for HAProxy load balancing (aligned with production)
 jenkins_teams:
   - team_name: "devops"
+    blue_green_enabled: true
     active_environment: "blue"
     ports:
       web: 8080
@@ -125,7 +133,9 @@ jenkins_teams:
     labels:
       tier: "production"
       environment: "local"
-  - team_name: "developer"
+      role: "default"
+  - team_name: "ma"
+    blue_green_enabled: true
     active_environment: "blue"
     ports:
       web: 8081
@@ -137,10 +147,39 @@ jenkins_teams:
     labels:
       tier: "production"
       environment: "local"
+      role: "marketing-analytics"
+  - team_name: "ba"
+    blue_green_enabled: true
+    active_environment: "blue"
+    ports:
+      web: 8082
+      agent: 50002
+    resources:
+      memory: "2g"
+      cpu: "1.0"
+    env_vars: {}
+    labels:
+      tier: "production"
+      environment: "local"
+      role: "business-analytics"
+  - team_name: "tw"
+    blue_green_enabled: true
+    active_environment: "blue"
+    ports:
+      web: 8083
+      agent: 50003
+    resources:
+      memory: "2g"
+      cpu: "1.0"
+    env_vars: {}
+    labels:
+      tier: "production"
+      environment: "local"
+      role: "test-qa"
 
-# HAProxy configuration for local development
-jenkins_domain: "localhost"
-jenkins_wildcard_domain: "*.localhost"
+# HAProxy configuration for local development (corrected structure)
+jenkins_domain: "devops.local"
+jenkins_wildcard_domain: "*.devops.local"
 haproxy_enabled: true
 haproxy_stats_enabled: true
 haproxy_stats_port: 8404
