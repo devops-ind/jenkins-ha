@@ -29,13 +29,36 @@
         success_msg: "Multi-team configuration validated - {{ jenkins_teams | length }} team(s) with domain {{ jenkins_domain }}"
       when: team_routing_enabled | default(true) and haproxy_deployment_mode == 'multi-team'
 
-    - name: Validate SSL/TLS configuration
+    - name: Determine SSL configuration mode
+      set_fact:
+        _ssl_dynamic_mode: "{{ ssl_enabled | default(false) and (ssl_cert_path is not defined or ssl_cert_path == '') }}"
+        _ssl_legacy_mode: "{{ ssl_enabled | default(false) and ssl_cert_path is defined and ssl_cert_path | length > 0 }}"
+      when: ssl_enabled | default(false)
+
+    - name: Validate SSL/TLS configuration modes
       assert:
         that:
-          - ssl_cert_path is defined
-          - ssl_cert_path | length > 0
-        fail_msg: "SSL configuration requires ssl_cert_path to be defined"
-        success_msg: "SSL configuration validated - certificate path: {{ ssl_cert_path }}"
+          - not ssl_enabled | default(false) or _ssl_dynamic_mode | default(false) or _ssl_legacy_mode | default(false)
+        fail_msg: |
+          SSL configuration validation failed:
+          - ssl_enabled: {{ ssl_enabled | default(false) }}
+          - ssl_cert_path defined: {{ ssl_cert_path is defined }}
+          - ssl_cert_path value: {{ ssl_cert_path | default('not defined') }}
+          
+          SSL requires either:
+          1. Dynamic mode: ssl_enabled=true (certificates auto-generated)
+          2. Legacy mode: ssl_enabled=true AND ssl_cert_path defined
+        success_msg: |
+          SSL configuration validated:
+          {% if _ssl_dynamic_mode | default(false) %}
+          - Mode: Dynamic SSL certificate generation
+          - Certificates: Auto-generated based on jenkins_teams
+          {% elif _ssl_legacy_mode | default(false) %}
+          - Mode: Legacy SSL certificate mode  
+          - Certificate path: {{ ssl_cert_path }}
+          {% else %}
+          - Mode: SSL disabled
+          {% endif %}
       when: ssl_enabled | default(false)
 
     - name: Validate VIP configuration for keepalived
@@ -127,12 +150,13 @@
 
 - name: Configure SSL/TLS certificates for HAProxy
   block:
-    # Generate dynamic SSL certificates based on jenkins_teams
-    - name: Generate SSL certificates for multi-team HAProxy setup
+    # Dynamic SSL certificate generation (when no ssl_cert_path provided)
+    - name: Generate dynamic SSL certificates for multi-team HAProxy setup
       include_tasks: ssl-certificates.yml
-      when: ssl_enabled | default(false)
+      when: _ssl_dynamic_mode | default(false)
+      tags: ['ssl', 'dynamic']
 
-    # Legacy SSL certificate handling (if ssl_cert_path is provided)
+    # Legacy SSL certificate handling (when ssl_cert_path is provided)
     - name: Handle legacy SSL certificate configuration
       block:
         - name: Check legacy SSL certificate file existence
@@ -162,9 +186,28 @@
             path: "/etc/haproxy/ssl/combined.pem"
           register: combined_cert_stat
           failed_when: not combined_cert_stat.stat.exists
-      when: 
-        - ssl_cert_path is defined
-        - ssl_cert_path != ""
+      when: _ssl_legacy_mode | default(false)
+      tags: ['ssl', 'legacy']
+      
+    - name: Display SSL configuration summary
+      debug:
+        msg: |
+          ====================================
+          SSL Configuration Applied
+          ====================================
+          {% if _ssl_dynamic_mode | default(false) %}
+          Mode: Dynamic SSL Certificate Generation
+          - Wildcard domain: {{ jenkins_wildcard_domain | default('*.devops.local') }}
+          - Team subdomains: Auto-generated from jenkins_teams
+          - Certificate path: {{ ssl_certificate_path | default('/etc/haproxy/ssl/combined.pem') }}
+          {% elif _ssl_legacy_mode | default(false) %}
+          Mode: Legacy SSL Certificate  
+          - Source certificate: {{ ssl_cert_path }}
+          - Combined certificate: /etc/haproxy/ssl/combined.pem
+          {% else %}
+          Mode: SSL Disabled
+          {% endif %}
+          ====================================
   when: ssl_enabled | default(false)
   tags: ['ssl']
 
@@ -241,7 +284,13 @@
       HAProxy User: {{ haproxy_user }}:{{ haproxy_gid }}
       Directories: Created and configured
       {% if ssl_enabled | default(false) %}
-      SSL Certificate: {{ ssl_cert_path }} → /etc/haproxy/ssl/combined.pem
+      {% if _ssl_dynamic_mode | default(false) %}
+      SSL Mode: Dynamic certificate generation → /etc/haproxy/ssl/combined.pem
+      {% elif _ssl_legacy_mode | default(false) %}
+      SSL Mode: Legacy certificate ({{ ssl_cert_path }}) → /etc/haproxy/ssl/combined.pem
+      {% endif %}
+      {% else %}
+      SSL Mode: Disabled
       {% endif %}
       Teams: {{ haproxy_effective_teams | length }} configured
       Firewall: {{ ansible_os_family }} rules applied
