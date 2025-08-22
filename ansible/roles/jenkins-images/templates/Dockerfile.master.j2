@@ -16,33 +16,23 @@ LABEL maintainer="DevOps Team" \
 # Switch to root to install packages
 USER root
 
-# Install additional packages and Docker
+# Install essential packages only (minimizing network dependencies)
 RUN apt-get update && apt-get install -y \
     curl \
-    wget \
     git \
     unzip \
-    vim \
-    sudo \
-    apt-transport-https \
-    ca-certificates \
-    gnupg \
-    lsb-release \
-    && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
-    && apt-get update \
-    && apt-get install -y docker-ce-cli \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy plugins list
+# Copy plugins list for runtime installation
 COPY plugins.txt /usr/share/jenkins/ref/plugins.txt
 
-# Install plugins
-RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt
+# Note: Plugins will be installed automatically at first startup via Jenkins plugin manager
+# This avoids network connectivity issues during Docker build
+# Jenkins will install plugins from /usr/share/jenkins/ref/plugins.txt automatically
 
 # Copy DSL approval initialization script
-COPY init-scripts/setup-dsl-approval.groovy /var/jenkins_home/init.groovy.d/01-setup-dsl-approval.groovy
+COPY init-scripts/setup-dsl-approval.groovy /usr/share/jenkins/ref/init.groovy.d/01-setup-dsl-approval.groovy
 
 # Create necessary directories
 RUN mkdir -p /var/jenkins_home/casc_configs \
@@ -51,9 +41,6 @@ RUN mkdir -p /var/jenkins_home/casc_configs \
 
 # Set permissions for jenkins user
 RUN chown -R jenkins:jenkins /var/jenkins_home
-
-# Add jenkins user to docker group for Docker socket access
-RUN usermod -aG docker jenkins
 
 # Switch back to jenkins user
 USER jenkins

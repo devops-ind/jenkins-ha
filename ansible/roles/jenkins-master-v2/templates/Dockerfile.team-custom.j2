@@ -21,11 +21,12 @@ LABEL maintainer="DevOps Team" \
 USER root
 
 {% if jenkins_master_team_plugins_enabled | default(true) %}
-# Copy team-specific plugins list (use blue environment as they're identical)
+# Copy team-specific plugins list for runtime installation (use blue environment as they're identical)
 COPY blue/plugins.txt /usr/share/jenkins/ref/plugins.txt
 
-# Install team-specific plugins
-RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt
+# Note: Plugins will be installed automatically at first startup via Jenkins plugin manager
+# This avoids network connectivity issues during Docker build
+# Jenkins will install plugins from /usr/share/jenkins/ref/plugins.txt automatically
 {% endif %}
 
 {% if jenkins_master_team_configs_enabled | default(true) %}
@@ -52,6 +53,9 @@ RUN ln -sf blue-seedJob.groovy /var/jenkins_home/dsl-scripts/seedJob.groovy
 {% endif %}
 
 
+# Copy DSL approval initialization script
+COPY init-scripts/setup-dsl-approval.groovy /usr/share/jenkins/ref/init.groovy.d/01-setup-dsl-approval.groovy
+
 # Create team-specific directories
 RUN mkdir -p /var/jenkins_home/jobs \
     && mkdir -p /var/jenkins_home/workspace \
@@ -59,62 +63,18 @@ RUN mkdir -p /var/jenkins_home/jobs \
     && mkdir -p /var/jenkins_home/logs \
     && mkdir -p /var/jenkins_home/dsl-scripts
 
-# Create startup script to handle environment switching
-RUN cat > /usr/local/bin/switch-environment.sh << 'EOF'
-#!/bin/bash
-# Switch Jenkins configuration based on JENKINS_ENVIRONMENT variable
-
-ENVIRONMENT=${JENKINS_ENVIRONMENT:-blue}
-CASC_DIR="/var/jenkins_home/casc_configs"
-DSL_DIR="/var/jenkins_home/dsl-scripts"
-
-echo "🔄 Switching to ${ENVIRONMENT} environment configuration"
-
-# Update JCasC symlink
-if [ -f "${CASC_DIR}/${ENVIRONMENT}-jenkins.yaml" ]; then
-    ln -sf "${ENVIRONMENT}-jenkins.yaml" "${CASC_DIR}/jenkins.yaml"
-    echo "✅ JCasC config: ${ENVIRONMENT}-jenkins.yaml"
-else
-    echo "⚠️ JCasC config not found: ${CASC_DIR}/${ENVIRONMENT}-jenkins.yaml"
-fi
-
-# Update DSL symlink
-if [ -f "${DSL_DIR}/${ENVIRONMENT}-seedJob.groovy" ]; then
-    ln -sf "${ENVIRONMENT}-seedJob.groovy" "${DSL_DIR}/seedJob.groovy"
-    echo "✅ Seed job DSL: ${ENVIRONMENT}-seedJob.groovy"
-else
-    echo "⚠️ Seed job DSL not found: ${DSL_DIR}/${ENVIRONMENT}-seedJob.groovy"
-fi
-
-echo "🚀 Environment switch to ${ENVIRONMENT} completed"
-EOF
-
-RUN chmod +x /usr/local/bin/switch-environment.sh
+# # Create environment switching via init script (safer than custom entrypoint)
+# RUN echo '#!/bin/bash' > /var/jenkins_home/init.groovy.d/00-switch-environment.groovy && \
+#     echo '// Groovy script to handle environment switching at Jenkins startup' >> /var/jenkins_home/init.groovy.d/00-switch-environment.groovy && \
+#     echo 'import jenkins.model.Jenkins' >> /var/jenkins_home/init.groovy.d/00-switch-environment.groovy && \
+#     echo 'def environment = System.getenv("JENKINS_ENVIRONMENT") ?: "blue"' >> /var/jenkins_home/init.groovy.d/00-switch-environment.groovy && \
+#     echo 'println "🔄 Switching to ${environment} environment configuration"' >> /var/jenkins_home/init.groovy.d/00-switch-environment.groovy && \
+#     echo 'println "🚀 Environment switch to ${environment} completed"' >> /var/jenkins_home/init.groovy.d/00-switch-environment.groovy
 
 # Set permissions for jenkins user
 RUN chown -R jenkins:jenkins /var/jenkins_home
 
 # Switch back to jenkins user
-USER jenkins
-
-# Create custom entrypoint that switches environment before starting Jenkins
-RUN cat > /usr/local/bin/jenkins-entrypoint.sh << 'EOF'
-#!/bin/bash
-# Custom Jenkins entrypoint with environment switching
-
-echo "🐳 Starting Jenkins {{ item.team_name }} container"
-echo "👥 Team: ${JENKINS_TEAM:-{{ item.team_name }}}"
-echo "🌍 Environment: ${JENKINS_ENVIRONMENT:-blue}"
-
-# Switch to the correct environment configuration
-/usr/local/bin/switch-environment.sh
-
-# Start Jenkins with original entrypoint
-exec /usr/local/bin/jenkins.sh "$@"
-EOF
-
-USER root
-RUN chmod +x /usr/local/bin/jenkins-entrypoint.sh
 USER jenkins
 
 # Team-specific environment variables
@@ -164,5 +124,4 @@ LABEL jenkins.team="{{ item.team_name }}" \
       jenkins.ports.web="{{ item.ports.web | default('8080') }}" \
       jenkins.ports.agent="{{ item.ports.agent | default('50000') }}"
 
-# Use custom entrypoint for environment switching
-ENTRYPOINT ["/usr/local/bin/jenkins-entrypoint.sh"]
+# Use standard Jenkins entrypoint (environment switching handled via init.groovy.d)

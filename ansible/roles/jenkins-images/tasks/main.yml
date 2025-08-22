@@ -53,6 +53,15 @@
     mode: '0644'
   when: images_to_build == 'all' or images_to_build == 'master'
 
+- name: Generate init script list for master
+  copy:
+    src: init-scripts/
+    dest: "{{ jenkins_images_build_dir }}/master/init-scripts/"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  when: images_to_build == 'all' or images_to_build == 'master'
+
 - name: Generate DIND agent Dockerfile
   template:
     src: Dockerfile.dind-agent.j2
@@ -97,8 +106,17 @@
     group: "{{ jenkins_group }}"
     mode: "{{ item.mode }}"
   loop:
-    - { src: 'docker-entrypoint.sh', dest: "{{ jenkins_images_build_dir }}/docker-entrypoint.sh", mode: '0755' }
+    # - { src: 'docker-entrypoint.sh', dest: "{{ jenkins_images_build_dir }}/docker-entrypoint.sh", mode: '0755' }
     - { src: 'healthcheck.sh', dest: "{{ jenkins_images_build_dir }}/healthcheck.sh", mode: '0755' }
+
+- name: Copy init-scripts directory for Jenkins initialization
+  copy:
+    src: init-scripts/
+    dest: "{{ jenkins_images_build_dir }}/master/init-scripts/"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  when: images_to_build == 'all' or images_to_build == 'master'
 
 
 - name: Build Jenkins master image
@@ -116,7 +134,7 @@
         VCS_REF: "{{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
     source: build
     state: present
-    push: "{{ jenkins_images_push | default(false) }}"
+    push: "false"
   register: master_image_build
   when: images_to_build == 'all' or images_to_build == 'master'
 
@@ -231,16 +249,16 @@
       condition: "{{ (images_to_build == 'all' or images_to_build == 'nodejs-agent') and nodejs_image_build is defined and nodejs_image_build.image is defined }}"
   when: item.condition | bool
 
-- name: Generate image manifest
-  template:
-    src: image-manifest.yml.j2
-    dest: "{{ jenkins_images_build_dir }}/image-manifest.yml"
-    owner: "{{ jenkins_user }}"
-    group: "{{ jenkins_group }}"
-    mode: '0644'
-  vars:
-    images_built: "{{ images_built_list | default([]) }}"
-  when: images_built_list is defined and images_built_list | length > 0
+# - name: Generate image manifest
+#   template:
+#     src: image-manifest.yml.j2
+#     dest: "{{ jenkins_images_build_dir }}/image-manifest.yml"
+#     owner: "{{ jenkins_user }}"
+#     group: "{{ jenkins_group }}"
+#     mode: '0644'
+#   vars:
+#     images_built: "{{ images_built_list | default([]) }}"
+#   when: images_built_list is defined and images_built_list | length > 0
 
 - name: Display image build summary
   debug:

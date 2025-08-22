@@ -39,6 +39,28 @@ jenkins_master_log_max_size: "10m"
 jenkins_master_log_max_files: "3"
 
 # ====================================
+# STORAGE CONFIGURATION
+# ====================================
+# Shared storage settings
+shared_storage_enabled: false
+shared_storage_path: "/opt/jenkins-shared"
+
+# Backup storage settings  
+backup_storage_enabled: true
+backup_storage_path: "/var/data/jenkins-backup"
+
+# Storage preference: shared, backup, auto
+storage_preference: "auto"
+storage_fallback_enabled: true
+storage_validation_timeout: 30
+
+# Sync settings
+sync_enabled: true
+sync_interval: "*/5"  # minutes
+storage_monitoring_enabled: true
+storage_health_check_interval: 3600  # seconds
+
+# ====================================
 # ENVIRONMENT VARIABLES
 # ====================================
 jenkins_master_env_vars:

@@ -85,6 +85,19 @@
       vars:
         jenkins_current_team: "{{ item }}"
 
+    - name: Generate team-specific seedApprovalJob
+      copy:
+        src: init-scripts/
+        dest: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}/init-scripts/"
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_group }}"
+        mode: '0644'
+      loop: "{{ jenkins_teams_config }}"
+      loop_control:
+        label: "{{ item.team_name }}"
+      vars:
+        jenkins_current_team: "{{ item }}"
+
     - name: Generate team-specific plugins list for blue/green environments
       template:
         src: team-plugins.txt.j2

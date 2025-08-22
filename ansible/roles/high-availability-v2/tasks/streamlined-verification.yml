@@ -40,7 +40,7 @@
         method: HEAD
         timeout: 5
         headers:
-          Host: "{{ haproxy_effective_teams[0].team_name }}jenkins.{{ jenkins_domain | default('devops.local') }}"
+          Host: "{{ haproxy_effective_teams[0].team_name }}jenkins.{{ jenkins_domain | default('devops.example.com') }}"
       register: primary_routing_test
       failed_when: primary_routing_test.status not in [200, 302, 404, 503]
       when: haproxy_effective_teams | length > 0
