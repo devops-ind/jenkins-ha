@@ -41,6 +41,9 @@ COPY plugins.txt /usr/share/jenkins/ref/plugins.txt
 # Install plugins
 RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt
 
+# Copy DSL approval initialization script
+COPY init-scripts/setup-dsl-approval.groovy /var/jenkins_home/init.groovy.d/01-setup-dsl-approval.groovy
+
 # Create necessary directories
 RUN mkdir -p /var/jenkins_home/casc_configs \
     && mkdir -p /var/jenkins_home/init.groovy.d \

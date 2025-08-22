@@ -177,7 +177,7 @@
   roles:
     - role: jenkins-images
       tags: ['images', 'build']
-      when: build_jenkins_images | default(false)
+      when: build_jenkins_images | default(false) | bool
 
 - name: Deploy Jenkins Infrastructure
   hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'jenkins_masters') }}"

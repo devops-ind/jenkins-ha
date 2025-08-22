@@ -217,15 +217,6 @@
   when: jenkins_master_team_seed_jobs_enabled | default(true)
   tags: ['setup', 'config', 'seed-jobs']
 
-- name: Copy Jenkins initialization scripts
-  copy:
-    src: init-scripts/setup-dsl-approval.groovy
-    dest: "{{ jenkins_home_dir }}/init.groovy.d/01-setup-dsl-approval.groovy"
-    owner: "{{ jenkins_user }}"
-    group: "{{ jenkins_user }}"
-    mode: '0644'
-  tags: ['setup', 'config', 'init-scripts']
-
 - name: Setup and validation phase complete
   debug:
     msg: |
