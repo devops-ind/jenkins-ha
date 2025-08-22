@@ -6,12 +6,18 @@
 # VERIFICATION HOST RESOLUTION
 # ====================================
 jenkins_verification_host: >-
-  {%- if deployment_mode == 'local' or deployment_mode == 'devcontainer' -%}
+  {%- if deployment_mode | default('') in ['local', 'devcontainer'] or deployment_environment | default('') == 'local' -%}
     localhost
   {%- elif ansible_virtualization_type | default('') == 'docker' -%}
     host.docker.internal
+  {%- elif ansible_connection | default('') == 'local' -%}
+    localhost
+  {%- elif hostvars[inventory_hostname]['ansible_host'] is defined -%}
+    {{ hostvars[inventory_hostname]['ansible_host'] }}
+  {%- elif ansible_default_ipv4.address is defined -%}
+    {{ ansible_default_ipv4.address }}
   {%- else -%}
-    {{ ansible_default_ipv4.address | default('localhost') }}
+    localhost
   {%- endif -%}
 
 # ====================================

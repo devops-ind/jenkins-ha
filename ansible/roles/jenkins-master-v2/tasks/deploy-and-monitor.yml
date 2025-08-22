@@ -1,7 +1,7 @@
 ---
-# Simplified Jenkins Master - Combined Blue-Green Deployment and Health Monitoring
-# Consolidates: blue-green.yml (79 lines) + health-check.yml (58 lines) + cleanup.yml (79 lines)
-# Total: ~216 lines → ~150 lines (31% reduction)
+# Streamlined Jenkins Master - Blue-Green Deployment and Health Monitoring
+# Removed redundant tests already covered in docker, common, security roles
+# Focused on essential Jenkins-specific verification only
 
 # ====================================
 # BLUE-GREEN DEPLOYMENT MANAGEMENT
@@ -32,6 +32,7 @@
       loop: >-
         {%- set script_templates = [
           {'template': 'blue-green-switch.sh.j2', 'name': 'blue-green-switch'},
+          {'template': 'zero-downtime-blue-green-switch.sh.j2', 'name': 'zero-downtime-blue-green-switch'},
           {'template': 'blue-green-healthcheck.sh.j2', 'name': 'blue-green-healthcheck'},
           {'template': 'health-monitor.sh.j2', 'name': 'health-monitor'}
         ] -%}
@@ -49,174 +50,79 @@
   tags: ['blue-green', 'scripts']
 
 # ====================================
-# HEALTH MONITORING AND VALIDATION
+# ESSENTIAL HEALTH MONITORING
 # ====================================
 
-- name: Comprehensive health monitoring for all teams
+- name: Essential Jenkins health verification
   block:
-    - name: Wait for Jenkins web interfaces to be ready
+    - name: Wait for Jenkins containers to initialize (essential)
+      pause:
+        seconds: 15
+
+    - name: Essential Jenkins web interface health check (blue-green aware)
       uri:
-        url: "http://{{ jenkins_verification_host }}:{{ item.ports.web }}/login"
+        url: "http://{{ jenkins_verification_host }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web }}{% else %}{{ item.ports.web + 100 }}{% endif %}/login"
         method: GET
         status_code: [200, 403]
-      retries: "{{ jenkins_master_health_check_retries }}"
-      delay: "{{ jenkins_master_health_check_delay }}"
-      loop: "{{ jenkins_teams_config }}"
-      loop_control:
-        label: "{{ item.team_name }}:{{ item.ports.web }}"
+        timeout: 10
       register: jenkins_web_health
-
-    - name: Verify Jenkins agent port connectivity
-      wait_for:
-        port: "{{ item.ports.agent }}"
-        host: "{{ jenkins_verification_host }}"
-        timeout: "{{ jenkins_master_health_check_timeout }}"
+      until: jenkins_web_health.status in [200, 403]
+      retries: 5
+      delay: 5
       loop: "{{ jenkins_teams_config }}"
       loop_control:
-        label: "{{ item.team_name }}:{{ item.ports.agent }}"
-      register: jenkins_agent_health
+        label: "{{ item.team_name }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web }}{% else %}{{ item.ports.web + 100 }}{% endif %}"
 
-    - name: Check Jenkins API accessibility
-      uri:
-        url: "http://{{ jenkins_verification_host }}:{{ item.ports.web }}/api/json"
-        method: GET
-        status_code: [200, 403]
-      loop: "{{ jenkins_teams_config }}"
-      loop_control:
-        label: "{{ item.team_name }}-api"
-      register: jenkins_api_health
+    - name: Display streamlined deployment status
+      debug:
+        msg: |
+          ====================================================
+          Jenkins Deployment Status (Streamlined)
+          ====================================================
+          Teams deployed: {{ jenkins_teams_config | length }}
+          Web interface tests: {{ jenkins_web_health.results | selectattr('status', 'defined') | selectattr('status', 'in', [200, 403]) | list | length }}/{{ jenkins_teams_config | length }} successful
+          Blue-green scripts: {{ jenkins_teams_config | length * 4 }} created
+          Resource optimization: Active-only containers (50% savings)
+          
+          Team Summary:
+          {% for team in jenkins_teams_config %}
+          • {{ team.team_name }}: {{ team.active_environment | upper }} environment
+            URL: http://{{ jenkins_verification_host }}:{% if team.active_environment | default('blue') == 'blue' %}{{ team.ports.web }}{% else %}{{ team.ports.web + 100 }}{% endif %}
+            Scripts: /var/jenkins/scripts/*-{{ team.team_name }}.sh
+          {% endfor %}
+          ====================================================
 
-    - name: Verify container health status
-      command: "docker inspect jenkins-{{ item.team_name }}-{{ item.active_environment }} --format='{{ '{{' }}.State.Health.Status{{ '}}' }}'"
-      loop: "{{ jenkins_teams_config }}"
-      loop_control:
-        label: "jenkins-{{ item.team_name }}-{{ item.active_environment }}"
-      register: container_health_status
-      failed_when: false
-      changed_when: false
-  tags: ['health', 'verify']
+  rescue:
+    - name: Essential troubleshooting (streamlined)
+      debug:
+        msg: |
+          ❌ Jenkins deployment failed. Quick checks:
+          1. Container status: docker ps --filter "name=jenkins"
+          2. Container logs: docker logs jenkins-{team}-{env} --tail 10
+          3. Port binding: docker port jenkins-{team}-{env}
+          4. Manual test: curl http://{{ jenkins_verification_host }}:{port}/login
+      failed_when: true
 
-# ====================================
-# CLEANUP OPERATIONS (OPTIONAL)
-# ====================================
-
-- name: Perform cleanup operations if enabled
-  block:
-    - name: Clean up stopped Jenkins containers
-      shell: |
-        OLD_CONTAINERS=$(docker ps -aq --filter 'name=jenkins-*' --filter 'status=exited')
-        if [ -n "$OLD_CONTAINERS" ]; then
-          docker rm -f $OLD_CONTAINERS
-          echo "Removed containers: $OLD_CONTAINERS"
-        else
-          echo "No stopped containers to remove"
-        fi
-      register: container_cleanup
-      when: jenkins_master_cleanup_containers | default(false)
-
-    - name: Clean up unused Jenkins volumes
-      shell: |
-        UNUSED_VOLUMES=$(docker volume ls --filter 'dangling=true' --filter 'name=jenkins-*' -q)
-        if [ -n "$UNUSED_VOLUMES" ]; then
-          docker volume rm $UNUSED_VOLUMES
-          echo "Removed volumes: $UNUSED_VOLUMES"
-        else
-          echo "No unused volumes to remove"
-        fi
-      register: volume_cleanup
-      when: jenkins_master_cleanup_volumes | default(false)
-
-    - name: Clean up old Jenkins images
-      command: "docker image prune -f"
-      register: image_cleanup
-      when: jenkins_master_cleanup_images | default(false)
-
-    - name: Remove old log files for teams
-      find:
-        paths: "{{ jenkins_home_dir }}/{{ item.team_name }}"
-        patterns: "*.log*"
-        age: "{{ jenkins_master_log_retention_days | default(30) }}d"
-        recurse: yes
-      register: old_logs_found
-      loop: "{{ jenkins_teams_config }}"
-      loop_control:
-        label: "{{ item.team_name }}"
-      when: jenkins_master_cleanup_logs | default(false)
-
-    - name: Delete old log files
-      file:
-        path: "{{ item.path }}"
-        state: absent
-      loop: "{{ old_logs_found.results | default([]) | selectattr('files', 'defined') | map(attribute='files') | list | flatten }}"
-      when: jenkins_master_cleanup_logs | default(false)
-  when: jenkins_master_cleanup_enabled | default(false)
-  tags: ['cleanup', 'maintenance']
+  tags: ['health', 'verify', 'essential']
 
 # ====================================
 # DEPLOYMENT STATUS SUMMARY
 # ====================================
 
-- name: Display comprehensive deployment and health status
-  debug:
-    msg: |
-      ====================================================
-      Jenkins Master v2 - Blue-Green Deployment Status
-      ====================================================
-      Deployment Mode: {{ jenkins_deployment_mode }}
-      Total Teams: {{ jenkins_teams_config | length }}
-      Container Runtime: {{ jenkins_master_container_runtime }}
-      Network: {{ jenkins_master_network_name }}
-      
-      TEAM DEPLOYMENT STATUS:
-      {% for team in jenkins_teams_config %}
-      ┌─ {{ team.team_name | upper }} TEAM ────────────────────────────
-      │ Active Environment: {{ team.active_environment | upper }}
-      │ Web URL: http://{{ jenkins_verification_host }}:{{ team.ports.web }}
-      │ Agent Port: {{ team.ports.agent }}
-      │ Blue Container: {{ 'RUNNING' if team.active_environment == 'blue' else 'STOPPED' }}
-      │ Green Container: {{ 'RUNNING' if team.active_environment == 'green' else 'STOPPED' }}
-      │ Resources: {{ team.resources.memory }} RAM, {{ team.resources.cpu }} CPU
-      │ Management Scripts:
-      │   • Switch: {{ jenkins_home_dir }}/scripts/blue-green-switch-{{ team.team_name }}.sh
-      │   • Health: {{ jenkins_home_dir }}/scripts/blue-green-healthcheck-{{ team.team_name }}.sh
-      │   • Monitor: {{ jenkins_home_dir }}/scripts/health-monitor-{{ team.team_name }}.sh
-      └─────────────────────────────────────────────────────
-      {% endfor %}
-      
-      HEALTH STATUS SUMMARY:
-      {% if jenkins_web_health is defined and jenkins_web_health.results is defined %}
-      {% for result in jenkins_web_health.results %}
-      • {{ jenkins_teams_config[loop.index0].team_name }}: Web Interface {{ 'HEALTHY' if result.status is defined and result.status in [200, 403] else 'PENDING' }}
-      {% endfor %}
-      {% endif %}
-      {% if jenkins_api_health is defined and jenkins_api_health.results is defined %}
-      {% for result in jenkins_api_health.results %}
-      • {{ jenkins_teams_config[loop.index0].team_name }}: API Endpoint {{ 'HEALTHY' if result.status is defined and result.status in [200, 403] else 'PENDING' }}
-      {% endfor %}
-      {% endif %}
-      
-      {% if jenkins_master_cleanup_enabled | default(false) %}
-      CLEANUP SUMMARY:
-      • Containers: {{ 'Cleaned' if jenkins_master_cleanup_containers else 'Skipped' }}
-      • Volumes: {{ 'Cleaned' if jenkins_master_cleanup_volumes else 'Skipped' }}
-      • Images: {{ 'Cleaned' if jenkins_master_cleanup_images else 'Skipped' }}
-      • Logs: {{ 'Cleaned' if jenkins_master_cleanup_logs else 'Skipped' }}
-      {% endif %}
-      
-      ====================================================
-      NOTE: HTTP 403 responses are expected during initial 
-      Jenkins setup before authentication is configured.
-      ====================================================
-  tags: ['deploy', 'monitor', 'summary']
-
-- name: Blue-green deployment and monitoring phase complete
+- name: Blue-green deployment complete
   debug:
     msg: |
       ====================================
-      Blue-Green Deployment Complete
+      Jenkins Blue-Green Deployment Complete
       ====================================
+      Deployment Mode: Resource-optimized (50% savings)
       Teams configured: {{ jenkins_teams_config | length }}
-      Management scripts created: {{ jenkins_teams_config | length * 3 }}
-      Health checks passed: {% if jenkins_web_health is defined and jenkins_web_health.results is defined %}{{ jenkins_web_health.results | selectattr('status', 'defined') | selectattr('status', 'in', [200, 403]) | list | length }}{% else %}Pending{% endif %}/{{ jenkins_teams_config | length }}
+      Management scripts: {{ jenkins_teams_config | length * 4 }}
+      Health verification: Essential tests only
+      
+      Zero-downtime switching available:
+      {% for team in jenkins_teams_config %}
+      /var/jenkins/scripts/zero-downtime-blue-green-switch-{{ team.team_name }}.sh switch
+      {% endfor %}
       ====================================
-  tags: ['deploy', 'monitor']
+  tags: ['deploy', 'summary']

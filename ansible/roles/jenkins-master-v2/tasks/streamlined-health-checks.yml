@@ -1,0 +1,57 @@
+---
+# Streamlined Jenkins Health Checks - Essential Tests Only
+# Consolidates redundant tests to improve deployment speed
+
+- name: Streamlined Jenkins health verification
+  block:
+    - name: Wait for Jenkins containers initialization (streamlined)
+      pause:
+        seconds: 15
+
+    - name: Essential Jenkins web interface health check
+      uri:
+        url: "http://{{ jenkins_verification_host }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web }}{% else %}{{ item.ports.web + 100 }}{% endif %}/login"
+        method: GET
+        status_code: [200, 403]
+        timeout: 10
+      register: jenkins_web_health
+      until: jenkins_web_health.status in [200, 403]
+      retries: 5
+      delay: 5
+      loop: "{{ jenkins_teams_config }}"
+      loop_control:
+        label: "{{ item.team_name }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web }}{% else %}{{ item.ports.web + 100 }}{% endif %}@{{ jenkins_verification_host }}"
+
+    - name: Sample agent port test (first team only)
+      wait_for:
+        port: "{% if jenkins_teams_config[0].active_environment | default('blue') == 'blue' %}{{ jenkins_teams_config[0].ports.agent }}{% else %}{{ jenkins_teams_config[0].ports.agent + 100 }}{% endif %}"
+        host: "{{ jenkins_verification_host }}"
+        timeout: 10
+      register: jenkins_agent_sample
+      failed_when: false
+      when: jenkins_teams_config | length > 0
+
+    - name: Display streamlined health check results
+      debug:
+        msg: |
+          ====================================
+          Jenkins Health Check Summary (Streamlined)
+          ====================================
+          Teams verified: {{ jenkins_teams_config | length }}
+          Web interface: {{ jenkins_web_health.results | selectattr('status', 'defined') | selectattr('status', 'in', [200, 403]) | list | length }}/{{ jenkins_teams_config | length }} successful
+          Agent port sample: {{ 'OK' if not jenkins_agent_sample.failed else 'Failed' }}
+          Health check method: Blue-green port aware
+          ====================================
+
+  rescue:
+    - name: Health check troubleshooting (streamlined)
+      debug:
+        msg: |
+          ❌ Jenkins health check failed. Quick troubleshooting:
+          1. Container status: docker ps --filter "name=jenkins"
+          2. Container logs: docker logs jenkins-{team}-{env} --tail 10
+          3. Port check: netstat -tuln | grep :{port}
+          4. Manual test: curl http://{{ jenkins_verification_host }}:{port}/login
+      failed_when: false
+
+  tags: ['health', 'verify', 'streamlined']

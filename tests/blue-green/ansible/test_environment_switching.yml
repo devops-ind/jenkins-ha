@@ -1,0 +1,182 @@
+---
+# Test playbook for blue-green environment switching
+# Tests dynamic environment switching functionality
+
+- name: Blue-Green Environment Switching Test
+  hosts: jenkins_masters
+  become: yes
+  gather_facts: yes
+  vars:
+    test_scenarios:
+      - name: "Switch devops team from blue to green"
+        team_name: "devops"
+        from_environment: "blue"
+        to_environment: "green"
+      - name: "Switch qa team from green to blue"  
+        team_name: "qa"
+        from_environment: "green"
+        to_environment: "blue"
+      - name: "Switch back devops team to blue"
+        team_name: "devops"
+        from_environment: "green"
+        to_environment: "blue"
+
+  pre_tasks:
+    - name: Display test information
+      debug:
+        msg: |
+          =================================================
+          Blue-Green Environment Switching Test
+          =================================================
+          Test Scenarios: {{ test_scenarios | length }}
+          Teams: {{ jenkins_teams | map(attribute='team_name') | list | join(', ') }}
+          =================================================
+
+  tasks:
+    - name: Record initial team environments
+      set_fact:
+        initial_team_environments: >-
+          {{
+            jenkins_teams | map('combine', {'initial_env': item.active_environment}) | list
+          }}
+      loop: "{{ jenkins_teams }}"
+      run_once: true
+
+    - name: Execute environment switching scenarios
+      include_tasks: environment_switch_scenario.yml
+      vars:
+        scenario: "{{ item }}"
+      loop: "{{ test_scenarios }}"
+      loop_control:
+        loop_var: item
+
+  post_tasks:
+    - name: Display final test results
+      debug:
+        msg: |
+          =================================================
+          Environment Switching Test Results
+          =================================================
+          {% for result in switch_results | default([]) %}
+          Scenario {{ loop.index }}: {{ result.scenario_name }}
+          - Team: {{ result.team_name }}
+          - Switch: {{ result.from_env }} → {{ result.to_env }}
+          - Status: {{ result.status }}
+          {% if result.status == 'SUCCESS' %}
+          - Switch Time: {{ result.switch_time }}s
+          - Health Check: {{ result.health_check }}
+          {% else %}
+          - Error: {{ result.error_message }}
+          {% endif %}
+          
+          {% endfor %}
+          =================================================
+
+# Included task file for individual switch scenarios
+- name: Environment Switch Scenario
+  block:
+    - name: "{{ scenario.name }} - Pre-switch validation"
+      debug:
+        msg: |
+          Executing: {{ scenario.name }}
+          Team: {{ scenario.team_name }}
+          Switch: {{ scenario.from_environment }} → {{ scenario.to_environment }}
+
+    - name: Find target team configuration
+      set_fact:
+        target_team: >-
+          {{
+            jenkins_teams | selectattr('team_name', 'equalto', scenario.team_name) | first
+          }}
+
+    - name: Validate current environment
+      assert:
+        that:
+          - target_team.active_environment == scenario.from_environment
+        fail_msg: |
+          Environment mismatch: Expected {{ scenario.team_name }} to be on {{ scenario.from_environment }}, 
+          but currently on {{ target_team.active_environment }}
+
+    - name: Record switch start time
+      set_fact:
+        switch_start_time: "{{ ansible_date_time.epoch }}"
+
+    - name: Update team environment configuration
+      set_fact:
+        updated_teams: >-
+          {{
+            jenkins_teams | map('combine', 
+              {'active_environment': scenario.to_environment} if item.team_name == scenario.team_name 
+              else {}
+            ) | list
+          }}
+      loop: "{{ jenkins_teams }}"
+
+    - name: Apply updated team configuration
+      set_fact:
+        jenkins_teams: "{{ updated_teams }}"
+
+    - name: Execute environment switch using jenkins-master-v2 role
+      include_role:
+        name: jenkins-master-v2
+        tasks_from: switch-environment.yml
+      vars:
+        team_filter: "{{ scenario.team_name }}"
+        target_environment: "{{ scenario.to_environment }}"
+
+    - name: Wait for environment stabilization
+      pause:
+        seconds: 15
+
+    - name: Verify switch completion
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ target_team.ports.web }}/login"
+        method: GET
+        timeout: 30
+        status_code: [200, 403]
+      register: post_switch_health
+      retries: 5
+      delay: 10
+
+    - name: Calculate switch duration
+      set_fact:
+        switch_duration: "{{ ansible_date_time.epoch | int - switch_start_time | int }}"
+
+    - name: Record successful switch result
+      set_fact:
+        switch_results: >-
+          {{
+            (switch_results | default([])) + [{
+              'scenario_name': scenario.name,
+              'team_name': scenario.team_name,
+              'from_env': scenario.from_environment,
+              'to_env': scenario.to_environment,
+              'status': 'SUCCESS',
+              'switch_time': switch_duration,
+              'health_check': 'PASSED' if post_switch_health.status in [200, 403] else 'FAILED'
+            }]
+          }}
+
+  rescue:
+    - name: Record failed switch result
+      set_fact:
+        switch_results: >-
+          {{
+            (switch_results | default([])) + [{
+              'scenario_name': scenario.name,
+              'team_name': scenario.team_name,
+              'from_env': scenario.from_environment,
+              'to_env': scenario.to_environment,
+              'status': 'FAILED',
+              'error_message': ansible_failed_result.msg | default('Unknown error')
+            }]
+          }}
+
+    - name: Display switch failure details
+      debug:
+        msg: |
+          ❌ Switch failed: {{ scenario.name }}
+          Error: {{ ansible_failed_result.msg | default('Unknown error') }}
+          
+    - name: Continue with next scenario
+      meta: clear_host_errors

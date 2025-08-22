@@ -193,7 +193,7 @@
   post_tasks:
     - name: Wait for Jenkins teams to be ready
       uri:
-        url: "http://{{ ansible_default_ipv4.address }}:{{ item.ports.web | default(8080) }}/login"
+        url: "http://{{ ansible_default_ipv4.address }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web | default(8080) }}{% else %}{{ (item.ports.web | default(8080)) + 100 }}{% endif %}/login"
         method: GET
         status_code: [200, 403]
       register: jenkins_ready
@@ -239,7 +239,7 @@
   tasks:
     - name: Verify Jenkins teams accessibility
       uri:
-        url: "http://{{ ansible_default_ipv4.address }}:{{ item.ports.web | default(8080) }}/api/json"
+        url: "http://{{ ansible_default_ipv4.address }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web | default(8080) }}{% else %}{{ (item.ports.web | default(8080)) + 100 }}{% endif %}/api/json"
         method: GET
         user: "{{ jenkins_admin_user }}"
         password: "{{ jenkins_admin_password }}"
@@ -269,12 +269,12 @@
           📋 Team Access Information:
           {% if deployment_mode | default('local') == 'local' %}
           {% for team in jenkins_teams | default([{'team_name': 'default', 'ports': {'web': 8080}}]) %}
-          {{ team.team_name | title }} Team: http://localhost:{{ team.ports.web | default(8080) }}
+          {{ team.team_name | title }} Team: http://localhost:{% if team.active_environment | default('blue') == 'blue' %}{{ team.ports.web | default(8080) }}{% else %}{{ (team.ports.web | default(8080)) + 100 }}{% endif %}
           {% endfor %}
           {% else %}
           {% for host in groups['jenkins_masters'] | default([]) %}
           {% for team in jenkins_teams | default([{'team_name': 'default', 'ports': {'web': 8080}}]) %}
-          {{ team.team_name | title }} Team: http://{{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }}
+          {{ team.team_name | title }} Team: http://{{ hostvars[host]['ansible_default_ipv4']['address'] }}:{% if team.active_environment | default('blue') == 'blue' %}{{ team.ports.web | default(8080) }}{% else %}{{ (team.ports.web | default(8080)) + 100 }}{% endif %}
           {% endfor %}
           {% endfor %}
           {% endif %}

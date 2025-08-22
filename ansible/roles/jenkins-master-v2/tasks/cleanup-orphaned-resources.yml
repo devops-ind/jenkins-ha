@@ -210,18 +210,18 @@
       ====================================
       {% if jenkins_cleanup_dry_run | default(false) %}
       Mode: DRY RUN (no changes made)
-      Orphaned Teams Found: {{ orphaned_teams | length }}
-      {% elif orphaned_teams | length == 0 %}
+      Orphaned Teams Found: {{ orphaned_teams | default([]) | length }}
+      {% elif (orphaned_teams | default([])) | length == 0 %}
       Status: ✅ No cleanup required - infrastructure is aligned
       {% else %}
       Status: ✅ Cleanup completed successfully
-      Teams Removed: {{ orphaned_teams | join(', ') }}
-      Containers Removed: {{ orphaned_teams | length * 2 }} (blue + green pairs)
+      Teams Removed: {{ orphaned_teams | default([]) | join(', ') }}
+      Containers Removed: {{ (orphaned_teams | default([])) | length * 2 }} (blue + green pairs)
       {% if not (jenkins_cleanup_preserve_volumes | default(false)) %}
-      Volumes Removed: {{ orphaned_teams | length * 3 }} (blue-home + green-home + shared)
+      Volumes Removed: {{ (orphaned_teams | default([])) | length * 3 }} (blue-home + green-home + shared)
       {% endif %}
       {% if jenkins_master_build_custom_images | default(true) and not (jenkins_cleanup_preserve_images | default(false)) %}
-      Images Removed: {{ orphaned_teams | length }} custom images
+      Images Removed: {{ (orphaned_teams | default([])) | length }} custom images
       {% endif %}
       {% endif %}
       ====================================

@@ -48,6 +48,11 @@
   import_tasks: monitoring.yml
   tags: ['monitoring', 'vip', 'ha', 'scripts', 'keepalived']
 
+# Phase 4: Team environment synchronization
+- name: Sync team environments with HAProxy
+  import_tasks: sync-team-environments.yml
+  tags: ['sync', 'sync-team-environments', 'blue-green']
+
 - name: HAProxy High Availability v2 deployment complete
   debug:
     msg: |

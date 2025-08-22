@@ -5,7 +5,7 @@
 # Environment identification
 deployment_environment: "local"
 environment_tier: "dev"
-deployment_mode: "devcontainer"  # Changed to devcontainer for better container compatibility
+deployment_mode: "local"  # Local development mode for localhost connectivity
 
 # Local development versions
 jenkins_version: "2.426.1"

@@ -100,7 +100,7 @@ monitoring_wildcard_domain: "*.devops.example.com"
 jenkins_teams:
   - team_name: "devops"
     blue_green_enabled: true
-    active_environment: "blue"
+    active_environment: "green"
     ports:
       web: 8080
       agent: 50000

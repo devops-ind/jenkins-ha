@@ -50,7 +50,7 @@
           "DNS:" + (jenkins_domain | default('devops.local')),
           "DNS:jenkins." + (jenkins_domain | default('devops.local'))
         ] +
-        (jenkins_teams | default([]) | map('extract', ['team_name']) | map('regex_replace', '^(.*)$', 'DNS:\\1jenkins.' + (jenkins_domain | default('devops.local'))) | list) +
+        (jenkins_teams | default([]) | map(attribute='team_name') | map('regex_replace', '^(.*)$', 'DNS:\\1jenkins.' + (jenkins_domain | default('devops.local'))) | list) +
         [
           "DNS:prometheus." + (jenkins_domain | default('devops.local')),
           "DNS:grafana." + (jenkins_domain | default('devops.local')), 
@@ -155,7 +155,7 @@
         [
           "127.0.0.1 jenkins." + (jenkins_domain | default('devops.local'))
         ] +
-        (jenkins_teams | default([]) | map('extract', ['team_name']) | map('regex_replace', '^(.*)$', '127.0.0.1 \\1jenkins.' + (jenkins_domain | default('devops.local'))) | list) +
+        (jenkins_teams | default([]) | map(attribute='team_name') | map('regex_replace', '^(.*)$', '127.0.0.1 \\1jenkins.' + (jenkins_domain | default('devops.local'))) | list) +
         [
           "127.0.0.1 prometheus." + (jenkins_domain | default('devops.local')),
           "127.0.0.1 grafana." + (jenkins_domain | default('devops.local')),

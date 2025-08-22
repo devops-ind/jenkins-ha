@@ -48,6 +48,45 @@
   import_tasks: deploy-and-monitor.yml
   tags: ['blue-green', 'deploy', 'monitor', 'health', 'verify']
 
+# Phase 3.5: Blue-green deployment synchronization (ensures containers match configuration)
+- name: Blue-green deployment synchronization phase
+  import_tasks: blue-green-sync.yml
+  when: jenkins_teams_config is defined and jenkins_teams_config | length > 0
+  tags: ['blue-green-sync', 'sync', 'containers', 'fix']
+
+# Phase 3.6: Enhanced health checks with blue-green port logic fixes
+- name: Enhanced health checks phase (fixes connection issues)
+  import_tasks: fixed-health-checks.yml
+  when: jenkins_teams_config is defined and jenkins_teams_config | length > 0
+  tags: ['health-fix', 'health', 'verify', 'fix']
+
+# Phase 4: Update HAProxy configuration for blue-green environment changes
+- name: Notify HAProxy of team environment changes
+  block:
+    - name: Trigger HAProxy configuration regeneration
+      template:
+        src: ../high-availability-v2/templates/haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+        backup: yes
+        owner: root
+        group: "{{ haproxy_user | default('haproxy') }}"
+        mode: '0644'
+      become: yes
+      # Note: HAProxy will be synced separately in high-availability-v2 role
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['load_balancers'] | default([]) }}"
+      when: 
+        - groups['load_balancers'] is defined
+        - groups['load_balancers'] | length > 0
+      vars:
+        haproxy_effective_teams: "{{ jenkins_teams_config }}"
+        
+    - name: Force HAProxy handlers to run immediately
+      meta: flush_handlers
+      
+  when: jenkins_teams_config is defined and jenkins_teams_config | length > 0
+  tags: ['blue-green', 'haproxy-sync']
+
 - name: Jenkins Master v2 deployment complete
   debug:
     msg: |
@@ -61,7 +100,7 @@
       ====================================================
       Access your Jenkins instances:
       {% for team in jenkins_teams_config %}
-      {{ team.team_name }}: http://{{ jenkins_verification_host }}:{{ team.ports.web }}
+      {{ team.team_name }}: http://{{ jenkins_verification_host }}:{% if team.active_environment | default('blue') == 'blue' %}{{ team.ports.web }}{% else %}{{ team.ports.web + 100 }}{% endif %}
       {% endfor %}
       ====================================================
   tags: ['always']

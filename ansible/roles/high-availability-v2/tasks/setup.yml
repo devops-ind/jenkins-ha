@@ -4,6 +4,19 @@
 # Total: ~194 lines → ~150 lines (23% reduction)
 
 # ====================================
+# SYSTEM DEPENDENCIES
+# ====================================
+
+- name: Install HAProxy Runtime API dependencies
+  package:
+    name:
+      - socat  # Required for HAProxy admin socket communication
+      - curl   # Used by health check scripts
+    state: present
+  become: yes
+  tags: ['packages', 'dependencies']
+
+# ====================================
 # VALIDATION PHASE
 # ====================================
 
@@ -93,16 +106,10 @@
   block:
     - name: Validate Docker installation and service
       block:
-        - name: Check Docker availability
-          command: docker --version
-          register: docker_version_check
-          failed_when: docker_version_check.rc != 0
-          changed_when: false
-
-        - name: Validate Docker daemon is running
-          command: docker info
-          register: docker_info_check
-          failed_when: docker_info_check.rc != 0
+        - name: Validate Docker is functional (essential check)
+          command: docker ps
+          register: docker_functional_check
+          failed_when: docker_functional_check.rc != 0
           changed_when: false
 
     - name: Create HAProxy system user and group

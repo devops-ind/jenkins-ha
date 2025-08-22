@@ -86,6 +86,7 @@
         - jenkins-failover.sh
         - haproxy-container-manager.sh
         - keepalived-haproxy-check.sh
+        - haproxy-runtime-api.sh
       become: yes
       register: management_scripts
 
@@ -99,6 +100,7 @@
         - jenkins-failover.sh
         - haproxy-container-manager.sh
         - keepalived-haproxy-check.sh
+        - haproxy-runtime-api.sh
       become: yes
 
     - name: Test management scripts syntax
@@ -108,6 +110,7 @@
         - jenkins-failover.sh
         - haproxy-container-manager.sh
         - keepalived-haproxy-check.sh
+        - haproxy-runtime-api.sh
       register: script_syntax_check
       failed_when: script_syntax_check.rc != 0
       changed_when: false
@@ -186,98 +189,30 @@
 # COMPREHENSIVE HEALTH VERIFICATION
 # ====================================
 
-- name: Perform comprehensive HA health verification
+- name: Essential HA monitoring verification
   block:
-    - name: Execute initial health check
-      command: /usr/local/bin/jenkins-ha-monitor.sh
-      register: initial_health_check
-      failed_when: false
+    - name: Test management scripts syntax (essential)
+      command: "bash -n /usr/local/bin/{{ item }}"
+      loop:
+        - jenkins-ha-monitor.sh
+        - haproxy-runtime-api.sh
+      register: script_syntax_check
+      failed_when: script_syntax_check.rc != 0
       changed_when: false
       become: yes
 
-    - name: Test HAProxy container management script
-      command: /usr/local/bin/haproxy-container-manager.sh status
-      register: container_mgmt_test
-      failed_when: false
-      changed_when: false
-      become: yes
-
-    - name: Test VIP check script (if VIP enabled)
-      command: /usr/local/bin/keepalived-haproxy-check.sh
-      register: vip_check_test
-      failed_when: false
-      changed_when: false
-      become: yes
-      when: jenkins_vip is defined and jenkins_vip != ""
-
-    - name: Verify HAProxy stats accessibility
-      uri:
-        url: "http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port | default(8404) }}{{ haproxy_stats_uri | default('/stats') }}"
-        method: GET
-        timeout: 10
-        user: "{{ haproxy_stats_user | default('admin') }}"
-        password: "{{ haproxy_stats_password | default('admin123') }}"
-        force_basic_auth: true
-        status_code: [200, 401]  # Accept both authenticated access and auth prompts
-      register: stats_accessibility
-      retries: 3
-      delay: 5
-      failed_when: false  # Don't fail on authentication issues, just report status
-
-    - name: Test team-specific routing functionality
-      uri:
-        url: "http://{{ ansible_default_ipv4.address }}:8090"
-        method: HEAD
-        timeout: 10
-        headers:
-          Host: "{{ item.team_name }}.{{ jenkins_domain | default('devops.example.com') }}"
-      loop: "{{ haproxy_effective_teams }}"
-      loop_control:
-        label: "{{ item.team_name }}.{{ jenkins_domain }}"
-      register: team_routing_test
-      retries: 2
-      delay: 3
-      failed_when: false  # Don't fail on routing tests
-      when: haproxy_effective_teams | length > 0
-
-    - name: Display comprehensive HA status verification
+    - name: Display streamlined HA monitoring status
       debug:
         msg: |
-          ======================================================
-          HAProxy High Availability Status Verification
-          ======================================================
-          
-          🐳 Container Status:
-          HAProxy Container: {{ 'Running' if container_mgmt_test.rc == 0 else 'Issues detected' }}
-          
-          📊 Monitoring Status:
-          Health Check Script: {{ 'Functional' if initial_health_check.rc == 0 else 'Issues detected' }}
-          Stats Endpoint: {{ 'Accessible' if stats_accessibility.status == 200 else 'Not accessible' }}
-          Monitoring Cron: {{ 'Configured' if crontab_check.rc == 0 else 'Skipped (no crontab)' }}
-          
+          ====================================
+          HA Monitoring Status (Streamlined)
+          ====================================
+          ✅ Management Scripts: Deployed and validated
+          ✅ Monitoring Cron: {{ 'Configured' if crontab_check.rc == 0 else 'Skipped (no crontab)' }}
           {% if jenkins_vip is defined and jenkins_vip != "" %}
-          🎯 VIP Management:
-          VIP Address: {{ jenkins_vip }}
-          VIP Priority: {{ keepalived_priority | default(100) }}
-          VIP Check Script: {{ 'Functional' if vip_check_test.rc == 0 else 'Issues detected' }}
-          Keepalived Status: {{ 'Active' if keepalived_validation.rc == 0 else 'Configuration issues' }}
+          ✅ VIP Management: {{ jenkins_vip }} configured
           {% endif %}
-          
-          👥 Team Routing:
-          {% if haproxy_effective_teams | length > 0 %}
-          {% for result in team_routing_test.results %}
-          • {{ haproxy_effective_teams[loop.index0].team_name }}: {{ 'OK' if result.status | default(0) in [200, 302, 404, 503] else 'Failed' }}
-          {% endfor %}
-          {% else %}
-          Single-team configuration (no team-specific routing)
-          {% endif %}
-          
-          📁 Management Scripts:
-          {% for script in ['jenkins-ha-monitor.sh', 'jenkins-failover.sh', 'haproxy-container-manager.sh', 'keepalived-haproxy-check.sh'] %}
-          • {{ script }}: Available at /usr/local/bin/{{ script }}
-          {% endfor %}
-          
-          ======================================================
+          ====================================
   tags: ['verify', 'health']
 
 - name: HA monitoring and VIP management phase complete

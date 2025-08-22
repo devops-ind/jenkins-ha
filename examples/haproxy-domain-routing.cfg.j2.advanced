@@ -1,0 +1,163 @@
+# Enhanced Domain-Based Routing Configuration for HAProxy
+# Supports multiple domain patterns and advanced routing rules
+
+# =============================================================================
+# ENHANCED FRONTEND CONFIGURATION - Advanced Domain Routing
+# =============================================================================
+
+{% if ssl_enabled | default(false) %}
+frontend jenkins_https_enhanced
+    bind {{ vip_address | default('*') }}:443 ssl crt {{ ssl_certificate_path }}
+{% else %}
+frontend jenkins_http_enhanced
+    bind {{ vip_address | default('*') }}:8090
+{% endif %}
+    
+    # Advanced header capture
+    capture request header Host len 64
+    capture request header User-Agent len 64
+    capture request header X-Forwarded-For len 64
+    
+    # Security headers
+    http-response set-header X-Content-Type-Options nosniff
+    http-response set-header X-Frame-Options SAMEORIGIN
+    http-response set-header X-XSS-Protection "1; mode=block"
+    http-response set-header Strict-Transport-Security "max-age=31536000; includeSubDomains" if { ssl_fc }
+    
+    # Request preprocessing
+    http-request set-header X-Forwarded-Proto https if { ssl_fc }
+    http-request set-header X-Forwarded-Proto http if !{ ssl_fc }
+    http-request set-header X-Real-IP %[src]
+    
+    # =============================================================================
+    # DOMAIN ROUTING RULES - Multiple Patterns Supported
+    # =============================================================================
+    
+    # 1. SUBDOMAIN ROUTING (team.jenkins.domain.com)
+    {% if jenkins_teams is defined and jenkins_teams | length > 0 %}
+    {% for team in jenkins_teams %}
+    use_backend jenkins_backend_{{ team.team_name }} if { hdr_beg(host) -i {{ team.team_name }}.{{ jenkins_domain }} }
+    {% endfor %}
+    {% endif %}
+    
+    # 2. PATH-BASED ROUTING WITH DOMAIN (/team/jenkins on domain.com)
+    {% if domain_path_routing_enabled | default(false) %}
+    {% for team in jenkins_teams | default([]) %}
+    use_backend jenkins_backend_{{ team.team_name }} if { hdr(host) -i {{ jenkins_domain }} } { path_beg /{{ team.team_name }}/ }
+    {% endfor %}
+    {% endif %}
+    
+    # 3. ENVIRONMENT-SPECIFIC DOMAINS (blue-team.jenkins.domain.com, green-team.jenkins.domain.com)
+    {% if environment_domain_routing | default(false) %}
+    {% for team in jenkins_teams | default([]) %}
+    use_backend jenkins_backend_{{ team.team_name }}_blue if { hdr_beg(host) -i blue-{{ team.team_name }}.{{ jenkins_domain }} }
+    use_backend jenkins_backend_{{ team.team_name }}_green if { hdr_beg(host) -i green-{{ team.team_name }}.{{ jenkins_domain }} }
+    {% endfor %}
+    {% endif %}
+    
+    # 4. CUSTOM DOMAIN MAPPING (completely different domains)
+    {% if custom_domain_mapping is defined %}
+    {% for mapping in custom_domain_mapping %}
+    use_backend jenkins_backend_{{ mapping.team }} if { hdr(host) -i {{ mapping.domain }} }
+    {% endfor %}
+    {% endif %}
+    
+    # 5. REGEX-BASED DOMAIN ROUTING (advanced patterns)
+    {% if regex_domain_routing is defined %}
+    {% for rule in regex_domain_routing %}
+    use_backend jenkins_backend_{{ rule.backend }} if { hdr_reg(host) {{ rule.pattern }} }
+    {% endfor %}
+    {% endif %}
+    
+    # 6. API-SPECIFIC ROUTING (api.jenkins.domain.com -> team based on header/path)
+    {% if api_domain_routing | default(false) %}
+    # API routing with team selection via headers or path
+    use_backend jenkins_backend_api if { hdr_beg(host) -i api.{{ jenkins_domain }} }
+    {% endif %}
+    
+    # 7. WILDCARD FALLBACK ROUTING (catch-all for *.jenkins.domain.com)
+    {% if wildcard_fallback_enabled | default(true) %}
+    use_backend jenkins_backend_default if { hdr_end(host) -i .{{ jenkins_domain }} }
+    {% endif %}
+    
+    # 8. DEFAULT DOMAIN ROUTING (exact domain match)
+    use_backend jenkins_backend_default if { hdr(host) -i {{ jenkins_domain }} }
+    
+    # Default backend for unmatched requests
+    default_backend jenkins_backend_maintenance
+
+# =============================================================================
+# ENHANCED BACKEND CONFIGURATIONS
+# =============================================================================
+
+{% if environment_domain_routing | default(false) %}
+# Environment-specific backends for blue-green routing
+{% for team in jenkins_teams | default([]) %}
+backend jenkins_backend_{{ team.team_name }}_blue
+    balance roundrobin
+    option httpchk GET /login
+    {% for host in groups['jenkins_masters'] | default([]) %}
+    {% if team.active_environment | default('blue') == 'blue' %}
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check
+    {% else %}
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-blue {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 100 }} check
+    {% endif %}
+    {% endfor %}
+    http-response set-header X-Jenkins-Team {{ team.team_name }}
+    http-response set-header X-Jenkins-Environment blue
+
+backend jenkins_backend_{{ team.team_name }}_green
+    balance roundrobin
+    option httpchk GET /login
+    {% for host in groups['jenkins_masters'] | default([]) %}
+    {% if team.active_environment | default('blue') == 'green' %}
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check
+    {% else %}
+    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-green {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 100 }} check
+    {% endif %}
+    {% endfor %}
+    http-response set-header X-Jenkins-Team {{ team.team_name }}
+    http-response set-header X-Jenkins-Environment green
+{% endfor %}
+{% endif %}
+
+{% if api_domain_routing | default(false) %}
+# API Gateway backend with intelligent team routing
+backend jenkins_backend_api
+    balance roundrobin
+    option httpchk GET /api/json
+    
+    # Route to team backends based on path or headers
+    {% for team in jenkins_teams | default([]) %}
+    use-server {{ team.team_name }}-api if { path_beg /api/{{ team.team_name }}/ }
+    server {{ team.team_name }}-api {{ ansible_default_ipv4.address }}:{{ team.ports.web | default(8080) }} check
+    {% endfor %}
+    
+    # Default API routing
+    server api-default {{ ansible_default_ipv4.address }}:8080 check
+    
+    http-response set-header X-Jenkins-API-Gateway true
+{% endif %}
+
+# Maintenance backend for unmatched requests
+backend jenkins_backend_maintenance
+    http-request reject if TRUE
+    errorfile 503 /etc/haproxy/errors/503-maintenance.http
+
+# =============================================================================
+# DOMAIN ROUTING STATISTICS
+# =============================================================================
+
+listen domain_routing_stats
+    bind {{ vip_address | default('*') }}:{{ haproxy_domain_stats_port | default('8405') }}
+    stats enable
+    stats uri /domain-stats
+    stats refresh 15s
+    stats show-legends
+    stats realm "HAProxy Domain Routing Statistics"
+    {% if haproxy_stats_user is defined and haproxy_stats_password is defined %}
+    stats auth {{ haproxy_stats_user }}:{{ haproxy_stats_password }}
+    {% endif %}
+    
+    # Domain-specific metrics
+    stats admin if TRUE

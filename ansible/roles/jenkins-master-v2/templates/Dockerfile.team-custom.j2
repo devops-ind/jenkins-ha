@@ -151,11 +151,11 @@ ENV JENKINS_OPTS="${JENKINS_OPTS} \
                   --sessionEviction={{ item.session_eviction | default('3600') }}"
 
 # Expose team-specific ports
-EXPOSE {{ item.ports.web | default('8080') }} {{ item.ports.agent | default('50000') }}
+EXPOSE {{ jenkins_master_port }} {{ jenkins_jnlp_port }}
 
 # Health check with team-specific port
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5m --retries=3 \
-    CMD curl -f http://localhost:{{ item.ports.web | default('8080') }}/login || exit 1
+    CMD curl -f http://localhost:{{ jenkins_master_port }}/login || exit 1
 
 # Team-specific labels for container management
 LABEL jenkins.team="{{ item.team_name }}" \

@@ -1,0 +1,50 @@
+---
+# Test playbook to update HAProxy configuration
+- name: Test HAProxy configuration update
+  hosts: centos9-vm
+  become: yes
+  gather_facts: yes
+  vars:
+    jenkins_ha_enabled: true
+  tasks:
+    - name: Generate HAProxy configuration
+      template:
+        src: ansible/roles/high-availability-v2/templates/haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+        backup: yes
+        owner: root
+        group: haproxy
+        mode: '0644'
+      register: haproxy_config_updated
+      
+    - name: Restart HAProxy container if config changed
+      shell: |
+        docker stop jenkins-haproxy || true
+        docker rm jenkins-haproxy || true
+        docker run -d --name jenkins-haproxy \
+          --network=host \
+          --restart=unless-stopped \
+          -v /etc/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro \
+          haproxy:2.8
+      when: haproxy_config_updated.changed
+      
+    - name: Wait for HAProxy to be ready
+      pause:
+        seconds: 10
+        
+    - name: Verify HAProxy is running
+      shell: docker ps --filter "name=jenkins-haproxy" --format "table {% raw %}{{.Names}}\t{{.Status}}\t{{.Ports}}{% endraw %}"
+      register: haproxy_status
+      
+    - name: Display HAProxy status
+      debug:
+        msg: "{{ haproxy_status.stdout_lines }}"
+        
+    - name: Show relevant HAProxy backend configuration
+      shell: docker exec jenkins-haproxy grep -A 10 "backend jenkins_backend_devops" /usr/local/etc/haproxy/haproxy.cfg
+      register: backend_config
+      failed_when: false
+      
+    - name: Display backend configuration
+      debug:
+        msg: "{{ backend_config.stdout_lines }}"

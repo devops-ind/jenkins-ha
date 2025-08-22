@@ -166,7 +166,7 @@
           active: "true"
           deployment_mode: "resource-optimized"
         healthcheck:
-          test: ["CMD-SHELL", "pgrep -f jenkins.war > /dev/null || exit 1"]
+          test: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_master_port }}/login"]
           interval: 30s
           timeout: 10s
           retries: 3
@@ -179,21 +179,15 @@
           {%- else -%}
             {{ jenkins_master_image_registry }}/{{ jenkins_master_image_name }}:{{ jenkins_master_image_tag }}
           {%- endif -%}
-        _active_ports: >-
-          {%- if item.active_environment | default('blue') == 'blue' -%}
-            [
-              "{{ item.ports.web | string }}:{{ jenkins_master_port | string }}",
-              "{{ item.ports.agent | string }}:{{ jenkins_jnlp_port | string }}"
-            ]
-          {%- else -%}
-            [
-              "{{ (item.ports.web + 100) | string }}:{{ jenkins_master_port | string }}",
-              "{{ (item.ports.agent + 100) | string }}:{{ jenkins_jnlp_port | string }}"
-            ]
-          {%- endif -%}
+        _active_ports:
+          - "{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web }}{% else %}{{ item.ports.web + 100 }}{% endif %}:{{ jenkins_master_port }}"
+          - "{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.agent }}{% else %}{{ item.ports.agent + 100 }}{% endif %}:{{ jenkins_jnlp_port }}"
         _active_volumes:
+          # MAIN JENKINS HOME: Environment-specific base with smart sharing via symlinks
           - "jenkins-{{ item.team_name }}-{{ item.active_environment | default('blue') }}-home:{{ jenkins_master_container_home }}"
-          - "jenkins-{{ item.team_name }}-shared:{{ jenkins_master_shared_path }}"
+          # SHARED STORAGE ACCESS: Mount shared storage to allow data synchronization
+          - "{{ shared_storage_path | default('/opt/jenkins-shared') }}:/shared:rw"
+          # DOCKER SOCKET: Read-only access for Docker-in-Docker agents
           - "{{ jenkins_master_socket_path_docker }}:{{ jenkins_master_socket_path_docker }}:ro"
         _log_options: "{{ {'max-size': jenkins_master_log_max_size, 'max-file': jenkins_master_log_max_files} if jenkins_master_log_driver == 'json-file' else {} }}"
       loop: "{{ jenkins_teams_config }}"
