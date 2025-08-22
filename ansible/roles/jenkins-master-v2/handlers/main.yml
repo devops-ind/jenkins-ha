@@ -53,3 +53,10 @@
       loop_control:
         label: "{{ jenkins_master_custom_image_prefix }}-{{ item.team_name }}:{{ jenkins_master_image_tag }}"
       when: jenkins_master_build_custom_images | default(true)
+
+- name: reload haproxy config
+  command: docker exec jenkins-haproxy haproxy -f /usr/local/etc/haproxy/haproxy.cfg -p /run/haproxy/haproxy.pid -sf $(cat /run/haproxy/haproxy.pid 2>/dev/null || echo "")
+  register: reload_result
+  failed_when: reload_result.rc != 0
+  ignore_errors: true
+  become: yes

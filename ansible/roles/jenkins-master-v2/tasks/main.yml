@@ -72,7 +72,7 @@
         group: "{{ haproxy_user | default('haproxy') }}"
         mode: '0644'
       become: yes
-      # Note: HAProxy will be synced separately in high-availability-v2 role
+      notify: reload haproxy config
       delegate_to: "{{ item }}"
       loop: "{{ groups['load_balancers'] | default([]) }}"
       when: 
