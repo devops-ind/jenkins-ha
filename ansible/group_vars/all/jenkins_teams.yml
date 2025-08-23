@@ -1,7 +1,7 @@
 ---
 jenkins_teams:
   - team_name: devops
-    active_environment: blue
+    active_environment: green
     blue_green_enabled: true
     ports:
       web: 8080

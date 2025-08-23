@@ -8,7 +8,7 @@ security_scanning_enabled: true
 jenkins_security_enabled: true
 
 # SSL/TLS Configuration
-ssl_enabled: true
+ssl_enabled: false
 ssl_force_regenerate: false
 ssl_auto_renewal_enabled: true
 ssl_backup_enabled: true
@@ -34,6 +34,7 @@ ssl_default_validity_days: 365
 ssl_renewal_threshold_days: 30
 ssl_generate_dh_params: true
 ssl_dh_params_path: "/etc/ssl/dhparam.pem"
+vault_ca_key_password: ""
 
 # SSL Services Configuration
 ssl_services:

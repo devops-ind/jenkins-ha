@@ -463,7 +463,7 @@ docker logs jenkins-haproxy
 ansible centos9-vm -i inventories/production/hosts.yml -m shell -a "docker exec jenkins-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg"
 
 # Verify services
-ansible centos9-vm -i inventories/production/hosts.yml -m uri -a "url=http://192.168.188.142:8090 status_code=200,502,503"
+ansible centos9-vm -i inventories/production/hosts.yml -m uri -a "url=http://192.168.1.10:8090 status_code=200,502,503"
 ```
 
 ---
@@ -492,12 +492,12 @@ ansible-playbook -i inventories/production/hosts.yml site.yml --extra-vars "jenk
 **Health Check Commands:**
 ```bash
 # Jenkins service verification
-ansible centos9-vm -i inventories/production/hosts.yml -m uri -a "url=http://192.168.188.142:8080 status_code=200,403"
-ansible centos9-vm -i inventories/production/hosts.yml -m uri -a "url=http://192.168.188.142:8081 status_code=200,403"
+ansible centos9-vm -i inventories/production/hosts.yml -m uri -a "url=http://192.168.1.10:8080 status_code=200,403"
+ansible centos9-vm -i inventories/production/hosts.yml -m uri -a "url=http://192.168.1.10:8081 status_code=200,403"
 
 # HAProxy verification
-ansible centos9-vm -i inventories/production/hosts.yml -m uri -a "url=http://192.168.188.142:8090 status_code=200,502,503"  
-ansible centos9-vm -i inventories/production/hosts.yml -m uri -a "url=http://192.168.188.142:8404/stats status_code=200,401"
+ansible centos9-vm -i inventories/production/hosts.yml -m uri -a "url=http://192.168.1.10:8090 status_code=200,502,503"  
+ansible centos9-vm -i inventories/production/hosts.yml -m uri -a "url=http://192.168.1.10:8404/stats status_code=200,401"
 
 # Container status verification
 ansible centos9-vm -i inventories/production/hosts.yml -m shell -a "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'"
@@ -505,10 +505,10 @@ ansible centos9-vm -i inventories/production/hosts.yml -m shell -a "docker ps --
 
 **Verification Results:**
 ```
-✅ DevOps Jenkins: http://192.168.188.142:8080 (Status: 200 OK)
-✅ Developer Jenkins: http://192.168.188.142:8081 (Status: 200 OK)
-✅ HAProxy Load Balancer: http://192.168.188.142:8090 (Status: 200 OK)
-✅ HAProxy Stats (secured): http://192.168.188.142:8404/stats (Status: 401)
+✅ DevOps Jenkins: http://192.168.1.10:8080 (Status: 200 OK)
+✅ Developer Jenkins: http://192.168.1.10:8081 (Status: 200 OK)
+✅ HAProxy Load Balancer: http://192.168.1.10:8090 (Status: 200 OK)
+✅ HAProxy Stats (secured): http://192.168.1.10:8404/stats (Status: 401)
 ✅ Multi-team routing: Working correctly
 ✅ Containers: All healthy and running
 ```
@@ -772,19 +772,19 @@ roles:
 ### Monitoring and Alerting
 
 **Service URLs:**
-- Jenkins DevOps: http://192.168.188.142:8080
-- Jenkins Developer: http://192.168.188.142:8081  
-- HAProxy Stats: http://192.168.188.142:8404/stats (authenticated)
-- Load Balancer: http://192.168.188.142:8090
+- Jenkins DevOps: http://192.168.1.10:8080
+- Jenkins Developer: http://192.168.1.10:8081  
+- HAProxy Stats: http://192.168.1.10:8404/stats (authenticated)
+- Load Balancer: http://192.168.1.10:8090
 
 **Health Check Endpoints:**
 ```bash
 # Jenkins API health
-curl -f http://192.168.188.142:8080/api/json
-curl -f http://192.168.188.142:8081/api/json
+curl -f http://192.168.1.10:8080/api/json
+curl -f http://192.168.1.10:8081/api/json
 
 # HAProxy health  
-curl -f http://192.168.188.142:8090
+curl -f http://192.168.1.10:8090
 ```
 
 ---
@@ -1661,7 +1661,7 @@ Status code was 401 and not [200]: HTTP Error 401: Unauthorized
 **Verification Commands**:
 ```bash
 # Test with authentication
-curl -u admin:admin123 http://192.168.188.142:8404/stats
+curl -u admin:admin123 http://192.168.1.10:8404/stats
 
 # Check HAProxy configuration
 docker exec jenkins-haproxy cat /usr/local/etc/haproxy/haproxy.cfg | grep -A 5 "stats auth"
@@ -1733,8 +1733,8 @@ Status code was -1: Request failed: <urlopen error [Errno 111] Connection refuse
 **Verification Commands**:
 ```bash
 # Test team routing with proper headers
-curl -H "Host: devops.192.168.188.142" -I http://192.168.188.142:8090
-curl -H "Host: developer.192.168.188.142" -I http://192.168.188.142:8090
+curl -H "Host: devops.192.168.1.10" -I http://192.168.1.10:8090
+curl -H "Host: developer.192.168.1.10" -I http://192.168.1.10:8090
 
 # Check HAProxy backend status
 echo "show stat" | socat stdio /var/lib/haproxy/stats
@@ -1788,8 +1788,8 @@ validate_environment() {
 **Verification Commands**:
 ```bash
 # Manual health checks
-curl -f http://192.168.188.142:8080/api/json
-curl -f http://192.168.188.142:8081/api/json
+curl -f http://192.168.1.10:8080/api/json
+curl -f http://192.168.1.10:8081/api/json
 
 # Check container health
 docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
@@ -2761,7 +2761,7 @@ This final phase transformed a fundamentally broken architecture into a high-per
 
 ### Step 7.3: Production Deployment Validation
 
-**Validation Results on CentOS 9 Production VM (192.168.188.142):**
+**Validation Results on CentOS 9 Production VM (192.168.1.10):**
 ```
 TASK [jenkins-master-v2 : Validate basic team configuration] 
 ✅ Configuration validation passed for team devops
@@ -2824,7 +2824,7 @@ centos9-vm: ok=32 changed=0 unreachable=0 failed=0 skipped=11 rescued=0 ignored=
 - **Compliant**: Enterprise monitoring, backup, and disaster recovery
 
 **Final Infrastructure Status:**
-- **Deployment Target**: CentOS 9 Production VM (192.168.188.142)
+- **Deployment Target**: CentOS 9 Production VM (192.168.1.10)
 - **Teams Deployed**: devops (port 8080), dev-qa (port 8089)
 - **Cache Strategy**: 10 persistent volumes per team for optimal performance
 - **Data Architecture**: Shared volume integration with corrected workspace paths

@@ -248,7 +248,7 @@ EOF
 
 # Main execution
 main() {
-    local target_host="${1:-192.168.188.142}"
+    local target_host="${1:-192.168.1.10}"
     
     log "Starting Blue-Green Deployment Synchronization Fix"
     log "Target Host: $target_host"

@@ -87,7 +87,7 @@ Added new deployment phases:
 
 ## Verification Results
 
-### Test Environment: CentOS 9 VM (192.168.188.142)
+### Test Environment: CentOS 9 VM (192.168.1.10)
 
 **Before Fix:**
 ```bash
@@ -95,10 +95,10 @@ Added new deployment phases:
 jenkins-devops-blue    Up (port 8080)    ❌ Wrong environment
 
 # HAProxy configuration  
-server devops-centos9-vm-active 192.168.188.142:8180    ❌ No service on 8180
+server devops-centos9-vm-active 192.168.1.10:8180    ❌ No service on 8180
 
 # End-to-end test
-curl -H 'Host: jenkins.devops.example.com' http://192.168.188.142:8000/login
+curl -H 'Host: jenkins.devops.example.com' http://192.168.1.10:8000/login
 # Result: HTTP 503 Service Unavailable    ❌
 ```
 
@@ -108,10 +108,10 @@ curl -H 'Host: jenkins.devops.example.com' http://192.168.188.142:8000/login
 jenkins-devops-green   Up (port 8180)    ✅ Correct environment
 
 # HAProxy configuration
-server devops-centos9-vm-active 192.168.188.142:8180    ✅ Service available
+server devops-centos9-vm-active 192.168.1.10:8180    ✅ Service available
 
 # End-to-end test
-curl -H 'Host: jenkins.devops.example.com' http://192.168.188.142:8000/login
+curl -H 'Host: jenkins.devops.example.com' http://192.168.1.10:8000/login
 # Result: HTTP 200 OK    ✅
 ```
 
@@ -119,15 +119,15 @@ curl -H 'Host: jenkins.devops.example.com' http://192.168.188.142:8000/login
 
 ```bash
 # Direct container access
-curl http://192.168.188.142:8180/login
+curl http://192.168.1.10:8180/login
 # Result: HTTP 200 OK    ✅
 
 # HAProxy routing
-curl -H 'Host: jenkins.devops.example.com' http://192.168.188.142:8000/login
+curl -H 'Host: jenkins.devops.example.com' http://192.168.1.10:8000/login
 # Result: HTTP 200 OK    ✅
 
 # Agent port connectivity
-nc -z 192.168.188.142 50100
+nc -z 192.168.1.10 50100
 # Result: Connection successful    ✅
 ```
 
@@ -153,7 +153,7 @@ ansible-playbook -i ansible/inventories/production/hosts.yml \
 
 ```bash
 # Run comprehensive fix
-./scripts/fix-blue-green-deployment.sh 192.168.188.142
+./scripts/fix-blue-green-deployment.sh 192.168.1.10
 ```
 
 ## Architecture Impact
@@ -179,7 +179,7 @@ ansible-playbook -i ansible/inventories/production/hosts.yml \
 for team in devops ma ba tw; do
   echo "Testing $team team:"
   curl -H "Host: ${team}jenkins.devops.example.com" \
-    http://192.168.188.142:8000/login
+    http://192.168.1.10:8000/login
 done
 ```
 
@@ -231,7 +231,7 @@ docker exec jenkins-haproxy cat /usr/local/etc/haproxy/haproxy.cfg | grep -A 10 
 docker ps --filter 'name=jenkins-' --format 'table {{.Names}}\t{{.Ports}}'
 
 # 3. Test direct container access
-curl http://192.168.188.142:<expected_port>/login
+curl http://192.168.1.10:<expected_port>/login
 ```
 
 **Issue:** Health checks fail with connection refused

@@ -27,17 +27,17 @@ grep jenkins /etc/hosts
 **For DNS Issues:**
 ```bash
 # Add to DNS provider
-devops.jenkins.example.com    A    192.168.188.142
+devops.jenkins.example.com    A    192.168.1.10
 
 # Or use wildcard
-*.jenkins.example.com         A    192.168.188.142
+*.jenkins.example.com         A    192.168.1.10
 ```
 
 **For Local Testing:**
 ```bash
 # Add to /etc/hosts
-echo "192.168.188.142 devops.jenkins.example.com" | sudo tee -a /etc/hosts
-echo "192.168.188.142 prometheus.jenkins.example.com" | sudo tee -a /etc/hosts
+echo "192.168.1.10 devops.jenkins.example.com" | sudo tee -a /etc/hosts
+echo "192.168.1.10 prometheus.jenkins.example.com" | sudo tee -a /etc/hosts
 ```
 
 **Clear DNS Cache:**
@@ -58,7 +58,7 @@ ipconfig /flushdns
 
 #### Symptoms:
 ```bash
-$ curl -H "Host: devops.jenkins.example.com" http://192.168.188.142:8000/login
+$ curl -H "Host: devops.jenkins.example.com" http://192.168.1.10:8000/login
 HTTP/1.1 502 Bad Gateway
 ```
 
@@ -72,7 +72,7 @@ docker logs jenkins-haproxy --tail 20
 docker exec jenkins-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
 
 # Test HAProxy stats
-curl -u admin:admin123 http://192.168.188.142:8404/stats
+curl -u admin:admin123 http://192.168.1.10:8404/stats
 ```
 
 #### Solutions:
@@ -106,9 +106,9 @@ docker run --rm -v /etc/haproxy/haproxy.cfg:/tmp/haproxy.cfg:ro \
 docker ps | grep jenkins
 
 # Test direct backend access
-curl http://192.168.188.142:8080/login  # DevOps blue
-curl http://192.168.188.142:8081/login  # Developer blue
-curl http://192.168.188.142:9090/graph  # Prometheus
+curl http://192.168.1.10:8080/login  # DevOps blue
+curl http://192.168.1.10:8081/login  # Developer blue
+curl http://192.168.1.10:9090/graph  # Prometheus
 ```
 
 ---
@@ -169,8 +169,8 @@ vim ansible/inventories/production/group_vars/all/main.yml
 grep -A 10 "active_environment" ansible/inventories/production/group_vars/all/main.yml
 
 # Test both blue and green ports
-curl http://192.168.188.142:8080/login   # Blue
-curl http://192.168.188.142:8180/login   # Green
+curl http://192.168.1.10:8080/login   # Blue
+curl http://192.168.1.10:8180/login   # Green
 
 # Switch environments if needed
 ansible-playbook -i ansible/inventories/production/hosts.yml \
@@ -194,9 +194,9 @@ HTTP/1.1 502 Bad Gateway
 docker ps | grep -E 'prometheus|grafana|node-exporter'
 
 # Test direct monitoring service access
-curl http://192.168.188.142:9090/graph      # Prometheus
-curl http://192.168.188.142:9300/login      # Grafana  
-curl http://192.168.188.142:9100/metrics    # Node Exporter
+curl http://192.168.1.10:9090/graph      # Prometheus
+curl http://192.168.1.10:9300/login      # Grafana  
+curl http://192.168.1.10:9100/metrics    # Node Exporter
 ```
 
 #### Solutions:
@@ -220,7 +220,7 @@ ansible-playbook -i ansible/inventories/production/hosts.yml \
   ansible/site.yml --tags haproxy,configuration
 
 # Verify monitoring backends in HAProxy stats
-curl -u admin:admin123 http://192.168.188.142:8404/stats | grep -E 'prometheus|grafana|node'
+curl -u admin:admin123 http://192.168.1.10:8404/stats | grep -E 'prometheus|grafana|node'
 ```
 
 **Monitoring Service Configuration Issues:**
@@ -313,11 +313,11 @@ docker exec jenkins-haproxy cat /usr/local/etc/haproxy/haproxy.cfg | grep -A 5 "
 
 ```bash
 # Test from HAProxy container to backends
-docker exec jenkins-haproxy curl -f http://192.168.188.142:8080/login
-docker exec jenkins-haproxy curl -f http://192.168.188.142:9090/api/v1/status/config
+docker exec jenkins-haproxy curl -f http://192.168.1.10:8080/login
+docker exec jenkins-haproxy curl -f http://192.168.1.10:9090/api/v1/status/config
 
 # Test routing with verbose output
-curl -v -H "Host: devops.jenkins.example.com" http://192.168.188.142:8000/login
+curl -v -H "Host: devops.jenkins.example.com" http://192.168.1.10:8000/login
 
 # Check network interfaces and routing
 ip route show
@@ -332,8 +332,8 @@ docker network ls
 docker network inspect bridge
 
 # Verify container connectivity
-docker exec jenkins-haproxy ping -c 3 192.168.188.142
-docker exec jenkins-devops-blue ping -c 3 192.168.188.142
+docker exec jenkins-haproxy ping -c 3 192.168.1.10
+docker exec jenkins-devops-blue ping -c 3 192.168.1.10
 
 # Check container IP addresses
 docker inspect jenkins-haproxy --format='{{.NetworkSettings.IPAddress}}'
@@ -348,7 +348,7 @@ docker inspect jenkins-devops-blue --format='{{.NetworkSettings.IPAddress}}'
 
 ```bash
 # Monitor HAProxy stats in real-time
-watch -n 2 'curl -s -u admin:admin123 http://192.168.188.142:8404/stats | grep -E "devops|developer|jenkins|prometheus|grafana"'
+watch -n 2 'curl -s -u admin:admin123 http://192.168.1.10:8404/stats | grep -E "devops|developer|jenkins|prometheus|grafana"'
 
 # Monitor backend server status
 echo "show stat" | socat stdio /run/haproxy/admin.sock | grep -E "UP|DOWN"
@@ -373,7 +373,7 @@ SERVICES=(
 for service in "${SERVICES[@]}"; do
   IFS=':' read -r domain port path <<< "$service"
   echo -n "Testing $domain: "
-  if curl -s -f -H "Host: $domain" "http://192.168.188.142:$port$path" > /dev/null; then
+  if curl -s -f -H "Host: $domain" "http://192.168.1.10:$port$path" > /dev/null; then
     echo "✅ OK"
   else
     echo "❌ FAILED"
@@ -405,12 +405,12 @@ docker exec jenkins-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
 # Port and Network Testing
 netstat -tlnp | grep -E ':8080|:8081|:8082|:9090|:9300'
 lsof -i :8000
-curl -v -H "Host: devops.jenkins.example.com" http://192.168.188.142:8000/login
+curl -v -H "Host: devops.jenkins.example.com" http://192.168.1.10:8000/login
 
 # HAProxy Management
 echo "show info" | socat stdio /run/haproxy/admin.sock
 echo "show stat" | socat stdio /run/haproxy/admin.sock
-curl -u admin:admin123 http://192.168.188.142:8404/stats
+curl -u admin:admin123 http://192.168.1.10:8404/stats
 ```
 
 ### Automated Diagnostics Script
@@ -452,7 +452,7 @@ ports=("8000:HAProxy" "8080:DevOps" "9090:Prometheus" "9300:Grafana")
 for port_info in "${ports[@]}"; do
   IFS=':' read -r port service <<< "$port_info"
   echo -n "  Port $port ($service): "
-  if nc -z 192.168.188.142 "$port" 2>/dev/null; then
+  if nc -z 192.168.1.10 "$port" 2>/dev/null; then
     echo "✅ Open"
   else
     echo "❌ Closed"
@@ -478,7 +478,7 @@ services=(
 for service in "${services[@]}"; do
   IFS=':' read -r domain port path <<< "$service"
   echo -n "  $domain: "
-  if curl -s -f -H "Host: $domain" "http://192.168.188.142:$port$path" > /dev/null; then
+  if curl -s -f -H "Host: $domain" "http://192.168.1.10:$port$path" > /dev/null; then
     echo "✅ Healthy"
   else
     echo "❌ Unhealthy"
@@ -537,9 +537,9 @@ ansible-playbook -i ansible/inventories/production/hosts.yml \
   -e jenkins_teams='[{"team_name": "devops", "active_environment": "blue"}]'
 
 # 4. Access services directly (bypass HAProxy)
-# Jenkins: http://192.168.188.142:8080
-# Prometheus: http://192.168.188.142:9090  
-# Grafana: http://192.168.188.142:9300
+# Jenkins: http://192.168.1.10:8080
+# Prometheus: http://192.168.1.10:9090  
+# Grafana: http://192.168.1.10:9300
 ```
 
 This comprehensive troubleshooting guide should help resolve most domain routing issues in the Jenkins HA environment.

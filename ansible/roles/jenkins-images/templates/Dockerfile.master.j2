@@ -24,12 +24,15 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy plugins list for runtime installation
+# Copy plugins list and install during build for better reliability
 COPY plugins.txt /usr/share/jenkins/ref/plugins.txt
 
-# Note: Plugins will be installed automatically at first startup via Jenkins plugin manager
-# This avoids network connectivity issues during Docker build
-# Jenkins will install plugins from /usr/share/jenkins/ref/plugins.txt automatically
+# Install plugins during build to ensure CASC plugin availability at startup
+# This prevents setup wizard from appearing due to missing CASC plugin
+RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt --verbose
+
+# Also keep plugins.txt for reference and any additional runtime installations
+# Jenkins will still process /usr/share/jenkins/ref/plugins.txt on startup if needed
 
 # Copy DSL approval initialization script
 COPY init-scripts/setup-dsl-approval.groovy /usr/share/jenkins/ref/init.groovy.d/01-setup-dsl-approval.groovy

@@ -2,7 +2,7 @@
 
 **Date:** August 21, 2025  
 **Status:** ✅ RESOLVED  
-**Environment:** Production (CentOS 9 VM - 192.168.188.142)  
+**Environment:** Production (CentOS 9 VM - 192.168.1.10)  
 **Engineer:** Claude Code Deployment Engineer
 
 ## 🚨 Critical Issues Resolved
@@ -22,10 +22,10 @@
 ```bash
 # Team configuration: devops = green
 # Expected: HAProxy routes to port 8180
-# Actual: Successfully routes to 192.168.188.142:8180
+# Actual: Successfully routes to 192.168.1.10:8180
 
 docker exec jenkins-haproxy grep 'server devops-centos9-vm-active' /usr/local/etc/haproxy/haproxy.cfg
-# Result: server devops-centos9-vm-active 192.168.188.142:8180 check
+# Result: server devops-centos9-vm-active 192.168.1.10:8180 check
 ```
 
 **Status:** ✅ FIXED
@@ -52,10 +52,10 @@ docker exec jenkins-haproxy grep 'server devops-centos9-vm-active' /usr/local/et
 **Verification:**
 ```bash
 # Blue environment health check
-curl http://192.168.188.142:8080/login  # HTTP 200 ✅
+curl http://192.168.1.10:8080/login  # HTTP 200 ✅
 
 # Green environment health check  
-curl http://192.168.188.142:8180/login  # HTTP 200 ✅
+curl http://192.168.1.10:8180/login  # HTTP 200 ✅
 
 # Health check uses correct port calculation:
 # Blue: team.ports.web (8080)
@@ -104,10 +104,10 @@ curl http://192.168.188.142:8180/login  # HTTP 200 ✅
 ```jinja2
 {% if team.active_environment | default('blue') == 'blue' %}
 # Blue environment active
-server {{ team.team_name }}-centos9-vm-active 192.168.188.142:{{ team.ports.web }} check
+server {{ team.team_name }}-centos9-vm-active 192.168.1.10:{{ team.ports.web }} check
 {% else %}
 # Green environment active
-server {{ team.team_name }}-centos9-vm-active 192.168.188.142:{{ team.ports.web + 100 }} check
+server {{ team.team_name }}-centos9-vm-active 192.168.1.10:{{ team.ports.web + 100 }} check
 {% endif %}
 ```
 
@@ -124,8 +124,8 @@ ports: { web: 8080, agent: 50000 }
 
 # Results
 Jenkins Container: jenkins-devops-blue (port 8080)     ✅ RUNNING
-HAProxy Backend: 192.168.188.142:8080                  ✅ CONFIGURED
-Direct Access: curl http://192.168.188.142:8080/login   ✅ HTTP 200
+HAProxy Backend: 192.168.1.10:8080                  ✅ CONFIGURED
+Direct Access: curl http://192.168.1.10:8080/login   ✅ HTTP 200
 HAProxy Routing: Host: jenkins.devops.example.com       ✅ HTTP 200
 ```
 
@@ -138,8 +138,8 @@ ports: { web: 8080, agent: 50000 }
 
 # Results  
 Jenkins Container: jenkins-devops-green (port 8180)     ✅ RUNNING
-HAProxy Backend: 192.168.188.142:8180                  ✅ CONFIGURED
-Direct Access: curl http://192.168.188.142:8180/login   ✅ HTTP 200
+HAProxy Backend: 192.168.1.10:8180                  ✅ CONFIGURED
+Direct Access: curl http://192.168.1.10:8180/login   ✅ HTTP 200
 HAProxy Routing: Host: jenkins.devops.example.com       ✅ CONFIGURED*
 ```
 
@@ -192,13 +192,13 @@ ansible-playbook -i ansible/inventories/production/hosts.yml \
   --limit centos9-vm
 
 # 3. Verify deployment
-curl -H 'Host: jenkins.devops.example.com' http://192.168.188.142:8000/login
+curl -H 'Host: jenkins.devops.example.com' http://192.168.1.10:8000/login
 ```
 
 ### Automated Fix (Using Fix Script)
 
 ```bash
-./scripts/fix-blue-green-deployment.sh 192.168.188.142
+./scripts/fix-blue-green-deployment.sh 192.168.1.10
 ```
 
 ---

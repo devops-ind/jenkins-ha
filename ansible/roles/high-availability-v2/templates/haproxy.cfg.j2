@@ -47,7 +47,7 @@ frontend jenkins_http
     redirect scheme https code 301 if !{ ssl_fc }
     
 frontend jenkins_https
-    bind {{ vip_address | default('*') }}:443 ssl crt {{ ssl_certificate_path }}
+    bind {{ vip_address | default('*') }}:443 ssl crt {{ ssl_certificate_path | default('/usr/local/etc/haproxy/ssl/combined.pem') }}
 {% else %}
 frontend jenkins_http
     bind {{ vip_address | default('*') }}:{{ haproxy_frontend_port | default('8000') }}

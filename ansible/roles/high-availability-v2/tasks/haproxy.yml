@@ -100,6 +100,80 @@
   tags: ['configuration']
 
 # ====================================
+# PRE-DEPLOYMENT SSL VERIFICATION
+# ====================================
+
+- name: Pre-deployment SSL certificate verification
+  block:
+    - name: Verify SSL certificate files exist and are accessible
+      stat:
+        path: "{{ item }}"
+      register: ssl_files_check
+      loop:
+        - "/etc/haproxy/ssl/combined.pem"
+        - "/etc/haproxy/ssl/wildcard-{{ jenkins_domain | default('devops.local') }}-haproxy.pem"
+      become: yes
+      when: ssl_enabled | default(false)
+
+    - name: Display SSL file verification results
+      debug:
+        msg: |
+          SSL Certificate Files Status:
+          {% for result in ssl_files_check.results %}
+          - {{ result.item }}: {{ 'EXISTS' if result.stat.exists else 'MISSING' }} ({{ result.stat.size | default(0) }} bytes)
+          {% endfor %}
+      when: ssl_enabled | default(false)
+
+    - name: Fail if SSL certificates are missing or empty
+      fail:
+        msg: |
+          SSL certificates are missing or invalid:
+          {% for result in ssl_files_check.results %}
+          {% if not result.stat.exists or result.stat.size < 100 %}
+          - {{ result.item }}: {{ 'MISSING' if not result.stat.exists else 'EMPTY (' + (result.stat.size | string) + ' bytes)' }}
+          {% endif %}
+          {% endfor %}
+          
+          Please run the SSL certificate generation first:
+          ansible-playbook ansible/site.yml --tags ssl
+      when: 
+        - ssl_enabled | default(false)
+        - ssl_files_check.results | selectattr('stat.exists', 'equalto', false) | list | length > 0 or ssl_files_check.results | selectattr('stat.size', 'lessthan', 100) | list | length > 0
+
+    - name: Test SSL certificate validity before container deployment
+      shell: |
+        set -euo pipefail
+        echo "Testing SSL certificate validity before HAProxy deployment..."
+        
+        # Test certificate parsing
+        openssl x509 -in /etc/haproxy/ssl/combined.pem -noout -text > /dev/null
+        echo "✓ Certificate parsing: OK"
+        
+        # Test private key parsing
+        openssl rsa -in /etc/haproxy/ssl/combined.pem -check -noout > /dev/null
+        echo "✓ Private key parsing: OK"
+        
+        # Test certificate-key matching
+        CERT_MODULUS=$(openssl x509 -noout -modulus -in /etc/haproxy/ssl/combined.pem | openssl md5)
+        KEY_MODULUS=$(openssl rsa -noout -modulus -in /etc/haproxy/ssl/combined.pem | openssl md5)
+        
+        if [[ "$CERT_MODULUS" = "$KEY_MODULUS" ]]; then
+          echo "✓ Certificate-key pair matching: OK"
+        else
+          echo "✗ Certificate-key pair matching: FAILED"
+          exit 1
+        fi
+        
+        echo "SSL certificate validation successful - ready for HAProxy deployment"
+      become: yes
+      when: ssl_enabled | default(false)
+      register: ssl_validation_result
+      tags: ['ssl', 'validation']
+
+  tags: ['ssl-verify']
+  when: ssl_enabled | default(false)
+
+# ====================================
 # CONTAINER DEPLOYMENT PHASE
 # ====================================
 
@@ -112,13 +186,29 @@
         state: present
       register: haproxy_image_pull
 
-    - name: Stop existing HAProxy container if running
-      command: docker stop jenkins-haproxy
-      ignore_errors: true
-
-    - name: Remove existing HAProxy container
-      command: docker rm -f jenkins-haproxy
-      ignore_errors: true
+    - name: Gracefully stop existing HAProxy container
+      shell: |
+        set +e  # Allow errors
+        echo "Checking for existing HAProxy container..."
+        
+        if docker ps -q -f name=jenkins-haproxy | grep -q .; then
+          echo "Stopping existing HAProxy container..."
+          docker stop jenkins-haproxy --time=10
+          sleep 2
+        else
+          echo "No running HAProxy container found."
+        fi
+        
+        if docker ps -a -q -f name=jenkins-haproxy | grep -q .; then
+          echo "Removing existing HAProxy container..."
+          docker rm -f jenkins-haproxy
+        else
+          echo "No HAProxy container to remove."
+        fi
+        
+        echo "Container cleanup completed."
+      register: container_cleanup_result
+      tags: ['container-cleanup']
 
     - name: Deploy HAProxy container with standard configuration
       community.docker.docker_container:
@@ -137,6 +227,8 @@
           max-file: "{{ haproxy_log_max_files | default('3') }}"
         labels: "{{ _haproxy_labels }}"
         privileged: false
+        capabilities:
+          - "NET_BIND_SERVICE"
         security_opts:
           - "label=disable"
         healthcheck:
@@ -146,7 +238,7 @@
           retries: 3
           start_period: 30s
       register: haproxy_standard_deploy
-      failed_when: false
+      failed_when: ssl_enabled | default(false) | bool
 
     - name: Deploy HAProxy container with privileged fallback
       community.docker.docker_container:
@@ -172,7 +264,7 @@
           retries: 3
           start_period: 30s
       register: haproxy_privileged_deploy
-      when: haproxy_standard_deploy is failed
+      when: haproxy_standard_deploy is failed or (ssl_enabled | default(false) | bool)
       failed_when: false
 
     - name: Report HAProxy deployment status
@@ -216,7 +308,7 @@
         "haproxy-admin-socket:/run/haproxy:rw"
       ] -%}
       {%- if ssl_enabled | default(false) -%}
-        {%- set _ = base_volumes.append("/etc/haproxy/ssl/combined.pem:/usr/local/etc/haproxy/ssl/combined.pem:ro") -%}
+        {%- set _ = base_volumes.append("/etc/haproxy/ssl:/usr/local/etc/haproxy/ssl:ro") -%}
       {%- endif -%}
       {{ base_volumes }}
     _haproxy_env_vars:
@@ -235,11 +327,141 @@
   tags: ['deploy']
 
 # ====================================
-# STREAMLINED POST-DEPLOYMENT VERIFICATION
+# ENHANCED POST-DEPLOYMENT VERIFICATION
 # ====================================
 
-- name: Streamlined HAProxy verification
-  import_tasks: streamlined-verification.yml
+- name: Enhanced HAProxy deployment verification
+  block:
+    - name: Wait for HAProxy container to be fully ready
+      shell: |
+        set -euo pipefail
+        echo "Waiting for HAProxy container to be ready..."
+        
+        for i in {1..60}; do
+          if docker ps --format 'table {{.Names}}	{{.Status}}' | grep -q "jenkins-haproxy.*Up"; then
+            echo "Container is running. Checking health status..."
+            
+            # Check health status if available
+            HEALTH_STATUS=$(docker inspect --format='{{.State.Health.Status}}' jenkins-haproxy 2>/dev/null || echo "unknown")
+            if [[ "$HEALTH_STATUS" == "healthy" || "$HEALTH_STATUS" == "unknown" ]]; then
+              echo "HAProxy container is healthy and ready."
+              break
+            elif [[ "$HEALTH_STATUS" == "starting" ]]; then
+              echo "Container is still starting (attempt $i/60)..."
+            else
+              echo "Container health status: $HEALTH_STATUS (attempt $i/60)"
+            fi
+          else
+            echo "Waiting for container to start (attempt $i/60)..."
+          fi
+          
+          sleep 2
+        done
+        
+        # Final verification
+        if ! docker ps --format 'table {{.Names}}	{{.Status}}' | grep -q "jenkins-haproxy.*Up"; then
+          echo "ERROR: HAProxy container failed to start properly"
+          echo "Container status:"
+          docker ps -a --format 'table {{.Names}}	{{.Status}}	{{.Ports}}' | grep jenkins-haproxy || echo "Container not found"
+          echo "Recent logs:"
+          docker logs --tail 50 jenkins-haproxy || echo "No logs available"
+          exit 1
+        fi
+      register: container_readiness_check
+      tags: ['verification', 'readiness']
+
+    - name: Verify HAProxy configuration syntax in running container
+      shell: |
+        echo "Verifying HAProxy configuration syntax in running container..."
+        
+        if docker exec jenkins-haproxy haproxy -f /usr/local/etc/haproxy/haproxy.cfg -c; then
+          echo "✓ HAProxy configuration syntax is valid"
+        else
+          echo "✗ HAProxy configuration syntax error detected"
+          echo "Configuration file contents:"
+          docker exec jenkins-haproxy cat /usr/local/etc/haproxy/haproxy.cfg | head -20
+          exit 1
+        fi
+      register: config_syntax_check
+      tags: ['verification', 'config']
+
+    - name: Verify SSL certificate accessibility in container
+      shell: |
+        set -euo pipefail
+        echo "Verifying SSL certificate accessibility in HAProxy container..."
+        
+        {% if ssl_enabled | default(false) %}
+        # Check if SSL certificate file is accessible in container
+        if docker exec jenkins-haproxy test -f /usr/local/etc/haproxy/ssl/combined.pem; then
+          echo "✓ SSL certificate file is accessible in container"
+          
+          # Check certificate validity in container
+          if docker exec jenkins-haproxy openssl x509 -in /usr/local/etc/haproxy/ssl/combined.pem -noout -text > /dev/null; then
+            echo "✓ SSL certificate is valid in container"
+            
+            # Display certificate info
+            echo "Certificate details:"
+            docker exec jenkins-haproxy openssl x509 -in /usr/local/etc/haproxy/ssl/combined.pem -noout -subject -dates
+          else
+            echo "✗ SSL certificate is not valid in container"
+            exit 1
+          fi
+        else
+          echo "✗ SSL certificate file not found in container"
+          echo "Container SSL directory contents:"
+          docker exec jenkins-haproxy ls -la /usr/local/etc/haproxy/ssl/ || echo "SSL directory not found"
+          exit 1
+        fi
+        {% else %}
+        echo "SSL not enabled - skipping SSL certificate verification"
+        {% endif %}
+      register: ssl_container_check
+      when: ssl_enabled | default(false)
+      tags: ['verification', 'ssl']
+
+    - name: Test HAProxy endpoints connectivity
+      uri:
+        url: "{{ item.url }}"
+        method: GET
+        status_code: [200, 301, 302, 503]  # Accept redirect or service unavailable
+        timeout: 10
+        validate_certs: no  # For self-signed certificates
+      loop: >
+        {%- set endpoints = [] -%}
+        {%- if ssl_enabled | default(false) -%}
+          {%- set _ = endpoints.append({'name': 'HTTPS Frontend', 'url': 'https://' + (ansible_default_ipv4.address | default('localhost')) + '/'}) -%}
+        {%- else -%}
+          {%- set _ = endpoints.append({'name': 'HTTP Frontend', 'url': 'http://' + (ansible_default_ipv4.address | default('localhost')) + ':' + (haproxy_frontend_port | default(8000) | string) + '/'}) -%}
+        {%- endif -%}
+        {%- set _ = endpoints.append({'name': 'HAProxy Stats', 'url': 'http://' + (ansible_default_ipv4.address | default('localhost')) + ':' + (haproxy_stats_port | default(8404) | string) + '/stats'}) -%}
+        {{ endpoints }}
+      register: endpoint_connectivity_check
+      ignore_errors: yes
+      tags: ['verification', 'connectivity']
+
+    - name: Display comprehensive deployment status
+      debug:
+        msg: |
+          ====================================
+          HAProxy Deployment Verification Results
+          ====================================
+          
+          Container Status: {{ 'RUNNING' if container_readiness_check.rc == 0 else 'FAILED' }}
+          Configuration: {{ 'VALID' if config_syntax_check.rc == 0 else 'INVALID' }}
+          {{ 'SSL Certificate: ACCESSIBLE' if ssl_enabled and ssl_container_check is defined and ssl_container_check.rc == 0 else 'SSL Certificate: INACCESSIBLE' if ssl_enabled else '' }}
+          
+          Endpoint Connectivity:
+          {% for result in endpoint_connectivity_check.results %}
+          - {{ result.item.name }}: {{ 'OK' if result.status in [200, 301, 302] else 'FAILED (' + (result.status | string) + ')' if result.status is defined else 'ERROR' }}
+          {% endfor %}
+          
+          Access URLs:
+          {{ 'HTTPS: https://' + (ansible_default_ipv4.address | default('localhost')) + '/' if ssl_enabled | default(false) else 'HTTP: http://' + (ansible_default_ipv4.address | default('localhost')) + ':' + (haproxy_frontend_port | default(8000) | string) + '/' }}
+          HAProxy Stats: http://{{ ansible_default_ipv4.address | default('localhost') }}:{{ haproxy_stats_port | default(8404) }}/stats
+          
+          ====================================
+      tags: ['verification', 'summary']
+
   tags: ['verify']
 
 - name: HAProxy deployment phase complete

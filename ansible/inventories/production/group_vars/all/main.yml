@@ -97,7 +97,7 @@ monitoring_wildcard_domain: "*.devops.example.com"
 # Multi-team configuration for production HAProxy load balancing
 # devops is the default team (handles jenkins.devops.example.com as default)
 # Team subdomain format: {team}jenkins.devops.example.com
-jenkins_teams:
+jenkins_teams_config:
   - team_name: "devops"
     blue_green_enabled: true
     active_environment: "green"

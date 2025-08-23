@@ -30,15 +30,23 @@ COPY blue/plugins.txt /usr/share/jenkins/ref/plugins.txt
 {% endif %}
 
 {% if jenkins_master_team_configs_enabled | default(true) %}
-# Copy team-specific Jenkins Configuration as Code for both environments
-# Create directories first
-RUN mkdir -p /var/jenkins_home/casc_configs
-COPY blue/jenkins.yaml /var/jenkins_home/casc_configs/blue-jenkins.yaml
-COPY green/jenkins.yaml /var/jenkins_home/casc_configs/green-jenkins.yaml
+# Copy team-specific Jenkins Configuration as Code for active environment
+# Create directories with proper permissions
+RUN mkdir -p /usr/share/jenkins/ref/casc_configs \
+    && mkdir -p /var/jenkins_home/casc_configs \
+    && chown -R jenkins:jenkins /usr/share/jenkins/ref/casc_configs \
+    && chown -R jenkins:jenkins /var/jenkins_home/casc_configs
 
-# Create symlink to active environment config (determined at runtime)
-# Container startup script will update this symlink based on JENKINS_ENVIRONMENT
-RUN ln -sf blue-jenkins.yaml /var/jenkins_home/casc_configs/jenkins.yaml
+# Copy active environment configuration directly as jenkins.yaml
+# This eliminates symlink issues and ensures Jenkins finds the config
+COPY {{ item.active_environment | default('blue') }}/jenkins.yaml /usr/share/jenkins/ref/casc_configs/jenkins.yaml
+
+# Copy both configurations for reference (debugging purposes)
+COPY blue/jenkins.yaml /usr/share/jenkins/ref/casc_configs/blue-jenkins.yaml
+COPY green/jenkins.yaml /usr/share/jenkins/ref/casc_configs/green-jenkins.yaml
+
+# Set proper permissions on configuration files
+RUN chown -R jenkins:jenkins /usr/share/jenkins/ref/casc_configs
 {% endif %}
 
 {% if jenkins_master_team_seed_jobs_enabled | default(true) %}
@@ -77,11 +85,14 @@ RUN chown -R jenkins:jenkins /var/jenkins_home
 # Switch back to jenkins user
 USER jenkins
 
-# Team-specific environment variables
+# Team-specific environment variables including CASC configuration
 ENV JENKINS_TEAM="{{ item.team_name }}" \
     JENKINS_TEAM_ENVIRONMENT="{{ item.active_environment | default('blue') }}" \
     JENKINS_TEAM_PORTS_WEB="{{ item.ports.web | default('8080') }}" \
-    JENKINS_TEAM_PORTS_AGENT="{{ item.ports.agent | default('50000') }}"
+    JENKINS_TEAM_PORTS_AGENT="{{ item.ports.agent | default('50000') }}" \
+    CASC_JENKINS_CONFIG="/usr/share/jenkins/ref/casc_configs/jenkins.yaml" \
+    JAVA_OPTS="-Djenkins.install.runSetupWizard=false -Dhudson.DNSMultiCast.disabled=true" \
+    JENKINS_OPTS="--httpPort={{ jenkins_master_port }} --httpListenAddress=0.0.0.0"
 
 {% if item.env_vars is defined and item.env_vars | length > 0 %}
 # Additional team-specific environment variables

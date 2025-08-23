@@ -1,0 +1,47 @@
+---
+# Deploy SSL certificates and HAProxy with HTTPS configuration
+- name: Deploy SSL and HAProxy HTTPS Configuration
+  hosts: centos9-vm
+  become: yes
+  gather_facts: yes
+  vars:
+    jenkins_ha_enabled: true
+    ssl_enabled: false
+    jenkins_domain: "192.168.1.10"
+    jenkins_wildcard_domain: "*.192.168.1.10"
+    
+    # HAProxy configuration
+    haproxy_container_runtime: "docker"
+    haproxy_frontend_port: 8000
+    haproxy_stats_port: 8404
+    
+    # Teams configuration (from existing setup)
+    jenkins_teams:
+      - team_name: "devops"
+        ports:
+          web: 8080
+        active_environment: "blue"
+        blue_green_enabled: true
+        labels:
+          role: "core-devops"
+      - team_name: "dev-qa"
+        ports:
+          web: 8089
+        active_environment: "green" 
+        blue_green_enabled: true
+        labels:
+          role: "development-qa"
+          
+  tasks:
+    - name: Display deployment configuration
+      debug:
+        msg: |
+          Deploying HTTPS Jenkins HA Infrastructure:
+          - SSL Enabled: {{ ssl_enabled }}
+          - Jenkins Domain: {{ jenkins_domain }}
+          - Teams: {{ jenkins_teams | map(attribute='team_name') | list | join(', ') }}
+          
+    - name: Deploy SSL certificates and HAProxy role
+      include_role:
+        name: ansible/roles/high-availability-v2
+      tags: ['ssl', 'haproxy', 'ha']

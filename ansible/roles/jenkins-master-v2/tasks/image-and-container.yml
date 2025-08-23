@@ -114,6 +114,40 @@
         jenkins_current_team: "{{ item.0 }}"
       when: jenkins_master_team_plugins_enabled | default(true)
 
+    - name: Generate CASC configuration files for blue/green environments
+      template:
+        src: jcasc/jenkins-config.yml.j2
+        dest: "{{ jenkins_master_custom_build_dir }}/{{ item.0.team_name }}/{{ item.1 }}/jenkins.yaml"
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_user }}"
+        mode: '0644'
+      with_nested:
+        - "{{ jenkins_teams_config }}"
+        - ['blue', 'green']
+      loop_control:
+        label: "{{ item.0.team_name }}/{{ item.1 }} CASC config"
+      vars:
+        jenkins_current_team: "{{ item.0 }}"
+        jenkins_current_environment: "{{ item.1 }}"
+      when: jenkins_master_team_configs_enabled | default(true)
+
+    - name: Generate seed job DSL files for blue/green environments
+      template:
+        src: seed-job-dsl.groovy.j2
+        dest: "{{ jenkins_master_custom_build_dir }}/{{ item.0.team_name }}/{{ item.1 }}/seedJob.groovy"
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_user }}"
+        mode: '0644'
+      with_nested:
+        - "{{ jenkins_teams_config }}"
+        - ['blue', 'green']
+      loop_control:
+        label: "{{ item.0.team_name }}/{{ item.1 }} seed job"
+      vars:
+        jenkins_current_team: "{{ item.0 }}"
+        jenkins_current_environment: "{{ item.1 }}"
+      when: jenkins_master_team_seed_jobs_enabled | default(true)
+
 
     - name: Build custom Jenkins images
       community.docker.docker_image:
@@ -172,7 +206,14 @@
           retries: 3
           start_period: 60s
       vars:
-        _jenkins_env_vars: "{{ jenkins_master_env_vars | combine(item.env_vars | default({})) }}"
+        _jenkins_env_vars: >-
+          {{ jenkins_master_env_vars | combine(item.env_vars | default({})) | combine({
+            'CASC_JENKINS_CONFIG': '/usr/share/jenkins/ref/casc_configs/jenkins.yaml',
+            'JAVA_OPTS': '-Djenkins.install.runSetupWizard=false -Dhudson.DNSMultiCast.disabled=true -Djenkins.model.Jenkins.slaveAgentPort=' + (item.ports.agent | string),
+            'JENKINS_OPTS': '--httpPort=' + jenkins_master_port|string + ' --httpListenAddress=0.0.0.0',
+            'JENKINS_ENVIRONMENT': item.active_environment | default('blue'),
+            'JENKINS_TEAM': item.team_name
+          }) }}
         _jenkins_image: >-
           {%- if jenkins_master_build_custom_images | default(true) -%}
             {{ jenkins_master_custom_image_prefix }}-{{ item.team_name }}:{{ jenkins_master_image_tag }}

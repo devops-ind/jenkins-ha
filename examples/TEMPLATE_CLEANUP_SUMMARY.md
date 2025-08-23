@@ -108,8 +108,8 @@ backend jenkins_backend_devops
     http-check expect status 200
     
     # Blue environment active, green as backup
-    server devops-centos9-vm-blue 192.168.188.142:8080 check inter 5s fall 3 rise 2
-    server devops-centos9-vm-green 192.168.188.142:8180 check inter 5s fall 3 rise 2 backup
+    server devops-centos9-vm-blue 192.168.1.10:8080 check inter 5s fall 3 rise 2
+    server devops-centos9-vm-green 192.168.1.10:8180 check inter 5s fall 3 rise 2 backup
     
     # Team-specific headers
     http-response set-header X-Jenkins-Team devops
@@ -122,8 +122,8 @@ backend jenkins_backend_ma
     http-check expect status 200
     
     # Blue environment active, green as backup  
-    server ma-centos9-vm-blue 192.168.188.142:8081 check inter 5s fall 3 rise 2
-    server ma-centos9-vm-green 192.168.188.142:8181 check inter 5s fall 3 rise 2 backup
+    server ma-centos9-vm-blue 192.168.1.10:8081 check inter 5s fall 3 rise 2
+    server ma-centos9-vm-green 192.168.1.10:8181 check inter 5s fall 3 rise 2 backup
     
     # Team-specific headers
     http-response set-header X-Jenkins-Team ma

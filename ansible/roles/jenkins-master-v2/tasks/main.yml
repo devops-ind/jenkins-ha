@@ -15,8 +15,8 @@
 
 - name: Determine deployment configuration
   set_fact:
-    jenkins_teams_config: "{{ jenkins_teams | default([jenkins_master_config]) }}"
-    jenkins_deployment_mode: "{{ 'multi-team' if jenkins_teams is defined and jenkins_teams | length > 0 else 'single-team' }}"
+    jenkins_teams_config: "{{ jenkins_teams_config | default(jenkins_teams) | default([jenkins_master_config]) }}"
+    jenkins_deployment_mode: "{{ 'multi-team' if (jenkins_teams_config | default(jenkins_teams)) is defined and (jenkins_teams_config | default(jenkins_teams)) | length > 0 else 'single-team' }}"
   tags: ['always']
 
 - name: Display deployment configuration
