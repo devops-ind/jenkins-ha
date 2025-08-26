@@ -107,6 +107,54 @@
         label: "{{ item.team_name }}"
       tags: ['sync-scripts']
 
+    - name: Determine optimal sync source for each team (blue-green vs shared storage)
+      block:
+        - name: Check for existing previous environment volumes
+          command: docker volume inspect jenkins-{{ item.team_name }}-{{ 'green' if item.active_environment == 'blue' else 'blue' }}-home
+          loop: "{{ jenkins_teams_config }}"
+          loop_control:
+            label: "{{ item.team_name }}-previous-env-check"
+          register: previous_env_volume_check
+          failed_when: false
+          changed_when: false
+
+        - name: Determine sync source strategy for each team
+          set_fact:
+            team_sync_sources: >-
+              {%- set sources = {} -%}
+              {%- for i in range(jenkins_teams_config | length) -%}
+                {%- set team = jenkins_teams_config[i] -%}
+                {%- set previous_env = 'green' if team.active_environment == 'blue' else 'blue' -%}
+                {%- set volume_exists = previous_env_volume_check.results[i].rc == 0 -%}
+                {%- set should_sync_from_env = volume_exists -%}
+                {%- set _ = sources.update({team.team_name: {
+                    'sync_from': previous_env if should_sync_from_env else 'shared',
+                    'active_env': team.active_environment,
+                    'previous_env': previous_env,
+                    'volume_exists': volume_exists
+                }}) -%}
+              {%- endfor -%}
+              {{ sources }}
+
+        - name: Display sync source strategy
+          debug:
+            msg: |
+              ====================================
+              Initial Sync Source Strategy
+              ====================================
+              {% for team_name, strategy in team_sync_sources.items() %}
+              {{ team_name }}:
+                Active: {{ strategy.active_env }}
+                Previous: {{ strategy.previous_env }}
+                Volume Exists: {{ strategy.volume_exists }}
+                Sync From: {{ strategy.sync_from }}
+              {% endfor %}
+              ====================================
+          tags: ['sync-strategy']
+
+      tags: ['sync-detection']
+      when: sync_enabled | default(true)
+
     - name: Perform initial data synchronization from containers to shared storage
       block:
         - name: Create initial sync scripts for teams
@@ -122,11 +170,13 @@
           become: yes
           when: sync_enabled | default(true)
 
-        - name: Execute initial data synchronization for each team
-          command: "/tmp/initial-sync-{{ item.team_name }}.sh"
+        - name: Execute initial data synchronization for each team with optimal sync source
+          command: >-
+            /tmp/initial-sync-{{ item.team_name }}.sh
+            {% if team_sync_sources[item.team_name].sync_from != 'shared' %}--sync-from {{ team_sync_sources[item.team_name].sync_from }}{% endif %}
           loop: "{{ jenkins_teams_config }}"
           loop_control:
-            label: "{{ item.team_name }}-{{ item.active_environment | default('blue') }}"
+            label: "{{ item.team_name }}-{{ item.active_environment | default('blue') }}-{{ team_sync_sources[item.team_name].sync_from }}"
           register: initial_sync_results
           become: yes
           when: sync_enabled | default(true)
@@ -142,16 +192,21 @@
           become: yes
           when: sync_enabled | default(true)
 
-        - name: Display initial synchronization results
+        - name: Display initial synchronization results with sync source details
           debug:
             msg: |
               ====================================
               Initial Data Synchronization Results
               ====================================
               {% for result in initial_sync_results.results %}
-              {{ result.item.team_name }}: {{ 'Completed' if result.rc == 0 else 'Failed (non-blocking)' }}
+              {{ result.item.team_name }}: {{ 'Completed' if result.rc == 0 else 'Failed (non-blocking)' }} 
+                └─ Sync Source: {{ team_sync_sources[result.item.team_name].sync_from }}
+                {% if team_sync_sources[result.item.team_name].sync_from != 'shared' %}└─ From Environment: {{ team_sync_sources[result.item.team_name].previous_env }}{% endif %}
               {% endfor %}
               ====================================
+              Summary:
+              - Blue-green syncs: {{ initial_sync_results.results | selectattr('item.team_name', 'in', (team_sync_sources | dict2items | selectattr('value.sync_from', 'ne', 'shared') | map(attribute='key') | list)) | list | length }}
+              - Shared storage syncs: {{ initial_sync_results.results | selectattr('item.team_name', 'in', (team_sync_sources | dict2items | selectattr('value.sync_from', 'eq', 'shared') | map(attribute='key') | list)) | list | length }}
               Note: Sync failures are non-blocking and won't prevent deployment
           tags: ['sync-status']
           when: initial_sync_results is defined
