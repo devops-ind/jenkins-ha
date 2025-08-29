@@ -317,6 +317,61 @@ if not failed:
 sys.exit(1 if failed else 0)
 "
 
+.PHONY: test-secrets
+test-secrets: ## Run secret detection with TruffleHog
+	@echo "$(BLUE)🔍 Running secret detection...$(RESET)"
+	@if command -v trufflehog >/dev/null 2>&1; then \
+		trufflehog filesystem . --only-verified --fail || echo "$(YELLOW)⚠️ Secrets detected$(RESET)"; \
+	else \
+		echo "$(YELLOW)⚠️ TruffleHog not installed, skipping secret scan$(RESET)"; \
+		echo "Install: curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh"; \
+	fi
+
+.PHONY: test-infrastructure-security
+test-infrastructure-security: ## Run infrastructure security scanning with Checkov
+	@echo "$(BLUE)🏗️ Running infrastructure security scan...$(RESET)"
+	@if command -v checkov >/dev/null 2>&1; then \
+		checkov --framework dockerfile,ansible,yaml_templates --skip-check CKV_DOCKER_2,CKV_DOCKER_3 . || echo "$(YELLOW)⚠️ Infrastructure security issues found$(RESET)"; \
+	else \
+		echo "$(YELLOW)⚠️ Checkov not installed, using pip install checkov$(RESET)"; \
+		pip install checkov && checkov --framework dockerfile,ansible,yaml_templates . || echo "$(YELLOW)⚠️ Infrastructure security issues found$(RESET)"; \
+	fi
+
+.PHONY: test-dependency-vulnerabilities
+test-dependency-vulnerabilities: ## Run OWASP Dependency-Check
+	@echo "$(BLUE)📦 Running dependency vulnerability scan...$(RESET)"
+	@if command -v dependency-check.sh >/dev/null 2>&1; then \
+		dependency-check.sh --project "Jenkins-HA" --scan . --format JSON --format HTML --out dependency-check-report --failOnCVSS 7 || echo "$(YELLOW)⚠️ Vulnerable dependencies found$(RESET)"; \
+	else \
+		echo "$(YELLOW)⚠️ OWASP Dependency-Check not installed$(RESET)"; \
+		echo "Install: https://owasp.org/www-project-dependency-check/"; \
+	fi
+
+.PHONY: test-sast
+test-sast: ## Run Static Application Security Testing with Semgrep
+	@echo "$(BLUE)🔎 Running SAST scan...$(RESET)"
+	@if command -v semgrep >/dev/null 2>&1; then \
+		semgrep --config=auto --error --skip-unknown-extensions . || echo "$(YELLOW)⚠️ SAST issues found$(RESET)"; \
+	else \
+		pip install semgrep && semgrep --config=auto --error --skip-unknown-extensions . || echo "$(YELLOW)⚠️ SAST issues found$(RESET)"; \
+	fi
+
+.PHONY: test-security-comprehensive
+test-security-comprehensive: ## Run comprehensive security testing
+	@echo "$(BLUE)🛡️ Running comprehensive security tests...$(RESET)"
+	@$(MAKE) test-secrets test-infrastructure-security test-dependency-vulnerabilities test-sast test-jenkins-security
+
+.PHONY: security-report
+security-report: ## Generate comprehensive security report
+	@echo "$(BLUE)📊 Generating security report...$(RESET)"
+	@echo "=== Security Scan Report $(shell date) ===" > security-report.txt
+	@echo "Repository: Jenkins HA Infrastructure" >> security-report.txt
+	@echo "" >> security-report.txt
+	@echo "Running comprehensive security scans..." >> security-report.txt
+	@$(MAKE) test-security-comprehensive 2>&1 | tee -a security-report.txt
+	@echo "" >> security-report.txt
+	@echo "Report generated: security-report.txt"
+
 ##@ Container Management
 
 .PHONY: ps

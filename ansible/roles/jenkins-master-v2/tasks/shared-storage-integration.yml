@@ -107,6 +107,19 @@
         label: "{{ item.team_name }}"
       tags: ['sync-scripts']
 
+    - name: Create unified data management scripts for teams
+      template:
+        src: unified-data-manager.sh.j2
+        dest: "/var/jenkins/scripts/unified-{{ item.team_name }}-manager.sh"
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_group }}"
+        mode: '0755'
+      loop: "{{ jenkins_teams_config }}"
+      loop_control:
+        label: "{{ item.team_name }}"
+      when: unified_data_management_enabled | default(true)
+      tags: ['unified-scripts']
+
     - name: Determine optimal sync source for each team (blue-green vs shared storage)
       block:
         - name: Check for existing previous environment volumes
@@ -221,8 +234,38 @@
       loop: "{{ jenkins_teams_config }}"
       loop_control:
         label: "{{ item.team_name }}"
-      when: sync_enabled | default(true)
+      when: sync_enabled | default(true) and not (unified_data_management_enabled | default(true))
       tags: ['sync-cron']
+
+    - name: Setup unified data management (cron-based)
+      cron:
+        name: "Jenkins {{ item.team_name }} unified data management"
+        minute: "{{ unified_cron_schedule | default('*/5') }}"
+        job: "/var/jenkins/scripts/unified-{{ item.team_name }}-manager.sh --{{ default_operation_mode | default('sync-only') }}"
+        user: "{{ jenkins_user }}"
+        state: present
+      loop: "{{ jenkins_teams_config }}"
+      loop_control:
+        label: "{{ item.team_name }}"
+      when: unified_data_management_enabled | default(true)
+      tags: ['unified-cron']
+
+    - name: Setup backup-only operations (cron-based)
+      cron:
+        name: "Jenkins {{ item.team_name }} backup"
+        minute: "{{ backup_cron_schedule | default('0 2 * * *') | regex_replace(' \\* \\* \\*', '') }}"
+        hour: "{{ backup_cron_schedule | default('0 2 * * *') | regex_replace('^[0-9]+ ', '') | regex_replace(' \\* \\* \\*', '') }}"
+        job: "/var/jenkins/scripts/unified-{{ item.team_name }}-manager.sh --backup-only --retention {{ backup_daily_retention | default(7) }}"
+        user: "{{ jenkins_user }}"
+        state: present
+      loop: "{{ jenkins_teams_config }}"
+      loop_control:
+        label: "{{ item.team_name }}"
+      when: 
+        - unified_data_management_enabled | default(true)
+        - backup_enabled | default(false)
+        - default_operation_mode | default('sync-only') in ['sync-only', 'sync-then-backup', 'sync-and-backup']
+      tags: ['backup-cron']
 
     - name: Create shared storage health monitor script
       template:
@@ -277,6 +320,18 @@
           Sync Interval: {{ sync_interval | default('*/5') }} minutes
           Health Monitoring: {{ storage_monitoring_enabled | default(true) }}
           
+          Unified Data Management:
+          • Enabled: {{ unified_data_management_enabled | default(true) }}
+          • Operation Mode: {{ default_operation_mode | default('sync-only') }}
+          • Backup Enabled: {{ backup_enabled | default(false) }}
+          {% if unified_data_management_enabled | default(true) %}
+          • Unified Schedule: {{ unified_cron_schedule | default('*/5') }}
+          {% if backup_enabled | default(false) %}
+          • Backup Schedule: {{ backup_cron_schedule | default('0 2 * * *') }}
+          • Backup Retention: {{ backup_daily_retention | default(7) }} days
+          {% endif %}
+          {% endif %}
+          
           Configuration:
           • Storage Preference: {{ storage_preference }}
           • Fallback Enabled: {{ storage_fallback_enabled | default(true) }}
@@ -301,6 +356,15 @@
           ❌ plugins (isolated for safe upgrades)
           ❌ logs (environment-specific logging)
           ❌ war (Jenkins runtime isolation)
+          
+          Available Scripts per Team:
+          {% for team in jenkins_teams_config %}
+          • {{ team.team_name }}:
+            - /var/jenkins/scripts/sync-{{ team.team_name }}-data.sh (legacy sync)
+          {% if unified_data_management_enabled | default(true) %}
+            - /var/jenkins/scripts/unified-{{ team.team_name }}-manager.sh (unified operations)
+          {% endif %}
+          {% endfor %}
           ====================================================
       tags: ['integration-status']
 

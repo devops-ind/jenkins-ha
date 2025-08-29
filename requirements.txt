@@ -15,6 +15,9 @@ yamllint>=1.32.0
 # Security scanning tools
 bandit>=1.7.0
 safety>=2.3.0
+semgrep>=1.45.0
+checkov>=3.1.0
+detect-secrets>=1.4.0
 
 # Code formatting and linting
 black>=23.0.0
@@ -38,3 +41,12 @@ pytest-ansible>=4.0.0
 
 # Jenkins CLI tools (optional, for advanced pipeline validation)
 # jenkins-cli>=1.0.0  # Uncomment if jenkins-cli package is available
+
+# Additional security tools (system-level installation required)
+# TruffleHog: https://github.com/trufflesecurity/trufflehog (install via: curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh)
+# OWASP Dependency-Check: https://owasp.org/www-project-dependency-check/ (requires Java)
+# Snyk CLI: https://snyk.io/docs/snyk-cli/ (install via: npm install -g snyk)
+
+# Container security tools
+# Trivy: https://aquasecurity.github.io/trivy/ (install via package manager)
+# Docker Bench Security: https://github.com/docker/docker-bench-security

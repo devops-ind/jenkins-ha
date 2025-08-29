@@ -60,6 +60,51 @@ repos:
         args: ['-r', 'tests/', '-f', 'json']
         files: '^tests/.*\.py$'
 
+  # Secret detection
+  - repo: https://github.com/trufflesecurity/trufflehog
+    rev: v3.63.2
+    hooks:
+      - id: trufflehog
+        name: TruffleHog Secret Scanner
+        description: Detect secrets in code
+        entry: trufflehog
+        args:
+          - 'filesystem'
+          - '--directory=.'
+          - '--only-verified'
+          - '--fail'
+        language: system
+        stages: [commit]
+
+  # Infrastructure as Code security
+  - repo: https://github.com/bridgecrewio/checkov
+    rev: 3.1.34
+    hooks:
+      - id: checkov
+        name: Checkov IaC Security Scanner
+        description: Static analysis for infrastructure as code
+        args:
+          - '--framework'
+          - 'dockerfile,ansible,yaml_templates'
+          - '--skip-check'
+          - 'CKV_DOCKER_2,CKV_DOCKER_3'  # Skip some Docker checks that may not apply
+        files: '^(ansible/.*\.(yml|yaml)|.*Dockerfile.*|docker-compose\.yml)$'
+
+  # Advanced SAST scanning
+  - repo: https://github.com/returntocorp/semgrep
+    rev: v1.45.0
+    hooks:
+      - id: semgrep
+        name: Semgrep SAST Scanner
+        description: Static analysis security testing
+        args:
+          - '--config=auto'
+          - '--error'
+          - '--skip-unknown-extensions'
+          - '--exclude=.git'
+          - '--exclude=node_modules'
+        files: '\.(py|js|ts|java|go|rb|php|scala|yaml|yml|json|sh)$'
+
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.9.0
@@ -251,6 +296,77 @@ sys.exit(1 if failed else 0)
         language: system
         files: '^jenkins-dsl/.*\.groovy$'
         pass_filenames: false
+
+      # OWASP Dependency Check
+      - id: owasp-dependency-check
+        name: OWASP Dependency Check
+        entry: python3 -c "
+import subprocess
+import sys
+import os
+
+def run_dependency_check():
+    '''Run OWASP Dependency Check for known vulnerabilities'''
+    try:
+        # Check if dependency-check is available
+        result = subprocess.run(['dependency-check.sh', '--version'], capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            print('INFO: OWASP Dependency-Check not installed, skipping scan')
+            print('Install: https://owasp.org/www-project-dependency-check/')
+            return True
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        print('INFO: OWASP Dependency-Check not available, skipping scan')
+        return True
+    
+    try:
+        # Scan project dependencies
+        scan_dirs = ['requirements.txt', 'package.json', 'pom.xml', 'build.gradle']
+        found_deps = False
+        
+        for dep_file in scan_dirs:
+            if os.path.exists(dep_file):
+                found_deps = True
+                break
+        
+        if not found_deps:
+            print('INFO: No dependency files found to scan')
+            return True
+        
+        print('🔍 Running OWASP Dependency-Check scan...')
+        result = subprocess.run([
+            'dependency-check.sh',
+            '--project', 'Jenkins-HA-Infrastructure',
+            '--scan', '.',
+            '--format', 'JSON',
+            '--format', 'HTML',
+            '--out', 'dependency-check-report',
+            '--failOnCVSS', '7',
+            '--exclude', '**/*.git/**',
+            '--exclude', '**/node_modules/**',
+            '--exclude', '**/.venv/**'
+        ], capture_output=True, text=True, timeout=300)
+        
+        if result.returncode == 0:
+            print('✅ OWASP Dependency-Check passed')
+            return True
+        else:
+            print(f'❌ OWASP Dependency-Check found vulnerabilities: {result.stdout}')
+            print(f'Error output: {result.stderr}')
+            return False
+            
+    except subprocess.TimeoutExpired:
+        print('❌ OWASP Dependency-Check timeout')
+        return False
+    except Exception as e:
+        print(f'❌ Error running OWASP Dependency-Check: {e}')
+        return False
+
+if not run_dependency_check():
+    sys.exit(1)
+"
+        language: system
+        pass_filenames: false
+        files: '^(requirements\.txt|package\.json|pom\.xml|build\.gradle)$'
 
       # Jenkins pipeline security scan
       - id: jenkins-security-scan

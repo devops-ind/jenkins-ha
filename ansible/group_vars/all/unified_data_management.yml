@@ -1,0 +1,134 @@
+---
+# Unified Data Management Configuration
+# Enhanced backup and sync operations for Jenkins HA infrastructure
+
+# Unified operation configuration
+unified_data_management_enabled: true
+default_operation_mode: "sync-only"  # Options: sync-only, backup-only, sync-and-backup, backup-then-sync, sync-then-backup
+backup_before_sync: false
+sync_verification_enabled: true
+backup_verification_enabled: true
+
+# Enhanced scheduling configuration
+unified_cron_schedule: "*/5 * * * *"  # Default 5-minute interval for unified operations
+backup_cron_schedule: "0 2 * * *"     # Daily backup at 2 AM (when backup is enabled separately)
+
+# Operation mode preferences per team (optional override)
+team_operation_modes: {}
+  # Example team-specific overrides:
+  # devops: "sync-and-backup"
+  # developer: "sync-only"
+  # qa: "backup-then-sync"
+
+# Advanced sync configuration
+sync_method: "rsync"  # Options: rsync, cp
+sync_parallel_enabled: true
+sync_compression_enabled: false
+sync_bandwidth_limit: ""  # e.g., "1000k" for 1MB/s limit
+
+# Advanced backup configuration  
+backup_method: "tar"  # Options: tar, borg
+backup_compression: "gzip"  # Options: gzip, bzip2, xz, none
+backup_parallel_enabled: true
+backup_integrity_check: true
+backup_encryption_enabled: false
+backup_encryption_key: ""  # Should be overridden in vault
+
+# Enhanced retention policies
+backup_daily_retention: 7
+backup_weekly_retention: 4  
+backup_monthly_retention: 12
+backup_cleanup_enabled: true
+backup_cleanup_schedule: "0 3 * * 0"  # Weekly cleanup on Sunday at 3 AM
+
+# Verification settings
+verification_timeout: 300  # 5 minutes
+verification_retry_count: 3
+verification_detailed_logging: false
+
+# Performance tuning
+operation_timeout: 1800  # 30 minutes
+max_parallel_operations: 2
+memory_usage_limit: "2g"
+disk_usage_threshold: 85  # Percentage
+
+# Monitoring and alerting integration
+operation_monitoring_enabled: true
+operation_metrics_enabled: false
+operation_prometheus_integration: false
+
+# Error handling and recovery
+operation_retry_enabled: true
+operation_retry_count: 2
+operation_retry_delay: 60  # seconds
+operation_failure_notification: false
+operation_recovery_mode: "graceful"  # Options: graceful, aggressive, none
+
+# Storage backend configuration
+backup_storage_backends:
+  local:
+    enabled: true
+    path: "{{ backup_local_dir | default('/var/backups/jenkins') }}"
+    min_free_space: "5G"
+  nfs:
+    enabled: false
+    path: "/mnt/nfs-backup"
+    mount_options: "rw,sync,hard,intr"
+  s3:
+    enabled: false
+    bucket: ""
+    region: "us-east-1"
+    access_key: ""  # Should be overridden in vault
+    secret_key: ""  # Should be overridden in vault
+
+# Notification configuration
+notification_enabled: false
+notification_channels:
+  email:
+    enabled: false
+    recipients: []
+    smtp_server: ""
+    smtp_port: 587
+  slack:
+    enabled: false
+    webhook_url: ""  # Should be overridden in vault
+    channel: "#ops"
+  webhook:
+    enabled: false
+    url: ""
+    headers: {}
+
+# Security configuration
+operation_user: "{{ jenkins_user }}"
+operation_group: "{{ jenkins_group }}"
+script_permissions: "0755"
+log_permissions: "0644"
+backup_permissions: "0600"
+
+# Logging configuration
+log_level: "INFO"  # Options: DEBUG, INFO, WARN, ERROR
+log_rotation_enabled: true
+log_max_size: "100M"
+log_retention_days: 30
+centralized_logging_enabled: false
+syslog_facility: "local0"
+
+# Development and testing
+dry_run_default: false
+test_mode_enabled: false
+development_mode: false
+debug_mode_enabled: false
+
+# Compatibility settings
+legacy_script_support: true
+migration_mode: false
+backward_compatibility_warnings: true
+
+# Feature flags
+experimental_features_enabled: false
+beta_features_enabled: false
+feature_flags:
+  parallel_verification: false
+  advanced_metrics: false
+  cloud_storage_integration: false
+  automated_recovery: true
