@@ -103,7 +103,7 @@
             - name: Check that HAProxy routes to correct port
               shell: |
                 # Check if HAProxy backend points to port 8180 for green environment
-                docker exec jenkins-haproxy grep "192.168.188.142:8180" /usr/local/etc/haproxy/haproxy.cfg
+                docker exec jenkins-haproxy grep "192.168.86.30:8180" /usr/local/etc/haproxy/haproxy.cfg
               register: haproxy_port_check
               failed_when: false
               

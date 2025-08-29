@@ -1,0 +1,417 @@
+name: Blue-Green Deployment Tests
+
+on:
+  push:
+    branches: [ main, develop, 'feature/blue-green-*' ]
+    paths:
+      - 'tests/blue-green/**'
+      - 'ansible/roles/jenkins-master-v2/**'
+      - 'ansible/roles/high-availability-v2/**'
+      - 'ansible/playbooks/blue-green-operations.yml'
+      - '.github/workflows/blue-green-tests.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'tests/blue-green/**'
+      - 'ansible/roles/jenkins-master-v2/**'
+      - 'ansible/roles/high-availability-v2/**'
+  schedule:
+    # Run tests daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      test_suite:
+        description: 'Test suite to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - basic
+          - multi-team
+          - failure-scenarios
+          - haproxy
+          - ssl
+      environment:
+        description: 'Test environment'
+        required: false
+        default: 'local'
+        type: choice
+        options:
+          - local
+          - staging
+
+env:
+  PYTHON_VERSION: '3.11'
+  ANSIBLE_VERSION: '8.5.0'
+  DOCKER_BUILDKIT: 1
+
+jobs:
+  test-matrix:
+    name: Generate Test Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set test matrix
+        id: set-matrix
+        run: |
+          if [[ "${{ github.event.inputs.test_suite }}" == "basic" ]]; then
+            echo 'matrix={"test_suite": ["basic_switching"]}' >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event.inputs.test_suite }}" == "multi-team" ]]; then
+            echo 'matrix={"test_suite": ["multi_team"]}' >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event.inputs.test_suite }}" == "failure-scenarios" ]]; then
+            echo 'matrix={"test_suite": ["failure_scenarios"]}' >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event.inputs.test_suite }}" == "haproxy" ]]; then
+            echo 'matrix={"test_suite": ["haproxy_routing"]}' >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event.inputs.test_suite }}" == "ssl" ]]; then
+            echo 'matrix={"test_suite": ["ssl_certificates"]}' >> $GITHUB_OUTPUT
+          else
+            echo 'matrix={"test_suite": ["basic_switching", "multi_team", "failure_scenarios", "haproxy_routing", "ssl_certificates"]}' >> $GITHUB_OUTPUT
+          fi
+
+  lint-and-validate:
+    name: Lint and Validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Cache Python dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('tests/blue-green/requirements.txt', 'requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+            
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible==${{ env.ANSIBLE_VERSION }}
+          pip install -r requirements.txt
+          pip install -r tests/blue-green/requirements.txt
+          pip install flake8 black isort mypy
+          
+      - name: Lint Python code
+        run: |
+          flake8 tests/blue-green/ --max-line-length=120 --extend-ignore=E203,W503
+          black --check tests/blue-green/
+          isort --check-only tests/blue-green/
+          
+      - name: Type check Python code
+        run: |
+          mypy tests/blue-green/ --ignore-missing-imports
+          
+      - name: Validate Ansible playbooks
+        run: |
+          ansible-playbook tests/blue-green/ansible/test_blue_green_deployment.yml --syntax-check
+          ansible-lint tests/blue-green/ansible/
+          
+      - name: Validate test inventory
+        run: |
+          ansible-inventory -i tests/blue-green/fixtures/test_inventory.yml --list > /dev/null
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: [lint-and-validate]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Cache Python dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('tests/blue-green/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+            
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tests/blue-green/requirements.txt
+          
+      - name: Run unit tests
+        run: |
+          cd tests/blue-green
+          pytest -v -m "not integration and not ansible and not slow" \
+            --junitxml=../../test-results-unit.xml \
+            --cov=. --cov-report=xml --cov-report=html
+            
+      - name: Upload unit test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: unit-test-results
+          path: |
+            test-results-unit.xml
+            tests/blue-green/htmlcov/
+            tests/blue-green/coverage.xml
+
+  integration-tests:
+    name: Integration Tests - ${{ matrix.test_suite }}
+    runs-on: ubuntu-latest
+    needs: [test-matrix, lint-and-validate]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.test-matrix.outputs.matrix) }}
+    services:
+      docker:
+        image: docker:24-dind
+        options: --privileged
+        ports:
+          - 2376:2376
+        env:
+          DOCKER_TLS_CERTDIR: /certs
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Cache Python dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('tests/blue-green/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+            
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible==${{ env.ANSIBLE_VERSION }}
+          pip install -r tests/blue-green/requirements.txt
+          
+      - name: Install Ansible collections
+        run: |
+          ansible-galaxy collection install -r collections/requirements.yml
+          
+      - name: Set up test environment
+        run: |
+          # Create necessary directories
+          sudo mkdir -p /tmp/jenkins-ha-test/{ssl,data,logs}
+          sudo chmod 777 /tmp/jenkins-ha-test/{ssl,data,logs}
+          
+          # Start required services
+          docker network create jenkins-ha-test || true
+          
+      - name: Run integration tests
+        run: |
+          cd tests/blue-green
+          pytest -v -m integration test_${{ matrix.test_suite }}.py \
+            --junitxml=../../test-results-integration-${{ matrix.test_suite }}.xml \
+            --timeout=300
+        env:
+          DOCKER_HOST: tcp://localhost:2376
+          DOCKER_TLS_VERIFY: ""
+          
+      - name: Collect container logs
+        if: failure()
+        run: |
+          echo "=== Docker Containers ==="
+          docker ps -a
+          echo "=== Container Logs ==="
+          docker logs jenkins-test-blue 2>&1 || true
+          docker logs jenkins-test-green 2>&1 || true
+          docker logs haproxy-test 2>&1 || true
+          
+      - name: Cleanup test environment
+        if: always()
+        run: |
+          docker rm -f jenkins-test-blue jenkins-test-green haproxy-test 2>/dev/null || true
+          docker network rm jenkins-ha-test 2>/dev/null || true
+          sudo rm -rf /tmp/jenkins-ha-test
+          
+      - name: Upload integration test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: integration-test-results-${{ matrix.test_suite }}
+          path: test-results-integration-${{ matrix.test_suite }}.xml
+
+  ansible-tests:
+    name: Ansible Playbook Tests
+    runs-on: ubuntu-latest
+    needs: [lint-and-validate]
+    strategy:
+      fail-fast: false
+      matrix:
+        playbook:
+          - test_blue_green_deployment.yml
+          - test_environment_switching.yml
+          - test_rollback_scenarios.yml
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Install Ansible and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible==${{ env.ANSIBLE_VERSION }}
+          pip install docker jmespath
+          
+      - name: Install Ansible collections
+        run: |
+          ansible-galaxy collection install -r collections/requirements.yml
+          
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Run Ansible playbook tests
+        run: |
+          cd tests/blue-green/ansible
+          ansible-playbook -i ../fixtures/test_inventory.yml ${{ matrix.playbook }} \
+            -v --check --diff
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: false
+          
+      - name: Upload Ansible test logs
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: ansible-test-logs-${{ matrix.playbook }}
+          path: /tmp/ansible.log
+
+  performance-tests:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    needs: [lint-and-validate]
+    if: github.event_name == 'schedule' || github.event.inputs.test_suite == 'all'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tests/blue-green/requirements.txt
+          
+      - name: Run performance tests
+        run: |
+          cd tests/blue-green
+          pytest -v -m "slow" \
+            --junitxml=../../test-results-performance.xml \
+            --timeout=600
+            
+      - name: Upload performance test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: performance-test-results
+          path: test-results-performance.xml
+
+  security-tests:
+    name: Security Tests
+    runs-on: ubuntu-latest
+    needs: [lint-and-validate]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Run Bandit security scan
+        run: |
+          pip install bandit
+          bandit -r tests/blue-green/ -f json -o bandit-results.json
+          
+      - name: Run Safety dependency scan
+        run: |
+          pip install safety
+          safety check -r tests/blue-green/requirements.txt --json --output safety-results.json
+          
+      - name: Upload security scan results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: security-scan-results
+          path: |
+            bandit-results.json
+            safety-results.json
+
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests, ansible-tests]
+    if: always()
+    steps:
+      - name: Download all test results
+        uses: actions/download-artifact@v3
+        
+      - name: Publish test summary
+        uses: dorny/test-reporter@v1
+        if: success() || failure()
+        with:
+          name: Blue-Green Tests Summary
+          path: '**/*test-results*.xml'
+          reporter: java-junit
+          fail-on-error: true
+          
+      - name: Generate test report
+        run: |
+          echo "# Blue-Green Deployment Test Results" > test-summary.md
+          echo "" >> test-summary.md
+          echo "## Test Suite Results" >> test-summary.md
+          echo "" >> test-summary.md
+          
+          # Count test files
+          unit_results=$(find . -name "*test-results-unit.xml" | wc -l)
+          integration_results=$(find . -name "*test-results-integration*.xml" | wc -l)
+          
+          echo "- Unit Tests: $unit_results result files" >> test-summary.md
+          echo "- Integration Tests: $integration_results result files" >> test-summary.md
+          echo "" >> test-summary.md
+          
+          echo "## Test Coverage" >> test-summary.md
+          if [ -f "unit-test-results/coverage.xml" ]; then
+            echo "Coverage report available in artifacts" >> test-summary.md
+          fi
+          
+          cat test-summary.md
+          
+      - name: Comment PR with test results
+        uses: actions/github-script@v6
+        if: github.event_name == 'pull_request'
+        with:
+          script: |
+            const fs = require('fs');
+            if (fs.existsSync('test-summary.md')) {
+              const summary = fs.readFileSync('test-summary.md', 'utf8');
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: summary
+              });
+            }

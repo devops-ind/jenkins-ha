@@ -195,7 +195,7 @@ main() {
     log "Phase 1: SSL Certificate Generation"
     echo "-----------------------------------"
     
-    local ssl_extra_vars="ssl_enabled=true jenkins_domain=${JENKINS_DOMAIN:-192.168.1.10}"
+    local ssl_extra_vars="ssl_enabled=true jenkins_domain=${JENKINS_DOMAIN:-192.168.86.30}"
     
     if ! run_ansible "ansible/site.yml" "ssl" "$ssl_extra_vars" "SSL certificate generation"; then
         error "SSL certificate generation failed"

@@ -22,7 +22,7 @@ ansible-playbook -i ansible/inventories/local/hosts.yml troubleshoot-haproxy-ssl
 #### Option 2: Manual Step-by-Step
 ```bash
 # 1. Generate SSL certificates first
-ansible-playbook -i ansible/inventories/local/hosts.yml ansible/site.yml --tags ssl --extra-vars "ssl_enabled=true jenkins_domain=192.168.1.10"
+ansible-playbook -i ansible/inventories/local/hosts.yml ansible/site.yml --tags ssl --extra-vars "ssl_enabled=true jenkins_domain=192.168.86.30"
 
 # 2. Deploy HAProxy configuration
 ansible-playbook -i ansible/inventories/local/hosts.yml ansible/site.yml --tags configuration --extra-vars "ssl_enabled=true"
@@ -72,8 +72,8 @@ For your environment, ensure these variables are set:
 ```yaml
 # In your inventory or playbook
 ssl_enabled: true
-jenkins_domain: "192.168.1.10"
-jenkins_wildcard_domain: "*.192.168.1.10"
+jenkins_domain: "192.168.86.30"
+jenkins_wildcard_domain: "*.192.168.86.30"
 haproxy_container_runtime: "docker"
 haproxy_frontend_port: 80
 haproxy_stats_port: 8404
@@ -83,9 +83,9 @@ haproxy_stats_port: 8404
 
 After successful deployment:
 - ✅ HAProxy container running with SSL
-- ✅ HTTPS accessible at https://192.168.1.10/
+- ✅ HTTPS accessible at https://192.168.86.30/
 - ✅ HTTP redirects to HTTPS
-- ✅ HAProxy stats at http://192.168.1.10:8404/stats
+- ✅ HAProxy stats at http://192.168.86.30:8404/stats
 - ✅ SSL certificate valid and accessible
 
 ### Troubleshooting

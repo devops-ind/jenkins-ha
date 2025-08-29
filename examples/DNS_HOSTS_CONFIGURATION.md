@@ -9,35 +9,35 @@ Configure these A records in your DNS provider:
 
 ```dns
 # Base domain
-jenkins.example.com                    A    192.168.1.10
+jenkins.example.com                    A    192.168.86.30
 
 # Wildcard record (covers all subdomains)
-*.jenkins.example.com                  A    192.168.1.10
+*.jenkins.example.com                  A    192.168.86.30
 
 # Specific team records (optional, covered by wildcard)
-devops.jenkins.example.com            A    192.168.1.10
-developer.jenkins.example.com         A    192.168.1.10
-jenkins.jenkins.example.com           A    192.168.1.10
+devops.jenkins.example.com            A    192.168.86.30
+developer.jenkins.example.com         A    192.168.86.30
+jenkins.jenkins.example.com           A    192.168.86.30
 
 # Monitoring services (optional, covered by wildcard)
-prometheus.jenkins.example.com        A    192.168.1.10
-grafana.jenkins.example.com          A    192.168.1.10
-node-exporter.jenkins.example.com     A    192.168.1.10
-haproxy-stats.jenkins.example.com     A    192.168.1.10
+prometheus.jenkins.example.com        A    192.168.86.30
+grafana.jenkins.example.com          A    192.168.86.30
+node-exporter.jenkins.example.com     A    192.168.86.30
+haproxy-stats.jenkins.example.com     A    192.168.86.30
 ```
 
 ### Alternative: Individual A Records (No Wildcard Support)
 If your DNS provider doesn't support wildcard records:
 
 ```dns
-jenkins.example.com                    A    192.168.1.10
-devops.jenkins.example.com            A    192.168.1.10
-developer.jenkins.example.com         A    192.168.1.10
-jenkins.jenkins.example.com           A    192.168.1.10
-prometheus.jenkins.example.com        A    192.168.1.10
-grafana.jenkins.example.com          A    192.168.1.10
-node-exporter.jenkins.example.com     A    192.168.1.10
-haproxy-stats.jenkins.example.com     A    192.168.1.10
+jenkins.example.com                    A    192.168.86.30
+devops.jenkins.example.com            A    192.168.86.30
+developer.jenkins.example.com         A    192.168.86.30
+jenkins.jenkins.example.com           A    192.168.86.30
+prometheus.jenkins.example.com        A    192.168.86.30
+grafana.jenkins.example.com          A    192.168.86.30
+node-exporter.jenkins.example.com     A    192.168.86.30
+haproxy-stats.jenkins.example.com     A    192.168.86.30
 ```
 
 ### SSL Certificate Configuration (if using HTTPS)
@@ -63,25 +63,25 @@ Add these entries:
 
 ```hosts
 # Jenkins HA Multi-Team Configuration
-192.168.1.10 jenkins.example.com
+192.168.86.30 jenkins.example.com
 
 # Jenkins Teams - Blue/Green Deployments
-192.168.1.10 devops.jenkins.example.com
-192.168.1.10 developer.jenkins.example.com  
-192.168.1.10 jenkins.jenkins.example.com
+192.168.86.30 devops.jenkins.example.com
+192.168.86.30 developer.jenkins.example.com  
+192.168.86.30 jenkins.jenkins.example.com
 
 # Monitoring Stack
-192.168.1.10 prometheus.jenkins.example.com
-192.168.1.10 grafana.jenkins.example.com
-192.168.1.10 node-exporter.jenkins.example.com
+192.168.86.30 prometheus.jenkins.example.com
+192.168.86.30 grafana.jenkins.example.com
+192.168.86.30 node-exporter.jenkins.example.com
 
 # HAProxy Management
-192.168.1.10 haproxy-stats.jenkins.example.com
+192.168.86.30 haproxy-stats.jenkins.example.com
 
 # Optional: Alternative team domains for testing
-192.168.1.10 staging.jenkins.example.com
-192.168.1.10 prod.jenkins.example.com
-192.168.1.10 test.jenkins.example.com
+192.168.86.30 staging.jenkins.example.com
+192.168.86.30 prod.jenkins.example.com
+192.168.86.30 test.jenkins.example.com
 ```
 
 ### For Windows Systems
@@ -101,7 +101,7 @@ Script to add/remove entries:
 #!/bin/bash
 # File: scripts/manage-hosts.sh
 
-JENKINS_IP="192.168.1.10"
+JENKINS_IP="192.168.86.30"
 DOMAIN="jenkins.example.com"
 
 add_hosts() {
@@ -212,17 +212,17 @@ dig random-subdomain.jenkins.example.com +short
 
 ```bash
 # Test Jenkins teams
-curl -H "Host: devops.jenkins.example.com" http://192.168.1.10:8000/login
-curl -H "Host: developer.jenkins.example.com" http://192.168.1.10:8000/login
-curl -H "Host: jenkins.jenkins.example.com" http://192.168.1.10:8000/login
+curl -H "Host: devops.jenkins.example.com" http://192.168.86.30:8000/login
+curl -H "Host: developer.jenkins.example.com" http://192.168.86.30:8000/login
+curl -H "Host: jenkins.jenkins.example.com" http://192.168.86.30:8000/login
 
 # Test monitoring services
-curl -H "Host: prometheus.jenkins.example.com" http://192.168.1.10:9090/graph
-curl -H "Host: grafana.jenkins.example.com" http://192.168.1.10:9300/login
-curl -H "Host: node-exporter.jenkins.example.com" http://192.168.1.10:9100/metrics
+curl -H "Host: prometheus.jenkins.example.com" http://192.168.86.30:9090/graph
+curl -H "Host: grafana.jenkins.example.com" http://192.168.86.30:9300/login
+curl -H "Host: node-exporter.jenkins.example.com" http://192.168.86.30:9100/metrics
 
 # Test HAProxy stats
-curl -u admin:admin123 -H "Host: haproxy-stats.jenkins.example.com" http://192.168.1.10:8404/stats
+curl -u admin:admin123 -H "Host: haproxy-stats.jenkins.example.com" http://192.168.86.30:8404/stats
 ```
 
 ### Browser Testing Checklist
@@ -278,9 +278,9 @@ jenkins.example.com                    A    203.0.113.100
 ### Port Forwarding for External Access
 ```bash
 # SSH tunnel for external testing
-ssh -L 8000:192.168.1.10:8000 \
-    -L 9090:192.168.1.10:9090 \
-    -L 9300:192.168.1.10:9300 \
+ssh -L 8000:192.168.86.30:8000 \
+    -L 9090:192.168.86.30:9090 \
+    -L 9300:192.168.86.30:9300 \
     user@jenkins-host
 
 # Then test locally
@@ -298,7 +298,7 @@ Example for AWS Route 53:
             "Name": "*.jenkins.example.com",
             "Type": "A",
             "TTL": 300,
-            "ResourceRecords": [{"Value": "192.168.1.10"}]
+            "ResourceRecords": [{"Value": "192.168.86.30"}]
         }
     }]
 }
@@ -349,7 +349,7 @@ cat /etc/resolv.conf
 # validate-dns.sh - Comprehensive DNS validation
 
 DOMAIN="jenkins.example.com"
-IP="192.168.1.10"
+IP="192.168.86.30"
 
 SERVICES=(
     "devops.$DOMAIN:8000"
@@ -397,7 +397,7 @@ sudo vim /etc/hosts
 nslookup devops.jenkins.example.com
 
 # Test HTTP routing
-curl -H "Host: devops.jenkins.example.com" http://192.168.1.10:8000/login
+curl -H "Host: devops.jenkins.example.com" http://192.168.86.30:8000/login
 
 # Flush DNS cache
 sudo systemctl flush-dns  # Linux

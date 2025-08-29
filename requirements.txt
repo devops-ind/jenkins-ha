@@ -1,3 +1,4 @@
+# Core Ansible dependencies
 ansible>=6.0.0
 ansible-core>=2.13.0
 jinja2>=3.0.0
@@ -5,3 +6,35 @@ PyYAML>=6.0.0
 requests>=2.28.0
 docker>=6.0.0
 kubernetes>=24.0.0
+
+# Testing and validation tools
+pre-commit>=3.0.0
+ansible-lint>=6.0.0
+yamllint>=1.32.0
+
+# Security scanning tools
+bandit>=1.7.0
+safety>=2.3.0
+
+# Code formatting and linting
+black>=23.0.0
+isort>=5.12.0
+flake8>=6.0.0
+mypy>=1.5.0
+
+# Documentation and markup validation
+markdownlint-cli>=0.37.0
+
+# Additional development tools
+pytest>=7.0.0
+pytest-ansible>=4.0.0
+
+# Groovy and Jenkins validation tools
+# Note: Groovy SDK should be installed separately on the system
+# For Ubuntu/Debian: apt-get install groovy
+# For macOS: brew install groovy
+# For development environments where Groovy is not available,
+# the hooks will fall back to basic syntax validation
+
+# Jenkins CLI tools (optional, for advanced pipeline validation)
+# jenkins-cli>=1.0.0  # Uncomment if jenkins-cli package is available

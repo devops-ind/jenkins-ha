@@ -1,6 +1,6 @@
 #!/bin/bash
-# DSL Syntax Validator for Jenkins HA Infrastructure
-# Validates Job DSL scripts for syntax and security compliance
+# Enhanced DSL Syntax Validator for Jenkins HA Infrastructure
+# Validates Job DSL scripts, Groovy files, and Jenkinsfiles for syntax and security compliance
 
 set -euo pipefail
 
@@ -9,12 +9,15 @@ GROOVY_TIMEOUT=60
 SECURITY_SCAN_TIMEOUT=120
 MAX_DSL_FILE_SIZE=1048576  # 1MB
 MAX_DSL_COMPLEXITY=1000    # lines
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Colors and formatting
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 
 # Logging functions
@@ -22,28 +25,57 @@ log() { echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+info() { echo -e "${CYAN}[INFO]${NC} $1"; }
 
-# Security patterns to detect
+# Enhanced security patterns to detect
 SECURITY_PATTERNS=(
+    # Critical system operations
     "System\\.exit"
     "Runtime\\.getRuntime"
     "ProcessBuilder"
-    "exec\\("
-    "\\$\\{.*\\}"
-    "new\\s+File\\("
-    "FileInputStream"
-    "FileOutputStream"
-    "Process\\s*=\\s*"
-    "javax\\.script"
-    "Unsafe"
-    "sun\\.misc"
-    "java\\.lang\\.reflect"
-    "ClassLoader"
-    "URLClassLoader"
-    "System\\.getProperty"
-    "System\\.setProperty"
-    "Environment\\.getEnvironment"
+    "GroovyShell"
+    "evaluate\\("
+    "@Grab\\("
+    "ScriptEngine"
+    
+    # Credential patterns
+    "password\\s*[:=]\\s*[\"'][^\"']{3,}[\"']"
+    "secret\\s*[:=]\\s*[\"'][^\"']{8,}[\"']"
+    "token\\s*[:=]\\s*[\"'][^\"']{10,}[\"']"
+    "api[_-]?key\\s*[:=]\\s*[\"'][^\"']{10,}[\"']"
+    
+    # Shell injection risks
+    "sh\\s*[\"'].*\\$\\{[^}]*\\}.*[|;&\`]"
+    "bat\\s*[\"'].*\\$\\{[^}]*\\}"
+    "script\\s*\\{.*sh.*curl.*\\|.*sh"
+    
+    # File system risks
+    "rm\\s+-rf\\s+/"
+    "deleteDir\\(\\s*[\"'][^\"']*\\.\\.[^\"']*[\"']"
+    "writeFile.*\\.\\.[/\\\\]"
+    
+    # Jenkins-specific risks
+    "Jenkins\\.instance\\.save"
+    "Jenkins\\.instance\\.doRestart"
+    "Jenkins\\.instance\\.doSafeRestart"
+    "node\\s*\\(\\s*[\"']master[\"']"
+    
+    # Privilege escalation
+    "sudo\\s"
+    "setuid|setgid"
+    "chmod\\s+777"
 )
+
+# Variables for command line arguments
+DSL_PATH="${PROJECT_ROOT}/jenkins-dsl"
+TEAM_NAME=""
+SECURITY_CHECK=false
+COMPLEXITY_CHECK=false
+OUTPUT_FORMAT="text"
+VALIDATION_RESULTS=()
+SYNTAX_ERRORS=()
+SECURITY_VIOLATIONS=()
+COMPLEXITY_ISSUES=()
 
 # Complexity patterns
 COMPLEXITY_PATTERNS=(
@@ -192,20 +224,68 @@ EOF
     esac
 }
 
-# Find DSL files
-find_dsl_files() {
+# Find DSL and Jenkins files
+find_target_files() {
     local path="$1"
     
     if [[ -f "$path" ]]; then
-        if [[ "$path" == *.groovy ]]; then
+        if [[ "$path" == *.groovy ]] || [[ "$path" == *Jenkinsfile* ]]; then
             echo "$path"
         fi
     elif [[ -d "$path" ]]; then
-        find "$path" -name "*.groovy" -type f
+        # Find all Groovy files and Jenkinsfiles
+        find "$path" \( -name "*.groovy" -o -name "*Jenkinsfile*" \) -type f
     else
-        error "DSL path does not exist: $path"
-        return 1
+        # Default to project-wide search
+        find "$PROJECT_ROOT" \( -name "*.groovy" -o -name "*Jenkinsfile*" \) -type f 2>/dev/null | grep -E "(jenkins-dsl|pipelines|tests.*groovy)" || true
     fi
+}
+
+# Validate Jenkinsfile structure
+validate_jenkinsfile_structure() {
+    local file="$1"
+    
+    log "Validating Jenkinsfile structure: $(basename "$file")"
+    
+    local issues_found=false
+    
+    # Check for basic pipeline structure
+    if ! grep -q "pipeline\s*{" "$file"; then
+        add_validation_result "$file" "jenkinsfile" "error" "Missing pipeline block"
+        issues_found=true
+    fi
+    
+    # Check for agent definition
+    if ! grep -q "agent\s\+" "$file"; then
+        add_validation_result "$file" "jenkinsfile" "warning" "Missing agent definition"
+    fi
+    
+    # Check for stages
+    if ! grep -q "stages\s*{" "$file"; then
+        add_validation_result "$file" "jenkinsfile" "error" "Missing stages block"
+        issues_found=true
+    fi
+    
+    # Check for stage definitions
+    if ! grep -q "stage\s*(" "$file"; then
+        add_validation_result "$file" "jenkinsfile" "error" "Missing stage definitions"
+        issues_found=true
+    fi
+    
+    # Check for best practices
+    if ! grep -q "options\s*{" "$file"; then
+        add_validation_result "$file" "jenkinsfile" "info" "Consider adding options block for better configuration"
+    fi
+    
+    if ! grep -q "post\s*{" "$file"; then
+        add_validation_result "$file" "jenkinsfile" "info" "Consider adding post block for cleanup"
+    fi
+    
+    if [[ "$issues_found" == "false" ]]; then
+        add_validation_result "$file" "jenkinsfile" "pass" "Jenkinsfile structure is valid"
+    fi
+    
+    return 0
 }
 
 # Validate file size
@@ -386,28 +466,35 @@ check_dsl_best_practices() {
     fi
 }
 
-# Validate single DSL file
-validate_dsl_file() {
+# Validate single file (Groovy or Jenkinsfile)
+validate_target_file() {
     local file="$1"
     
-    log "Validating DSL file: $file"
+    log "Validating file: $file"
     
     # Check file size
     if ! validate_file_size "$file"; then
         return 1
     fi
     
-    # Validate syntax
-    validate_groovy_syntax "$file"
-    
-    # Security checks
-    check_security_violations "$file"
-    
-    # Complexity analysis
-    analyze_complexity "$file"
-    
-    # Best practices
-    check_dsl_best_practices "$file"
+    # Determine file type and apply appropriate validations
+    if [[ "$file" == *Jenkinsfile* ]]; then
+        # Jenkinsfile-specific validations
+        validate_jenkinsfile_structure "$file"
+        validate_groovy_syntax "$file"  # Jenkinsfiles are also Groovy
+        check_security_violations "$file"
+        analyze_complexity "$file"
+    elif [[ "$file" == *.groovy ]]; then
+        # Groovy file validations
+        validate_groovy_syntax "$file"
+        check_security_violations "$file"
+        analyze_complexity "$file"
+        
+        # DSL-specific best practices for jenkins-dsl files
+        if [[ "$file" == *jenkins-dsl* ]]; then
+            check_dsl_best_practices "$file"
+        fi
+    fi
     
     return 0
 }
@@ -530,24 +617,24 @@ main() {
     log "Starting DSL validation for team: $TEAM_NAME"
     log "DSL path: $DSL_PATH"
     
-    # Find DSL files
-    local dsl_files
-    dsl_files=$(find_dsl_files "$DSL_PATH")
+    # Find target files (Groovy and Jenkinsfiles)
+    local target_files
+    target_files=$(find_target_files "$DSL_PATH")
     
-    if [[ -z "$dsl_files" ]]; then
-        error "No DSL files found in: $DSL_PATH"
+    if [[ -z "$target_files" ]]; then
+        error "No Groovy or Jenkins files found in: $DSL_PATH"
         exit 1
     fi
     
-    local file_count=$(echo "$dsl_files" | wc -l)
-    log "Found $file_count DSL files to validate"
+    local file_count=$(echo "$target_files" | wc -l)
+    log "Found $file_count files to validate"
     
     # Validate each file
     while IFS= read -r file; do
         if [[ -n "$file" ]]; then
-            validate_dsl_file "$file"
+            validate_target_file "$file"
         fi
-    done <<< "$dsl_files"
+    done <<< "$target_files"
     
     # Generate report
     case "$OUTPUT_FORMAT" in

@@ -82,8 +82,8 @@ backend jenkins_backend_devops
     http-check expect status 200
     
     # Blue environment active, green as backup
-    server devops-centos9-vm-blue 192.168.1.10:8080 check inter 5s fall 3 rise 2
-    server devops-centos9-vm-green 192.168.1.10:8180 check inter 5s fall 3 rise 2 backup
+    server devops-centos9-vm-blue 192.168.86.30:8080 check inter 5s fall 3 rise 2
+    server devops-centos9-vm-green 192.168.86.30:8180 check inter 5s fall 3 rise 2 backup
     
     # Team-specific headers
     http-response set-header X-Jenkins-Team devops
@@ -97,8 +97,8 @@ backend jenkins_backend_ma
     http-check expect status 200
     
     # Blue environment active, green as backup
-    server ma-centos9-vm-blue 192.168.1.10:8081 check inter 5s fall 3 rise 2
-    server ma-centos9-vm-green 192.168.1.10:8181 check inter 5s fall 3 rise 2 backup
+    server ma-centos9-vm-blue 192.168.86.30:8081 check inter 5s fall 3 rise 2
+    server ma-centos9-vm-green 192.168.86.30:8181 check inter 5s fall 3 rise 2 backup
     
     # Team-specific headers
     http-response set-header X-Jenkins-Team ma
@@ -112,8 +112,8 @@ backend jenkins_backend_ba
     http-check expect status 200
     
     # Blue environment active, green as backup
-    server ba-centos9-vm-blue 192.168.1.10:8082 check inter 5s fall 3 rise 2
-    server ba-centos9-vm-green 192.168.1.10:8182 check inter 5s fall 3 rise 2 backup
+    server ba-centos9-vm-blue 192.168.86.30:8082 check inter 5s fall 3 rise 2
+    server ba-centos9-vm-green 192.168.86.30:8182 check inter 5s fall 3 rise 2 backup
     
     # Team-specific headers
     http-response set-header X-Jenkins-Team ba
@@ -127,8 +127,8 @@ backend jenkins_backend_tw
     http-check expect status 200
     
     # Blue environment active, green as backup
-    server tw-centos9-vm-blue 192.168.1.10:8083 check inter 5s fall 3 rise 2
-    server tw-centos9-vm-green 192.168.1.10:8183 check inter 5s fall 3 rise 2 backup
+    server tw-centos9-vm-blue 192.168.86.30:8083 check inter 5s fall 3 rise 2
+    server tw-centos9-vm-green 192.168.86.30:8183 check inter 5s fall 3 rise 2 backup
     
     # Team-specific headers
     http-response set-header X-Jenkins-Team tw
@@ -141,30 +141,30 @@ backend jenkins_backend_tw
 ### **Domain Access Tests**
 ```bash
 # Default domain (routes to devops)
-curl -H "Host: jenkins.example.com" http://192.168.1.10:8000/login
+curl -H "Host: jenkins.example.com" http://192.168.86.30:8000/login
 # Expected: DevOps Jenkins login page
 
 # DevOps team (explicit)
-curl -H "Host: devops.jenkins.example.com" http://192.168.1.10:8000/login
+curl -H "Host: devops.jenkins.example.com" http://192.168.86.30:8000/login
 # Expected: DevOps Jenkins login page
 
 # Marketing Analytics team
-curl -H "Host: ma.jenkins.example.com" http://192.168.1.10:8000/login
+curl -H "Host: ma.jenkins.example.com" http://192.168.86.30:8000/login
 # Expected: MA Jenkins login page
 
 # Business Analytics team
-curl -H "Host: ba.jenkins.example.com" http://192.168.1.10:8000/login
+curl -H "Host: ba.jenkins.example.com" http://192.168.86.30:8000/login
 # Expected: BA Jenkins login page
 
 # Test/QA team
-curl -H "Host: tw.jenkins.example.com" http://192.168.1.10:8000/login
+curl -H "Host: tw.jenkins.example.com" http://192.168.86.30:8000/login
 # Expected: TW Jenkins login page
 ```
 
 ### **Blue-Green Testing**
 ```bash
 # Test blue environment (default)
-curl -v -H "Host: devops.jenkins.example.com" http://192.168.1.10:8000/login
+curl -v -H "Host: devops.jenkins.example.com" http://192.168.86.30:8000/login
 # Should show X-Jenkins-Environment: blue header
 
 # Switch to green environment (update inventory)
@@ -175,7 +175,7 @@ curl -v -H "Host: devops.jenkins.example.com" http://192.168.1.10:8000/login
 ### **Team Headers Verification**
 ```bash
 # Check team-specific headers
-curl -I -H "Host: ma.jenkins.example.com" http://192.168.1.10:8000/login | grep -E "X-Jenkins-Team|X-Team-Role"
+curl -I -H "Host: ma.jenkins.example.com" http://192.168.86.30:8000/login | grep -E "X-Jenkins-Team|X-Team-Role"
 # Expected: 
 # X-Jenkins-Team: ma
 # X-Team-Role: marketing-analytics

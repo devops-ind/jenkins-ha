@@ -1,0 +1,395 @@
+---
+# HAProxy SSL Troubleshooting and Recovery Playbook
+# Comprehensive diagnostics and fixes for SSL certificate mounting issues
+
+- name: HAProxy SSL Troubleshooting and Recovery
+  hosts: all
+  become: yes
+  gather_facts: yes
+  vars:
+    jenkins_domain: "{{ jenkins_domain | default('192.168.86.30') }}"
+    ssl_enabled: true
+    haproxy_user: haproxy
+    troubleshoot_mode: "{{ troubleshoot_mode | default('diagnose') }}"  # diagnose, fix, recover
+
+  tasks:
+    - name: Display troubleshooting mode
+      debug:
+        msg: |
+          ====================================
+          HAProxy SSL Troubleshooting Mode: {{ troubleshoot_mode }}
+          ====================================
+          
+          Available modes:
+          - diagnose: Comprehensive system diagnostics
+          - fix: Attempt automatic fixes
+          - recover: Full SSL certificate regeneration and container redeployment
+          
+          Domain: {{ jenkins_domain }}
+          SSL Enabled: {{ ssl_enabled }}
+
+    # ====================================
+    # COMPREHENSIVE DIAGNOSTICS
+    # ====================================
+
+    - name: Comprehensive HAProxy and SSL diagnostics
+      block:
+        - name: Check Docker service status
+          systemd:
+            name: docker
+            state: started
+          register: docker_service_check
+          failed_when: false
+
+        - name: Gather Docker system information
+          shell: |
+            echo "Docker version:"
+            docker version 2>/dev/null || echo "Docker not available"
+            echo ""
+            echo "Docker info:"
+            docker info 2>/dev/null | head -20 || echo "Docker info not available"
+            echo ""
+            echo "Current containers:"
+            docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null || echo "Cannot list containers"
+          register: docker_diagnostics
+          failed_when: false
+
+        - name: Check HAProxy container status and logs
+          shell: |
+            set +e
+            echo "HAProxy container status:"
+            if docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.CreatedAt}}' | grep jenkins-haproxy; then
+              echo ""
+              echo "HAProxy container logs (last 100 lines):"
+              docker logs --tail 100 jenkins-haproxy 2>/dev/null
+            else
+              echo "No HAProxy container found"
+            fi
+          register: haproxy_diagnostics
+          failed_when: false
+
+        - name: Comprehensive SSL file system analysis
+          shell: |
+            set +e
+            echo "SSL Directory Structure Analysis:"
+            echo "================================="
+            
+            for dir in /etc/ssl /etc/haproxy/ssl /etc/ssl/certs /etc/ssl/private; do
+              if [[ -d "$dir" ]]; then
+                echo ""
+                echo "Directory: $dir"
+                ls -la "$dir" 2>/dev/null | head -20
+              else
+                echo "Directory $dir does not exist"
+              fi
+            done
+            
+            echo ""
+            echo "SSL Certificate Files Analysis:"
+            echo "=============================="
+            
+            # Check for certificate files
+            for file in \
+              "/etc/haproxy/ssl/combined.pem" \
+              "/etc/haproxy/ssl/wildcard-${jenkins_domain}-haproxy.pem" \
+              "/etc/ssl/certs/wildcard-${jenkins_domain}.crt" \
+              "/etc/ssl/private/wildcard-${jenkins_domain}.key"; do
+              
+              if [[ -f "$file" ]]; then
+                echo ""
+                echo "File: $file"
+                ls -la "$file"
+                echo "Size: $(stat -c%s "$file") bytes"
+                echo "Type: $(file "$file")"
+                
+                # Test certificate validity
+                if [[ "$file" == *.pem || "$file" == *.crt ]]; then
+                  if openssl x509 -in "$file" -noout -text >/dev/null 2>&1; then
+                    echo "Certificate validity: VALID"
+                    echo "Subject: $(openssl x509 -in "$file" -noout -subject)"
+                    echo "Issuer: $(openssl x509 -in "$file" -noout -issuer)"
+                    echo "Valid dates: $(openssl x509 -in "$file" -noout -dates)"
+                  else
+                    echo "Certificate validity: INVALID"
+                  fi
+                fi
+                
+                # Test private key validity
+                if [[ "$file" == *.pem && -s "$file" ]]; then
+                  if openssl rsa -in "$file" -check -noout >/dev/null 2>&1; then
+                    echo "Private key validity: VALID"
+                  else
+                    echo "Private key validity: INVALID or NOT PRESENT"
+                  fi
+                fi
+              else
+                echo "File not found: $file"
+              fi
+            done
+            
+            echo ""
+            echo "File Permissions and Ownership:"
+            echo "=============================="
+            find /etc -name "*.pem" -o -name "*.crt" -o -name "*.key" 2>/dev/null | grep -E "(ssl|haproxy)" | while read file; do
+              if [[ -f "$file" ]]; then
+                echo "$file: $(ls -la "$file")"
+              fi
+            done
+          register: ssl_diagnostics
+          failed_when: false
+
+        - name: Check HAProxy configuration file
+          shell: |
+            set +e
+            echo "HAProxy Configuration Analysis:"
+            echo "=============================="
+            
+            CONFIG_FILE="/etc/haproxy/haproxy.cfg"
+            if [[ -f "$CONFIG_FILE" ]]; then
+              echo "Configuration file exists: $CONFIG_FILE"
+              echo "Size: $(stat -c%s "$CONFIG_FILE") bytes"
+              echo ""
+              echo "SSL-related configuration lines:"
+              grep -n -i ssl "$CONFIG_FILE" || echo "No SSL configuration found"
+              echo ""
+              echo "Certificate path references:"
+              grep -n "crt\|pem" "$CONFIG_FILE" || echo "No certificate paths found"
+              echo ""
+              echo "Configuration syntax check:"
+              if command -v haproxy >/dev/null; then
+                haproxy -f "$CONFIG_FILE" -c
+              else
+                echo "HAProxy binary not found on host system"
+              fi
+            else
+              echo "HAProxy configuration file not found: $CONFIG_FILE"
+            fi
+          register: haproxy_config_diagnostics
+          failed_when: false
+
+        - name: Display comprehensive diagnostic results
+          debug:
+            msg: |
+              ====================================
+              HAProxy SSL Diagnostic Results
+              ====================================
+              
+              Docker Service: {{ 'RUNNING' if docker_service_check.state == 'started' else 'STOPPED' }}
+              
+              === Docker System ===
+              {{ docker_diagnostics.stdout | default('No Docker diagnostics available') }}
+              
+              === HAProxy Container ===
+              {{ haproxy_diagnostics.stdout | default('No HAProxy diagnostics available') }}
+              
+              === SSL File System ===
+              {{ ssl_diagnostics.stdout | default('No SSL diagnostics available') }}
+              
+              === HAProxy Configuration ===
+              {{ haproxy_config_diagnostics.stdout | default('No config diagnostics available') }}
+
+      tags: ['diagnose']
+      when: troubleshoot_mode in ['diagnose', 'fix', 'recover']
+
+    # ====================================
+    # AUTOMATIC FIXES
+    # ====================================
+
+    - name: Automatic SSL and container fixes
+      block:
+        - name: Fix SSL directory permissions and ownership
+          shell: |
+            echo "Fixing SSL directory permissions and ownership..."
+            
+            # Create missing directories
+            mkdir -p /etc/haproxy/ssl /etc/ssl/{certs,private,csr,ca}
+            
+            # Fix ownership
+            chown -R root:{{ haproxy_user }} /etc/haproxy/ssl
+            chown -R root:{{ haproxy_user }} /etc/ssl/{certs,private}
+            
+            # Fix permissions
+            chmod 755 /etc/haproxy/ssl /etc/ssl/certs
+            chmod 700 /etc/ssl/private
+            
+            # Fix certificate file permissions if they exist
+            find /etc -name "*.pem" -o -name "*.crt" 2>/dev/null | while read file; do
+              if [[ -f "$file" ]]; then
+                chmod 644 "$file"
+                chown root:{{ haproxy_user }} "$file"
+              fi
+            done
+            
+            find /etc -name "*.key" 2>/dev/null | while read file; do
+              if [[ -f "$file" ]]; then
+                chmod 600 "$file"
+                chown root:{{ haproxy_user }} "$file"
+              fi
+            done
+
+        - name: Recreate SSL certificate bundle if source files exist
+          shell: |
+            set -euo pipefail
+            
+            CERT_FILE="/etc/ssl/certs/wildcard-{{ jenkins_domain }}.crt"
+            KEY_FILE="/etc/ssl/private/wildcard-{{ jenkins_domain }}.key"
+            BUNDLE_FILE="/etc/haproxy/ssl/wildcard-{{ jenkins_domain }}-haproxy.pem"
+            COMBINED_FILE="/etc/haproxy/ssl/combined.pem"
+            
+            echo "Attempting to recreate SSL certificate bundle..."
+            
+            if [[ -f "$CERT_FILE" && -f "$KEY_FILE" && -s "$CERT_FILE" && -s "$KEY_FILE" ]]; then
+              echo "Source certificate files found. Creating bundle..."
+              
+              # Create bundle
+              cat "$CERT_FILE" "$KEY_FILE" > "$BUNDLE_FILE"
+              cp "$BUNDLE_FILE" "$COMBINED_FILE"
+              
+              # Set permissions
+              chmod 600 "$BUNDLE_FILE" "$COMBINED_FILE"
+              chown root:{{ haproxy_user }} "$BUNDLE_FILE" "$COMBINED_FILE"
+              
+              echo "SSL certificate bundle recreated successfully"
+              echo "Bundle: $BUNDLE_FILE ($(stat -c%s "$BUNDLE_FILE") bytes)"
+              echo "Combined: $COMBINED_FILE ($(stat -c%s "$COMBINED_FILE") bytes)"
+            else
+              echo "Source certificate files not found or empty. Bundle recreation skipped."
+              echo "Certificate file: $CERT_FILE $(if [[ -f "$CERT_FILE" ]]; then echo "EXISTS ($(stat -c%s "$CERT_FILE") bytes)"; else echo "MISSING"; fi)"
+              echo "Key file: $KEY_FILE $(if [[ -f "$KEY_FILE" ]]; then echo "EXISTS ($(stat -c%s "$KEY_FILE") bytes)"; else echo "MISSING"; fi)"
+            fi
+          failed_when: false
+
+        - name: Clean up and restart HAProxy container
+          shell: |
+            set +e
+            echo "Cleaning up and restarting HAProxy container..."
+            
+            # Stop and remove existing container
+            docker stop jenkins-haproxy 2>/dev/null
+            docker rm -f jenkins-haproxy 2>/dev/null
+            
+            echo "Existing HAProxy container cleaned up"
+          register: container_cleanup
+
+      tags: ['fix']
+      when: troubleshoot_mode in ['fix', 'recover']
+
+    # ====================================
+    # FULL RECOVERY
+    # ====================================
+
+    - name: Full SSL certificate regeneration and HAProxy recovery
+      block:
+        - name: Complete SSL certificate regeneration
+          include_role:
+            name: high-availability-v2
+            tasks_from: ssl-certificates.yml
+          vars:
+            ssl_enabled: true
+            jenkins_teams:
+              - team_name: "devops"
+                ports: { web: 8080 }
+                active_environment: "blue"
+              - team_name: "dev-qa"
+                ports: { web: 8089 }
+                active_environment: "green"
+
+        - name: Complete HAProxy container redeployment
+          include_role:
+            name: high-availability-v2
+            tasks_from: haproxy.yml
+          vars:
+            ssl_enabled: true
+
+      tags: ['recover']
+      when: troubleshoot_mode == 'recover'
+
+    # ====================================
+    # POST-TROUBLESHOOTING VERIFICATION
+    # ====================================
+
+    - name: Post-troubleshooting verification
+      block:
+        - name: Final system verification
+          shell: |
+            echo "Final HAProxy SSL verification:"
+            echo "=============================="
+            
+            # Container status
+            if docker ps --format '{{.Names}}\t{{.Status}}' | grep -q jenkins-haproxy; then
+              echo "✓ HAProxy container is running"
+            else
+              echo "✗ HAProxy container is not running"
+            fi
+            
+            # SSL certificate verification
+            if [[ -f "/etc/haproxy/ssl/combined.pem" && -s "/etc/haproxy/ssl/combined.pem" ]]; then
+              echo "✓ SSL certificate bundle exists and is not empty"
+              
+              if openssl x509 -in /etc/haproxy/ssl/combined.pem -noout -text >/dev/null 2>&1; then
+                echo "✓ SSL certificate is valid"
+              else
+                echo "✗ SSL certificate is invalid"
+              fi
+            else
+              echo "✗ SSL certificate bundle is missing or empty"
+            fi
+            
+            # Configuration verification
+            if docker exec jenkins-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg 2>/dev/null; then
+              echo "✓ HAProxy configuration is valid"
+            else
+              echo "✗ HAProxy configuration is invalid"
+            fi
+            
+            # Endpoint accessibility
+            {% if ssl_enabled | default(false) %}
+            if curl -k -s -o /dev/null -w "%{http_code}" https://{{ ansible_default_ipv4.address | default('localhost') }}/ | grep -q "200\|301\|302"; then
+              echo "✓ HTTPS endpoint is accessible"
+            else
+              echo "✗ HTTPS endpoint is not accessible"
+            fi
+            {% endif %}
+            
+            if curl -s -o /dev/null -w "%{http_code}" http://{{ ansible_default_ipv4.address | default('localhost') }}:{{ haproxy_stats_port | default(8404) }}/stats | grep -q "200"; then
+              echo "✓ HAProxy stats page is accessible"
+            else
+              echo "✗ HAProxy stats page is not accessible"
+            fi
+            
+          register: final_verification
+
+        - name: Display final troubleshooting summary
+          debug:
+            msg: |
+              ====================================
+              HAProxy SSL Troubleshooting Complete
+              ====================================
+              
+              Mode: {{ troubleshoot_mode }}
+              Status: {{ 'SUCCESS' if final_verification.rc == 0 else 'PARTIAL SUCCESS' }}
+              
+              {{ final_verification.stdout }}
+              
+              Next Steps:
+              {% if troubleshoot_mode == 'diagnose' %}
+              1. Run with --extra-vars "troubleshoot_mode=fix" to attempt fixes
+              2. Run with --extra-vars "troubleshoot_mode=recover" for full recovery
+              {% elif troubleshoot_mode == 'fix' %}
+              1. If issues persist, run with --extra-vars "troubleshoot_mode=recover"
+              2. Check HAProxy logs: docker logs jenkins-haproxy
+              {% else %}
+              1. Verify services are accessible via browser
+              2. Monitor HAProxy stats: http://{{ ansible_default_ipv4.address | default('localhost') }}:{{ haproxy_stats_port | default(8404) }}/stats
+              {% endif %}
+              
+              Useful Commands:
+              - Check container: docker ps | grep haproxy
+              - View logs: docker logs jenkins-haproxy
+              - Test SSL: openssl s_client -connect {{ ansible_default_ipv4.address | default('localhost') }}:443
+              ====================================
+
+      tags: ['verify']
+      always:
+        - name: Always run final verification
+          meta: noop

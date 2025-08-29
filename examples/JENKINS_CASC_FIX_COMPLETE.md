@@ -47,12 +47,12 @@ The image building process was trying to copy non-existent `jenkins.yaml` files 
 ### Test 1: Setup Wizard Elimination ✅
 - **Before**: Jenkins showed setup wizard with admin password prompt
 - **After**: Jenkins starts directly to dashboard  
-- **Verification**: `curl http://192.168.1.10:8000/` returns dashboard HTML (no setup wizard content)
+- **Verification**: `curl http://192.168.86.30:8000/` returns dashboard HTML (no setup wizard content)
 
 ### Test 2: API Accessibility ✅  
 - **Before**: API required authentication/setup completion
 - **After**: API immediately accessible without authentication barriers
-- **Verification**: `curl http://192.168.1.10:8000/api/json` returns Jenkins status JSON
+- **Verification**: `curl http://192.168.86.30:8000/api/json` returns Jenkins status JSON
 
 ### Test 3: Team-Specific Configuration Loading ✅
 - **Before**: Generic Jenkins with no team customization  
@@ -67,11 +67,11 @@ The image building process was trying to copy non-existent `jenkins.yaml` files 
 ### Test 5: HAProxy Integration ✅
 - **Before**: HAProxy routing potentially broken due to Jenkins setup issues
 - **After**: Team-specific routing working perfectly  
-- **Verification**: `curl -H "Host: devopsjenkins.192.168.1.10" http://192.168.1.10:8000/api/json` returns correct team-specific URL
+- **Verification**: `curl -H "Host: devopsjenkins.192.168.86.30" http://192.168.86.30:8000/api/json` returns correct team-specific URL
 
 ## 📊 Deployment Status - PRODUCTION READY ✅
 
-### Container Status on CentOS VM (192.168.1.10):
+### Container Status on CentOS VM (192.168.86.30):
 ```bash
 jenkins-haproxy         Up (healthy)     - Load balancer with team routing
 jenkins-devops-blue     Up (healthy)     - Team devops blue environment  
@@ -79,8 +79,8 @@ jenkins-devops-green    Up (healthy)     - Team devops green environment
 ```
 
 ### Network Connectivity:
-- **HAProxy**: http://192.168.1.10:8000/ (HTTP 200) ✅
-- **Jenkins API**: http://192.168.1.10:8000/api/json (accessible) ✅  
+- **HAProxy**: http://192.168.86.30:8000/ (HTTP 200) ✅
+- **Jenkins API**: http://192.168.86.30:8000/api/json (accessible) ✅  
 - **Team Routing**: Host header routing working correctly ✅
 
 ### CASC Configuration Status:
@@ -163,10 +163,10 @@ ls -la /opt/jenkins-custom-builds/devops/blue/jenkins.yaml
 docker logs jenkins-devops-blue | grep -i casc
 
 # Test API accessibility  
-curl http://192.168.1.10:8000/api/json
+curl http://192.168.86.30:8000/api/json
 
 # Test team routing
-curl -H "Host: devopsjenkins.192.168.1.10" http://192.168.1.10:8000/api/json
+curl -H "Host: devopsjenkins.192.168.86.30" http://192.168.86.30:8000/api/json
 ```
 
 ## ✅ Final Status: IMPLEMENTATION SUCCESSFUL
@@ -178,4 +178,4 @@ The Jenkins CASC configuration loading issue has been **completely resolved**. T
 - ✅ **Blue-Green Capable**: Environment switching supported
 - ✅ **Highly Reliable**: Consistent configuration loading across deployments
 
-**Jenkins HA infrastructure with CASC is now fully operational on CentOS VM (192.168.1.10).**
+**Jenkins HA infrastructure with CASC is now fully operational on CentOS VM (192.168.86.30).**

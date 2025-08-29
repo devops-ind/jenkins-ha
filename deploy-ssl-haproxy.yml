@@ -7,8 +7,8 @@
   vars:
     jenkins_ha_enabled: true
     ssl_enabled: false
-    jenkins_domain: "192.168.1.10"
-    jenkins_wildcard_domain: "*.192.168.1.10"
+    jenkins_domain: "192.168.86.30"
+    jenkins_wildcard_domain: "*.192.168.86.30"
     
     # HAProxy configuration
     haproxy_container_runtime: "docker"

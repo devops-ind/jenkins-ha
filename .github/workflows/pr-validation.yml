@@ -1,0 +1,519 @@
+name: PR Fast Validation
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    types: [opened, synchronize, reopened]
+
+env:
+  PYTHON_VERSION: '3.11'
+  FORCE_COLOR: 1
+
+# Cancel in-progress runs for the same PR
+concurrency:
+  group: pr-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Quick pre-flight checks
+  pr-preflight:
+    name: PR Pre-flight Checks
+    runs-on: ubuntu-latest
+    outputs:
+      should-skip: ${{ steps.skip-check.outputs.should-skip }}
+      changed-files: ${{ steps.changes.outputs.all-changed-files }}
+      has-python: ${{ steps.changes.outputs.has-python }}
+      has-ansible: ${{ steps.changes.outputs.has-ansible }}
+      has-scripts: ${{ steps.changes.outputs.has-scripts }}
+      has-docs-only: ${{ steps.changes.outputs.has-docs-only }}
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Skip duplicate runs
+        id: skip-check
+        uses: fkirc/skip-duplicate-actions@v5
+        with:
+          concurrent_skipping: 'same_content_newer'
+          paths_ignore: '["docs/**", "*.md", "examples/**"]'
+
+      - name: Detect changed files and set flags
+        id: changes
+        run: |
+          # Get all changed files
+          CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.sha }} | tr '\n' ' ')
+          echo "all-changed-files=${CHANGED_FILES}" >> $GITHUB_OUTPUT
+          
+          # Check file types
+          HAS_PYTHON="false"
+          HAS_ANSIBLE="false"
+          HAS_SCRIPTS="false"
+          HAS_DOCS_ONLY="true"
+          
+          for file in $CHANGED_FILES; do
+            case $file in
+              *.py)
+                HAS_PYTHON="true"
+                HAS_DOCS_ONLY="false"
+                ;;
+              ansible/*)
+                HAS_ANSIBLE="true"
+                HAS_DOCS_ONLY="false"
+                ;;
+              scripts/*.sh)
+                HAS_SCRIPTS="true"
+                HAS_DOCS_ONLY="false"
+                ;;
+              *.yml|*.yaml)
+                HAS_DOCS_ONLY="false"
+                ;;
+              docs/*|*.md|examples/*)
+                # Keep HAS_DOCS_ONLY as is
+                ;;
+              *)
+                HAS_DOCS_ONLY="false"
+                ;;
+            esac
+          done
+          
+          echo "has-python=${HAS_PYTHON}" >> $GITHUB_OUTPUT
+          echo "has-ansible=${HAS_ANSIBLE}" >> $GITHUB_OUTPUT
+          echo "has-scripts=${HAS_SCRIPTS}" >> $GITHUB_OUTPUT
+          echo "has-docs-only=${HAS_DOCS_ONLY}" >> $GITHUB_OUTPUT
+          
+          echo "📊 Change Summary:"
+          echo "  Python files: ${HAS_PYTHON}"
+          echo "  Ansible files: ${HAS_ANSIBLE}"
+          echo "  Script files: ${HAS_SCRIPTS}"
+          echo "  Documentation only: ${HAS_DOCS_ONLY}"
+
+  # Fast syntax and formatting checks
+  fast-validation:
+    name: Fast Syntax & Format Validation
+    runs-on: ubuntu-latest
+    needs: pr-preflight
+    if: needs.pr-preflight.outputs.should-skip != 'true' && needs.pr-preflight.outputs.has-docs-only != 'true'
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-pr-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-pr-
+
+      - name: Install basic validation tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install pre-commit black isort flake8 yamllint
+
+      - name: Install Ansible (if needed)
+        if: needs.pr-preflight.outputs.has-ansible == 'true'
+        run: |
+          pip install ansible ansible-lint
+
+      - name: Install shellcheck (if needed)
+        if: needs.pr-preflight.outputs.has-scripts == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Run pre-commit hooks on changed files
+        run: |
+          # Install pre-commit hooks
+          pre-commit install
+          
+          # Run only on changed files for speed
+          CHANGED_FILES="${{ needs.pr-preflight.outputs.changed-files }}"
+          if [[ -n "$CHANGED_FILES" ]]; then
+            echo "Running pre-commit on changed files: $CHANGED_FILES"
+            pre-commit run --files $CHANGED_FILES || {
+              echo "❌ Pre-commit hooks failed"
+              echo "💡 Run 'pre-commit run --all-files' locally to fix issues"
+              exit 1
+            }
+          else
+            echo "No files to validate"
+          fi
+
+      - name: Python-specific checks
+        if: needs.pr-preflight.outputs.has-python == 'true'
+        run: |
+          echo "🐍 Running Python-specific checks..."
+          
+          # Check for common Python issues
+          PYTHON_FILES=$(echo "${{ needs.pr-preflight.outputs.changed-files }}" | tr ' ' '\n' | grep '\.py$' || true)
+          
+          if [[ -n "$PYTHON_FILES" ]]; then
+            echo "Python files to check: $PYTHON_FILES"
+            
+            # Format check
+            black --check $PYTHON_FILES || {
+              echo "❌ Python code formatting issues found"
+              echo "💡 Run 'black $PYTHON_FILES' to fix formatting"
+              exit 1
+            }
+            
+            # Import sorting check
+            isort --check-only $PYTHON_FILES || {
+              echo "❌ Import sorting issues found"
+              echo "💡 Run 'isort $PYTHON_FILES' to fix imports"
+              exit 1
+            }
+            
+            # Linting
+            flake8 $PYTHON_FILES --max-line-length=120 --extend-ignore=E203,W503 || {
+              echo "❌ Python linting issues found"
+              exit 1
+            }
+            
+            echo "✅ Python validation passed"
+          else
+            echo "No Python files to validate"
+          fi
+
+      - name: Ansible-specific checks
+        if: needs.pr-preflight.outputs.has-ansible == 'true'
+        run: |
+          echo "🎭 Running Ansible-specific checks..."
+          
+          # Quick syntax check for main playbook
+          cd ansible
+          ansible-playbook site.yml --syntax-check || {
+            echo "❌ Ansible playbook syntax check failed"
+            exit 1
+          }
+          
+          # Quick inventory validation
+          ansible-inventory -i inventories/local/hosts.yml --list > /dev/null || {
+            echo "❌ Local inventory validation failed"
+            exit 1
+          }
+          
+          echo "✅ Ansible syntax validation passed"
+
+      - name: Shell script checks
+        if: needs.pr-preflight.outputs.has-scripts == 'true'
+        run: |
+          echo "🐚 Running shell script checks..."
+          
+          SHELL_FILES=$(echo "${{ needs.pr-preflight.outputs.changed-files }}" | tr ' ' '\n' | grep '\.sh$' || true)
+          
+          if [[ -n "$SHELL_FILES" ]]; then
+            echo "Shell files to check: $SHELL_FILES"
+            
+            for script in $SHELL_FILES; do
+              if [[ -f "$script" ]]; then
+                echo "Checking $script..."
+                shellcheck "$script" -e SC1091,SC2034,SC2154 || {
+                  echo "❌ Shell script issues found in $script"
+                  exit 1
+                }
+              fi
+            done
+            
+            echo "✅ Shell script validation passed"
+          else
+            echo "No shell scripts to validate"
+          fi
+
+  # Quick security scan
+  pr-security-scan:
+    name: PR Security Scan
+    runs-on: ubuntu-latest
+    needs: pr-preflight
+    if: needs.pr-preflight.outputs.should-skip != 'true' && needs.pr-preflight.outputs.has-docs-only != 'true'
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install security tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit safety
+
+      - name: Quick security pattern check
+        run: |
+          echo "🔒 Running security pattern detection..."
+          
+          # Custom security pattern detection
+          python3 << 'EOF'
+          import os
+          import re
+          import sys
+          
+          SECURITY_PATTERNS = [
+              (r'password\s*[:=]\s*["\'][^"\']{8,}["\']', 'Potential hardcoded password'),
+              (r'secret\s*[:=]\s*["\'][^"\']{16,}["\']', 'Potential hardcoded secret'),
+              (r'api[_-]?key\s*[:=]\s*["\'][^"\']{16,}["\']', 'Potential hardcoded API key'),
+              (r'-----BEGIN (PRIVATE|RSA) KEY-----', 'Private key detected'),
+              (r'(?i)(aws_access_key_id|aws_secret_access_key)', 'AWS credentials detected'),
+          ]
+          
+          changed_files = "${{ needs.pr-preflight.outputs.changed-files }}".split()
+          security_issues = []
+          
+          for file_path in changed_files:
+              if not os.path.exists(file_path):
+                  continue
+                  
+              try:
+                  with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                      content = f.read()
+                  
+                  for pattern, message in SECURITY_PATTERNS:
+                      if re.search(pattern, content, re.IGNORECASE):
+                          security_issues.append(f"{file_path}: {message}")
+              except Exception as e:
+                  print(f"Warning: Could not scan {file_path}: {e}")
+          
+          if security_issues:
+              print("🚨 Security issues found:")
+              for issue in security_issues:
+                  print(f"  ❌ {issue}")
+              print("\n💡 Please review and remove any hardcoded secrets")
+              sys.exit(1)
+          else:
+              print("✅ No obvious security issues found")
+          EOF
+
+      - name: Python security scan (if applicable)
+        if: needs.pr-preflight.outputs.has-python == 'true'
+        run: |
+          PYTHON_FILES=$(echo "${{ needs.pr-preflight.outputs.changed-files }}" | tr ' ' '\n' | grep '\.py$' || true)
+          
+          if [[ -n "$PYTHON_FILES" ]]; then
+            echo "🐍 Running Bandit security scan on Python files..."
+            echo "$PYTHON_FILES" | xargs bandit -f json || {
+              echo "⚠️ Bandit found potential security issues (non-blocking for PR)"
+            }
+          fi
+
+      - name: Check for secrets in git history
+        run: |
+          echo "🔍 Checking for secrets in recent commits..."
+          
+          # Simple check for common secret patterns in git diff
+          if git diff ${{ github.event.pull_request.base.sha }}..HEAD | grep -E "(password|secret|key|token).*=.*['\"][^'\"]{8,}"; then
+            echo "⚠️ Potential secrets found in diff - please review"
+            echo "💡 Consider using environment variables or Ansible Vault"
+          else
+            echo "✅ No obvious secrets found in changes"
+          fi
+
+  # PR size and complexity check
+  pr-complexity-check:
+    name: PR Complexity Check
+    runs-on: ubuntu-latest
+    needs: pr-preflight
+    if: needs.pr-preflight.outputs.should-skip != 'true'
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Analyze PR size and complexity
+        run: |
+          echo "📊 Analyzing PR complexity..."
+          
+          # Count changes
+          FILES_CHANGED=$(git diff --name-only ${{ github.event.pull_request.base.sha }}..HEAD | wc -l)
+          LINES_ADDED=$(git diff --numstat ${{ github.event.pull_request.base.sha }}..HEAD | awk '{sum+=$1} END {print sum}')
+          LINES_DELETED=$(git diff --numstat ${{ github.event.pull_request.base.sha }}..HEAD | awk '{sum+=$2} END {print sum}')
+          TOTAL_CHANGES=$((LINES_ADDED + LINES_DELETED))
+          
+          echo "📈 PR Statistics:"
+          echo "  Files changed: $FILES_CHANGED"
+          echo "  Lines added: $LINES_ADDED"
+          echo "  Lines deleted: $LINES_DELETED"
+          echo "  Total changes: $TOTAL_CHANGES"
+          
+          # Provide recommendations based on size
+          if [[ $FILES_CHANGED -gt 50 ]]; then
+            echo "⚠️ Large PR: $FILES_CHANGED files changed"
+            echo "💡 Consider breaking this into smaller PRs for easier review"
+          elif [[ $TOTAL_CHANGES -gt 1000 ]]; then
+            echo "⚠️ Large PR: $TOTAL_CHANGES total line changes"
+            echo "💡 Consider breaking this into smaller PRs for easier review"
+          else
+            echo "✅ PR size is reasonable for review"
+          fi
+          
+          # Check for mixed concerns
+          HAS_ANSIBLE=$(echo "${{ needs.pr-preflight.outputs.changed-files }}" | grep -q "ansible/" && echo "true" || echo "false")
+          HAS_PYTHON=$(echo "${{ needs.pr-preflight.outputs.changed-files }}" | grep -q "\.py$" && echo "true" || echo "false")
+          HAS_SCRIPTS=$(echo "${{ needs.pr-preflight.outputs.changed-files }}" | grep -q "scripts/" && echo "true" || echo "false")
+          HAS_DOCS=$(echo "${{ needs.pr-preflight.outputs.changed-files }}" | grep -q -E "(docs/|\.md$)" && echo "true" || echo "false")
+          
+          CONCERN_COUNT=0
+          [[ "$HAS_ANSIBLE" == "true" ]] && ((CONCERN_COUNT++))
+          [[ "$HAS_PYTHON" == "true" ]] && ((CONCERN_COUNT++))
+          [[ "$HAS_SCRIPTS" == "true" ]] && ((CONCERN_COUNT++))
+          [[ "$HAS_DOCS" == "true" ]] && ((CONCERN_COUNT++))
+          
+          if [[ $CONCERN_COUNT -gt 2 ]]; then
+            echo "ℹ️ PR touches multiple areas (Ansible: $HAS_ANSIBLE, Python: $HAS_PYTHON, Scripts: $HAS_SCRIPTS, Docs: $HAS_DOCS)"
+            echo "💡 Consider describing the relationship between these changes in the PR description"
+          fi
+
+  # Final PR status
+  pr-validation-summary:
+    name: PR Validation Summary
+    runs-on: ubuntu-latest
+    needs: [pr-preflight, fast-validation, pr-security-scan, pr-complexity-check]
+    if: always() && needs.pr-preflight.outputs.should-skip != 'true'
+    steps:
+      - name: Determine overall status
+        id: status
+        run: |
+          # Check individual job results
+          FAST_VALIDATION="${{ needs.fast-validation.result || 'skipped' }}"
+          SECURITY_SCAN="${{ needs.pr-security-scan.result || 'skipped' }}"
+          COMPLEXITY_CHECK="${{ needs.pr-complexity-check.result || 'skipped' }}"
+          
+          echo "fast-validation: $FAST_VALIDATION"
+          echo "security-scan: $SECURITY_SCAN"
+          echo "complexity-check: $COMPLEXITY_CHECK"
+          
+          # Determine overall result
+          if [[ "$FAST_VALIDATION" == "failure" ]]; then
+            echo "overall-status=failure" >> $GITHUB_OUTPUT
+            echo "failure-reason=Syntax or formatting issues found" >> $GITHUB_OUTPUT
+          elif [[ "$SECURITY_SCAN" == "failure" ]]; then
+            echo "overall-status=failure" >> $GITHUB_OUTPUT
+            echo "failure-reason=Security issues found" >> $GITHUB_OUTPUT
+          else
+            echo "overall-status=success" >> $GITHUB_OUTPUT
+            echo "failure-reason=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate PR validation summary
+        run: |
+          echo "# 🚀 PR Fast Validation Results" > pr-validation-summary.md
+          echo "" >> pr-validation-summary.md
+          echo "**PR #${{ github.event.pull_request.number }}**: ${{ github.event.pull_request.title }}" >> pr-validation-summary.md
+          echo "**Author**: @${{ github.event.pull_request.user.login }}" >> pr-validation-summary.md
+          echo "" >> pr-validation-summary.md
+          
+          # Overall status
+          if [[ "${{ steps.status.outputs.overall-status }}" == "success" ]]; then
+            echo "## ✅ Validation Passed" >> pr-validation-summary.md
+            echo "" >> pr-validation-summary.md
+            echo "All fast validation checks have passed! This PR is ready for detailed review." >> pr-validation-summary.md
+          else
+            echo "## ❌ Validation Failed" >> pr-validation-summary.md
+            echo "" >> pr-validation-summary.md
+            echo "**Reason**: ${{ steps.status.outputs.failure-reason }}" >> pr-validation-summary.md
+            echo "" >> pr-validation-summary.md
+            echo "Please fix the issues and push new changes to re-trigger validation." >> pr-validation-summary.md
+          fi
+          
+          echo "" >> pr-validation-summary.md
+          echo "## 🔍 Check Results" >> pr-validation-summary.md
+          echo "" >> pr-validation-summary.md
+          
+          # Individual check results
+          checks=(
+            "fast-validation:${{ needs.fast-validation.result || 'skipped' }}:Syntax & Formatting"
+            "pr-security-scan:${{ needs.pr-security-scan.result || 'skipped' }}:Security Scan"
+            "pr-complexity-check:${{ needs.pr-complexity-check.result || 'skipped' }}:Complexity Check"
+          )
+          
+          for check in "${checks[@]}"; do
+            name=$(echo $check | cut -d: -f1)
+            status=$(echo $check | cut -d: -f2)
+            description=$(echo $check | cut -d: -f3)
+            
+            case $status in
+              "success") echo "- ✅ **$description**: Passed" >> pr-validation-summary.md ;;
+              "failure") echo "- ❌ **$description**: Failed" >> pr-validation-summary.md ;;
+              "cancelled") echo "- ⏹️ **$description**: Cancelled" >> pr-validation-summary.md ;;
+              "skipped") echo "- ⏭️ **$description**: Skipped" >> pr-validation-summary.md ;;
+            esac
+          done
+          
+          echo "" >> pr-validation-summary.md
+          
+          if [[ "${{ needs.pr-preflight.outputs.has-docs-only }}" == "true" ]]; then
+            echo "📝 This PR contains only documentation changes." >> pr-validation-summary.md
+          else
+            echo "## 🎯 Next Steps" >> pr-validation-summary.md
+            echo "" >> pr-validation-summary.md
+            
+            if [[ "${{ steps.status.outputs.overall-status }}" == "success" ]]; then
+              echo "1. **Code Review**: Request review from team members" >> pr-validation-summary.md
+              echo "2. **Integration Tests**: Full CI pipeline will run after approval" >> pr-validation-summary.md
+              echo "3. **Merge**: PR can be merged once approved" >> pr-validation-summary.md
+            else
+              echo "1. **Fix Issues**: Address the validation failures" >> pr-validation-summary.md
+              echo "2. **Local Testing**: Run \`./scripts/pre-commit-setup.sh\` and test locally" >> pr-validation-summary.md
+              echo "3. **Re-submit**: Push fixes to trigger validation again" >> pr-validation-summary.md
+            fi
+          fi
+          
+          cat pr-validation-summary.md
+
+      - name: Update PR with validation results
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            if (fs.existsSync('pr-validation-summary.md')) {
+              const summary = fs.readFileSync('pr-validation-summary.md', 'utf8');
+              
+              // Get existing comments to avoid spam
+              const comments = await github.rest.issues.listComments({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+              });
+              
+              // Look for existing validation comment
+              const existingComment = comments.data.find(comment => 
+                comment.user.type === 'Bot' && 
+                comment.body.includes('🚀 PR Fast Validation Results')
+              );
+              
+              if (existingComment) {
+                // Update existing comment
+                await github.rest.issues.updateComment({
+                  comment_id: existingComment.id,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: summary
+                });
+              } else {
+                // Create new comment
+                await github.rest.issues.createComment({
+                  issue_number: context.issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: summary
+                });
+              }
+            }
+
+      - name: Set PR status
+        run: |
+          if [[ "${{ steps.status.outputs.overall-status }}" == "failure" ]]; then
+            echo "❌ PR validation failed"
+            exit 1
+          else
+            echo "✅ PR validation passed"
+          fi

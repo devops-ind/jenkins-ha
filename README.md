@@ -32,6 +32,7 @@ This infrastructure provides:
 - **Monitoring Stack**: Prometheus/Grafana with 26-panel dashboards and DORA metrics
 - **Enterprise Security**: Container vulnerability scanning, compliance validation, and audit logging
 - **Automated Operations**: Health checks, backups, and infrastructure maintenance
+- **Pre-commit Code Quality**: Comprehensive Groovy/Jenkinsfile validation with security scanning
 
 ### Key Components
 
@@ -42,6 +43,7 @@ This infrastructure provides:
 - **Monitoring**: Enhanced Grafana dashboards with SLI tracking and DORA metrics
 - **Storage**: NFS/GlusterFS shared storage with encryption and access controls
 - **Security**: Trivy vulnerability scanning, container security monitoring, and compliance validation
+- **Code Quality Framework**: Pre-commit hooks with Groovy/Jenkins validation, security scanning, and CI/CD integration
 
 ## Quick Start
 
@@ -65,17 +67,27 @@ make deploy-production
 
 ### For Developers (Local Development)
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
+# 1. Setup development environment with pre-commit hooks
+make dev-setup
 
-# 2. Deploy local environment
+# 2. Activate development environment
+source ./activate-dev-env.sh
+
+# 3. Install dependencies and deploy
+pip install -r requirements.txt
 make deploy-local
 
-# 3. Access services
+# 4. Access services
 # Jenkins: http://localhost:8080 (DevOps team)
 # Jenkins: http://localhost:8081 (Developer team)
 # Grafana: http://localhost:9300
 # Prometheus: http://localhost:9090
+
+# 5. Validate code before committing
+make test-full                    # Run all tests including pre-commit
+make test-groovy-basic           # Quick Groovy validation
+make test-jenkinsfiles          # Validate Jenkinsfiles
+pre-commit run --all-files      # Manual pre-commit run
 ```
 
 ### For Administrators (Day-2 Operations)
@@ -165,6 +177,7 @@ ansible-playbook ansible/site.yml --tags security --check
 - ✅ **Access Control**: RBAC, team-based isolation, credential management
 - ✅ **Audit Logging**: Comprehensive logging and compliance reporting
 - ✅ **Vulnerability Management**: Automated security scanning and compliance validation
+- ✅ **Pre-commit Security**: Multi-pattern security scanning for Groovy/Jenkins code with 25+ risk patterns
 
 ### Monitoring & Observability  
 - ✅ **Enhanced Metrics Collection**: Prometheus with custom Jenkins metrics and SLI tracking
@@ -187,6 +200,16 @@ ansible-playbook ansible/site.yml --tags security --check
 - ✅ **Infrastructure as Code**: Complete Ansible automation with blue-green deployment
 - ✅ **Environment Management**: Production, staging, and devcontainer support
 - ✅ **Multi-Team Workflows**: Isolated CI/CD environments with automated job provisioning
+
+### Development & Code Quality
+- ✅ **Pre-commit Hooks**: Comprehensive validation framework with automated setup
+- ✅ **Groovy Validation**: Syntax checking for all 22 Groovy files with compiler integration
+- ✅ **Jenkinsfile Validation**: Structure validation for all 7 Jenkinsfiles with best practices
+- ✅ **Security Scanning**: 25+ security pattern detection for Jenkins/Groovy code
+- ✅ **Best Practices Enforcement**: Automated checking for naming conventions and documentation  
+- ✅ **GitHub Actions Integration**: PR validation, comprehensive CI/CD, and automated releases
+- ✅ **Development Environment**: Automated setup with virtual environment and tool configuration
+- ✅ **Multiple Output Formats**: Text and JSON reporting for human and machine consumption
 
 ## Team Configuration
 
@@ -349,19 +372,19 @@ Required inventory groups:
 jenkins_masters:
   hosts:
     jenkins-01:
-      ansible_host: 192.168.1.10
+      ansible_host: 192.168.86.30
     jenkins-02:
-      ansible_host: 192.168.1.11
+      ansible_host: 192.168.86.30
 
 load_balancers:
   hosts:
     haproxy-01:
-      ansible_host: 192.168.1.20
+      ansible_host: 192.168.86.30
 
 monitoring:
   hosts:
     monitoring-01:
-      ansible_host: 192.168.1.30
+      ansible_host: 192.168.86.30
 ```
 
 ### 3. Vault Setup

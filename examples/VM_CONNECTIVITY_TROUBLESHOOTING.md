@@ -7,19 +7,19 @@
 
 ## Problem Description
 
-User reported inability to access Jenkins HA services via browser on the CentOS VM after network configuration update to 192.168.1.10.
+User reported inability to access Jenkins HA services via browser on the CentOS VM after network configuration update to 192.168.86.30.
 
 ## Diagnostic Steps
 
 ### ✅ 1. Basic Connectivity Test
 ```bash
-ping -c 3 192.168.1.10
+ping -c 3 192.168.86.30
 # Result: SUCCESS - 0% packet loss, 0.643ms avg
 ```
 
 ### ✅ 2. SSH Accessibility Test  
 ```bash
-nc -zv 192.168.1.10 22
+nc -zv 192.168.86.30 22
 # Result: SUCCESS - Connection succeeded
 ```
 
@@ -32,7 +32,7 @@ nc -zv 192.168.1.10 22
 
 ### ✅ 4. Container Status Check
 ```bash
-ssh root@192.168.1.10 'docker ps'
+ssh root@192.168.86.30 'docker ps'
 # Result: All services running correctly
 # - jenkins-haproxy: Up 7 minutes (healthy)
 # - jenkins-devops-blue: Up 22 minutes (healthy)
@@ -42,14 +42,14 @@ ssh root@192.168.1.10 'docker ps'
 
 ### ✅ 5. HAProxy Configuration Check
 ```bash
-ssh root@192.168.1.10 'docker inspect jenkins-haproxy'
+ssh root@192.168.86.30 'docker inspect jenkins-haproxy'
 # Result: HAProxy using NetworkMode: "host"
 # Expected behavior: Direct binding to host ports
 ```
 
 ### ✅ 6. Port Listening Analysis
 ```bash
-ssh root@192.168.1.10 'ss -tlnp | grep LISTEN'
+ssh root@192.168.86.30 'ss -tlnp | grep LISTEN'
 # Result: HAProxy correctly listening on:
 # - 0.0.0.0:8000 (main frontend)
 # - 0.0.0.0:8404 (stats interface)
@@ -57,14 +57,14 @@ ssh root@192.168.1.10 'ss -tlnp | grep LISTEN'
 
 ### ❌ 7. Connectivity Test to Port 8000
 ```bash
-curl -I http://192.168.1.10:8000
+curl -I http://192.168.86.30:8000
 # Result: FAILED - Connection refused
 # Issue identified: Firewall blocking port 8000
 ```
 
 ### ✅ 8. Firewall Analysis
 ```bash
-ssh root@192.168.1.10 'firewall-cmd --list-all'
+ssh root@192.168.86.30 'firewall-cmd --list-all'
 # Result: ISSUE FOUND
 # - Port 8404 allowed ✅
 # - Port 8000 missing ❌
@@ -79,20 +79,20 @@ ssh root@192.168.1.10 'firewall-cmd --list-all'
 
 ### Fix: Add Missing Firewall Rule
 ```bash
-ssh root@192.168.1.10 'firewall-cmd --add-port=8000/tcp --permanent && firewall-cmd --reload'
+ssh root@192.168.86.30 'firewall-cmd --add-port=8000/tcp --permanent && firewall-cmd --reload'
 # Result: success/success
 ```
 
 ### Verification: Test Connectivity
 ```bash
-curl -I http://192.168.1.10:8000
+curl -I http://192.168.86.30:8000
 # Result: SUCCESS - HTTP/1.1 200 OK
 # Headers show: Jenkins 2.516.2, devops team, blue environment
 ```
 
 ### Additional Verification: Stats Interface
 ```bash
-curl -I http://192.168.1.10:8404/stats  
+curl -I http://192.168.86.30:8404/stats  
 # Result: SUCCESS - HTTP/1.1 401 Unauthorized (expected - needs auth)
 ```
 
@@ -105,20 +105,20 @@ curl -I http://192.168.1.10:8404/stats
 ## Access URLs Now Working
 
 ### Main Jenkins Interface (via HAProxy)
-- **Primary**: http://192.168.1.10:8000
+- **Primary**: http://192.168.86.30:8000
 - **Team-specific routing**: 
-  - devops team: http://192.168.1.10:8000 (default)
-  - With Host headers: `curl -H 'Host: devops.jenkins.example.com' http://192.168.1.10:8000`
+  - devops team: http://192.168.86.30:8000 (default)
+  - With Host headers: `curl -H 'Host: devops.jenkins.example.com' http://192.168.86.30:8000`
 
 ### HAProxy Statistics Dashboard
-- **URL**: http://192.168.1.10:8404/stats
+- **URL**: http://192.168.86.30:8404/stats
 - **Auth**: Basic authentication required (configured in HAProxy)
 
 ### Direct Container Access
-- **devops-blue**: http://192.168.1.10:8080
-- **dev-qa-green**: http://192.168.1.10:8189
-- **Prometheus**: http://192.168.1.10:9090
-- **Grafana**: http://192.168.1.10:9300
+- **devops-blue**: http://192.168.86.30:8080
+- **dev-qa-green**: http://192.168.86.30:8189
+- **Prometheus**: http://192.168.86.30:9090
+- **Grafana**: http://192.168.86.30:9300
 
 ## Lessons Learned
 
@@ -134,4 +134,4 @@ curl -I http://192.168.1.10:8404/stats
 3. **Create Health Checks**: Implement automated connectivity validation
 4. **Test Domain Routing**: Verify team-specific domain routing works correctly
 
-The Jenkins HA infrastructure is now fully accessible via browser at the new IP address 192.168.1.10!
+The Jenkins HA infrastructure is now fully accessible via browser at the new IP address 192.168.86.30!

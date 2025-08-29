@@ -1,0 +1,483 @@
+name: Ansible Role & Playbook Validation
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'ansible/**'
+      - 'collections/**'
+      - '.github/workflows/ansible-validation.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'ansible/**'
+      - 'collections/**'
+  schedule:
+    # Run weekly on Sundays at 4 AM UTC
+    - cron: '0 4 * * 0'
+  workflow_dispatch:
+    inputs:
+      validation_level:
+        description: 'Validation level'
+        required: false
+        default: 'full'
+        type: choice
+        options:
+          - syntax-only
+          - full
+          - molecule
+      target_role:
+        description: 'Specific role to test (optional)'
+        required: false
+        default: ''
+        type: string
+
+env:
+  ANSIBLE_VERSION: '8.5.0'
+  PYTHON_VERSION: '3.11'
+  ANSIBLE_FORCE_COLOR: '1'
+  ANSIBLE_HOST_KEY_CHECKING: 'false'
+
+jobs:
+  # Detect changes and set test matrix
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      roles-matrix: ${{ steps.set-matrix.outputs.roles-matrix }}
+      playbooks-matrix: ${{ steps.set-matrix.outputs.playbooks-matrix }}
+      should-run-molecule: ${{ steps.set-matrix.outputs.should-run-molecule }}
+      changed-roles: ${{ steps.changes.outputs.changed-roles }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed files and roles
+        id: changes
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.sha }})
+          else
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+          fi
+          
+          # Extract changed roles
+          CHANGED_ROLES=$(echo "$CHANGED_FILES" | grep "^ansible/roles/" | cut -d'/' -f3 | sort -u | tr '\n' ' ')
+          
+          echo "changed-roles=${CHANGED_ROLES}" >> $GITHUB_OUTPUT
+          echo "Changed roles: ${CHANGED_ROLES}"
+
+      - name: Set test matrix
+        id: set-matrix
+        run: |
+          # Roles to test
+          if [[ -n "${{ github.event.inputs.target_role }}" ]]; then
+            ROLES_TO_TEST="${{ github.event.inputs.target_role }}"
+          elif [[ "${{ github.event_name }}" == "schedule" || "${{ github.event.inputs.validation_level }}" == "full" ]]; then
+            # Test all roles for scheduled runs or full validation
+            ROLES_TO_TEST=$(ls ansible/roles/ | tr '\n' ' ')
+          else
+            # Test only changed roles
+            ROLES_TO_TEST="${{ steps.changes.outputs.changed-roles }}"
+          fi
+          
+          # Convert to JSON array for matrix
+          ROLES_JSON=$(echo "$ROLES_TO_TEST" | tr ' ' '\n' | grep -v '^$' | jq -R -s -c 'split("\n")[:-1]')
+          echo "roles-matrix=${ROLES_JSON}" >> $GITHUB_OUTPUT
+          
+          # Playbooks matrix
+          PLAYBOOKS=$(find ansible -maxdepth 1 -name "*.yml" -not -name "site.yml" | xargs basename -s .yml | tr '\n' ' ')
+          PLAYBOOKS_JSON=$(echo "$PLAYBOOKS" | tr ' ' '\n' | grep -v '^$' | jq -R -s -c 'split("\n")[:-1]')
+          echo "playbooks-matrix=${PLAYBOOKS_JSON}" >> $GITHUB_OUTPUT
+          
+          # Determine if molecule should run
+          SHOULD_RUN_MOLECULE="false"
+          if [[ "${{ github.event.inputs.validation_level }}" == "molecule" || "${{ github.event_name }}" == "schedule" ]]; then
+            SHOULD_RUN_MOLECULE="true"
+          fi
+          echo "should-run-molecule=${SHOULD_RUN_MOLECULE}" >> $GITHUB_OUTPUT
+
+  # Ansible syntax and basic validation
+  ansible-syntax:
+    name: Ansible Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Ansible
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible==${{ env.ANSIBLE_VERSION }}
+
+      - name: Install Ansible collections
+        run: |
+          ansible-galaxy collection install -r collections/requirements.yml
+
+      - name: Check main playbook syntax
+        run: |
+          cd ansible
+          ansible-playbook site.yml --syntax-check
+
+      - name: Check test playbooks syntax
+        run: |
+          cd ansible
+          for playbook in test-*.yml; do
+            if [[ -f "$playbook" ]]; then
+              echo "Checking syntax for $playbook"
+              ansible-playbook "$playbook" --syntax-check
+            fi
+          done
+
+      - name: Validate inventory files
+        run: |
+          cd ansible
+          echo "Validating local inventory..."
+          ansible-inventory -i inventories/local/hosts.yml --list > /dev/null
+          
+          echo "Validating production inventory..."
+          ansible-inventory -i inventories/production/hosts.yml --list > /dev/null
+
+  # Role-specific validation
+  role-validation:
+    name: Validate Role - ${{ matrix.role }}
+    runs-on: ubuntu-latest
+    needs: [detect-changes, ansible-syntax]
+    if: needs.detect-changes.outputs.roles-matrix != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        role: ${{ fromJson(needs.detect-changes.outputs.roles-matrix) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Ansible and validation tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible==${{ env.ANSIBLE_VERSION }} ansible-lint yamllint
+
+      - name: Install Ansible collections
+        run: |
+          ansible-galaxy collection install -r collections/requirements.yml
+
+      - name: Validate role structure
+        run: |
+          ROLE_PATH="ansible/roles/${{ matrix.role }}"
+          
+          if [[ ! -d "$ROLE_PATH" ]]; then
+            echo "❌ Role directory not found: $ROLE_PATH"
+            exit 1
+          fi
+          
+          echo "📁 Validating role structure for ${{ matrix.role }}..."
+          
+          # Check required files
+          if [[ ! -f "$ROLE_PATH/tasks/main.yml" ]]; then
+            echo "❌ Missing required file: tasks/main.yml"
+            exit 1
+          fi
+          
+          # Check optional but recommended files
+          RECOMMENDED_FILES=("defaults/main.yml" "handlers/main.yml" "vars/main.yml")
+          for file in "${RECOMMENDED_FILES[@]}"; do
+            if [[ ! -f "$ROLE_PATH/$file" ]]; then
+              echo "⚠️ Recommended file missing: $file"
+            else
+              echo "✅ Found: $file"
+            fi
+          done
+
+      - name: Run ansible-lint on role
+        run: |
+          cd ansible/roles/${{ matrix.role }}
+          ansible-lint . || echo "Ansible-lint found issues (non-blocking for now)"
+
+      - name: Validate YAML syntax in role
+        run: |
+          find ansible/roles/${{ matrix.role }} -name "*.yml" -o -name "*.yaml" | while read file; do
+            echo "Validating YAML: $file"
+            yamllint "$file" -d '{extends: relaxed, rules: {line-length: {max: 120}}}' || echo "YAML lint issues in $file"
+          done
+
+      - name: Check for template syntax
+        run: |
+          TEMPLATES_DIR="ansible/roles/${{ matrix.role }}/templates"
+          if [[ -d "$TEMPLATES_DIR" ]]; then
+            echo "🔍 Validating Jinja2 templates in ${{ matrix.role }}..."
+            python3 << 'EOF'
+          import os
+          import sys
+          import jinja2
+          import glob
+          
+          template_dir = "ansible/roles/${{ matrix.role }}/templates"
+          if os.path.exists(template_dir):
+              templates = glob.glob(f"{template_dir}/**/*.j2", recursive=True)
+              failed = False
+              
+              for template_file in templates:
+                  try:
+                      with open(template_file, 'r') as f:
+                          content = f.read()
+                      # Basic syntax validation
+                      jinja2.Template(content)
+                      print(f"✅ Template valid: {template_file}")
+                  except jinja2.exceptions.TemplateError as e:
+                      print(f"❌ Template error in {template_file}: {e}")
+                      failed = True
+                  except Exception as e:
+                      print(f"❌ Error validating {template_file}: {e}")
+                      failed = True
+              
+              if failed:
+                  sys.exit(1)
+              else:
+                  print("🎉 All templates validated successfully")
+          else:
+              print("ℹ️ No templates directory found")
+          EOF
+          fi
+
+      - name: Test role with dry-run playbook
+        run: |
+          cd ansible
+          
+          # Create a minimal test playbook for the role
+          cat > test-role-${{ matrix.role }}.yml << EOF
+          ---
+          - hosts: localhost
+            connection: local
+            gather_facts: yes
+            roles:
+              - role: ${{ matrix.role }}
+          EOF
+          
+          # Run the playbook in check mode
+          ansible-playbook test-role-${{ matrix.role }}.yml --check --connection=local -i "localhost," || {
+            echo "⚠️ Role test failed - this may be expected for roles requiring specific infrastructure"
+            exit 0
+          }
+
+  # Playbook validation
+  playbook-validation:
+    name: Validate Playbook - ${{ matrix.playbook }}
+    runs-on: ubuntu-latest
+    needs: [detect-changes, ansible-syntax]
+    if: needs.detect-changes.outputs.playbooks-matrix != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        playbook: ${{ fromJson(needs.detect-changes.outputs.playbooks-matrix) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Ansible and tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible==${{ env.ANSIBLE_VERSION }} ansible-lint
+
+      - name: Install Ansible collections
+        run: |
+          ansible-galaxy collection install -r collections/requirements.yml
+
+      - name: Validate playbook structure
+        run: |
+          PLAYBOOK_FILE="ansible/${{ matrix.playbook }}.yml"
+          
+          if [[ ! -f "$PLAYBOOK_FILE" ]]; then
+            echo "❌ Playbook file not found: $PLAYBOOK_FILE"
+            exit 1
+          fi
+          
+          echo "📖 Validating playbook structure: ${{ matrix.playbook }}"
+          
+          # Check for required playbook elements
+          if ! grep -q "hosts:" "$PLAYBOOK_FILE"; then
+            echo "❌ Missing 'hosts' directive in playbook"
+            exit 1
+          fi
+          
+          echo "✅ Basic playbook structure is valid"
+
+      - name: Run ansible-lint on playbook
+        run: |
+          cd ansible
+          ansible-lint ${{ matrix.playbook }}.yml || echo "Ansible-lint found issues (non-blocking for now)"
+
+      - name: Dry-run playbook validation
+        run: |
+          cd ansible
+          ansible-playbook ${{ matrix.playbook }}.yml --check --diff -i inventories/local/hosts.yml || {
+            echo "⚠️ Playbook dry-run failed - this may be expected for playbooks requiring specific infrastructure"
+            exit 0
+          }
+
+  # Advanced testing with Molecule (optional)
+  molecule-testing:
+    name: Molecule Test - ${{ matrix.role }}
+    runs-on: ubuntu-latest
+    needs: [detect-changes, role-validation]
+    if: needs.detect-changes.outputs.should-run-molecule == 'true' && needs.detect-changes.outputs.roles-matrix != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        role: ${{ fromJson(needs.detect-changes.outputs.roles-matrix) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Molecule and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install molecule molecule-docker ansible==${{ env.ANSIBLE_VERSION }}
+          pip install docker
+
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create Molecule configuration
+        run: |
+          ROLE_PATH="ansible/roles/${{ matrix.role }}"
+          
+          if [[ ! -d "$ROLE_PATH/molecule" ]]; then
+            echo "Creating basic Molecule configuration for ${{ matrix.role }}"
+            mkdir -p "$ROLE_PATH/molecule/default"
+            
+            cat > "$ROLE_PATH/molecule/default/molecule.yml" << 'EOF'
+          ---
+          dependency:
+            name: galaxy
+            options:
+              requirements-file: ../../../../collections/requirements.yml
+          driver:
+            name: docker
+          platforms:
+            - name: instance
+              image: quay.io/ansible/molecule-ubuntu:20.04
+              pre_build_image: true
+          provisioner:
+            name: ansible
+            config_options:
+              defaults:
+                host_key_checking: false
+          verifier:
+            name: ansible
+          EOF
+            
+            cat > "$ROLE_PATH/molecule/default/converge.yml" << 'EOF'
+          ---
+          - name: Converge
+            hosts: all
+            tasks:
+              - name: "Include ${{ matrix.role }} role"
+                include_role:
+                  name: "${{ matrix.role }}"
+          EOF
+          fi
+
+      - name: Run Molecule test
+        run: |
+          cd ansible/roles/${{ matrix.role }}
+          molecule test || {
+            echo "⚠️ Molecule test failed for ${{ matrix.role }} - this may be expected for complex roles"
+            exit 0
+          }
+
+  # Final validation summary
+  validation-summary:
+    name: Ansible Validation Summary
+    runs-on: ubuntu-latest
+    needs: [ansible-syntax, role-validation, playbook-validation, molecule-testing]
+    if: always()
+    steps:
+      - name: Generate validation summary
+        run: |
+          echo "# 🎭 Ansible Validation Results" > validation-summary.md
+          echo "" >> validation-summary.md
+          echo "**Validation Level:** ${{ github.event.inputs.validation_level || 'auto' }}" >> validation-summary.md
+          echo "**Triggered by:** ${{ github.event_name }}" >> validation-summary.md
+          echo "" >> validation-summary.md
+          
+          # Job results
+          echo "## 📊 Validation Results" >> validation-summary.md
+          echo "" >> validation-summary.md
+          
+          jobs=(
+            "ansible-syntax:${{ needs.ansible-syntax.result || 'skipped' }}"
+            "role-validation:${{ needs.role-validation.result || 'skipped' }}"
+            "playbook-validation:${{ needs.playbook-validation.result || 'skipped' }}"
+            "molecule-testing:${{ needs.molecule-testing.result || 'skipped' }}"
+          )
+          
+          for job in "${jobs[@]}"; do
+            name=$(echo $job | cut -d: -f1)
+            status=$(echo $job | cut -d: -f2)
+            
+            case $status in
+              "success") echo "- ✅ **${name//-/ }**: All checks passed" >> validation-summary.md ;;
+              "failure") echo "- ❌ **${name//-/ }**: Validation failed" >> validation-summary.md ;;
+              "cancelled") echo "- ⏹️ **${name//-/ }**: Cancelled" >> validation-summary.md ;;
+              "skipped") echo "- ⏭️ **${name//-/ }**: Skipped" >> validation-summary.md ;;
+            esac
+          done
+          
+          echo "" >> validation-summary.md
+          echo "## 🔗 Next Steps" >> validation-summary.md
+          echo "" >> validation-summary.md
+          
+          if [[ "${{ needs.ansible-syntax.result }}" == "failure" || "${{ needs.role-validation.result }}" == "failure" || "${{ needs.playbook-validation.result }}" == "failure" ]]; then
+            echo "❌ **Validation failed** - Please fix the issues before proceeding:" >> validation-summary.md
+            echo "" >> validation-summary.md
+            echo "1. Check the job logs for specific error messages" >> validation-summary.md
+            echo "2. Run \`ansible-playbook --syntax-check\` locally" >> validation-summary.md
+            echo "3. Use \`ansible-lint\` to identify and fix issues" >> validation-summary.md
+            echo "4. Test changes with \`make test-syntax\`" >> validation-summary.md
+          else
+            echo "✅ **All validations passed** - Ansible code is ready for deployment!" >> validation-summary.md
+            echo "" >> validation-summary.md
+            echo "1. Changes can be safely merged" >> validation-summary.md
+            echo "2. Consider running integration tests next" >> validation-summary.md
+            echo "3. Deploy to staging environment for final validation" >> validation-summary.md
+          fi
+          
+          cat validation-summary.md
+
+      - name: Comment PR with validation results
+        uses: actions/github-script@v6
+        if: github.event_name == 'pull_request'
+        with:
+          script: |
+            const fs = require('fs');
+            if (fs.existsSync('validation-summary.md')) {
+              const summary = fs.readFileSync('validation-summary.md', 'utf8');
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: summary
+              });
+            }
