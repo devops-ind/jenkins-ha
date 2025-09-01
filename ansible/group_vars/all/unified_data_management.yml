@@ -9,8 +9,23 @@ sync_verification_enabled: true
 backup_verification_enabled: true
 
 # Enhanced scheduling configuration
-unified_cron_schedule: "*/5 * * * *"  # Default 5-minute interval for unified operations
-backup_cron_schedule: "0 2 * * *"     # Daily backup at 2 AM (when backup is enabled separately)
+# Unified data management schedule (every 5 minutes by default)
+unified_cron_minute: "*/5"
+unified_cron_hour: "*"
+unified_cron_day: "*"
+unified_cron_month: "*"
+unified_cron_weekday: "*"
+
+# Backup schedule (daily at 2 AM by default)
+backup_cron_minute: "0"
+backup_cron_hour: "2"
+backup_cron_day: "*"
+backup_cron_month: "*"
+backup_cron_weekday: "*"
+
+# Legacy variables for backward compatibility
+unified_cron_schedule: "*/5 * * * *"  # Deprecated: use unified_cron_* variables instead
+backup_cron_schedule: "0 2 * * *"     # Deprecated: use backup_cron_* variables instead
 
 # Operation mode preferences per team (optional override)
 team_operation_modes: {}

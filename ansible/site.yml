@@ -200,7 +200,7 @@
       until: jenkins_ready is succeeded
       retries: 60
       delay: 10
-      loop: "{{ jenkins_teams | default([{'ports': {'web': 8080}}]) }}"
+      loop: "{{ jenkins_teams_config | default(jenkins_teams) | default([{'ports': {'web': 8080}}]) }}"
       tags: ['jenkins', 'verify']
 
 - name: Configure High Availability (HAProxy Load Balancer + Multi-Team Routing)
@@ -223,14 +223,8 @@
       tags: ['monitoring', 'prometheus', 'grafana']
       when: monitoring_enabled | default(true)
 
-- name: Configure Backup System
-  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'shared_storage:jenkins_masters') }}"
-  become: yes
-  gather_facts: yes
-  roles:
-    - role: backup
-      tags: ['backup', 'storage']
-      when: backup_enabled | default(true)
+# Backup functionality is now integrated into jenkins-master-v2 role via unified-data-manager.sh
+# This provides team-specific backup, sync, and blue-green data management capabilities
 
 - name: Post-Deployment Verification
   hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'jenkins_masters:monitoring') }}"

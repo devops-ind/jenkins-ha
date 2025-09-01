@@ -338,11 +338,11 @@
         echo "Waiting for HAProxy container to be ready..."
         
         for i in {1..60}; do
-          if docker ps --format 'table {{.Names}}	{{.Status}}' | grep -q "jenkins-haproxy.*Up"; then
+          if docker ps --format 'table {{ '{{' }}.Names{{ '}}' }}	{{ '{{' }}.Status{{ '}}' }}' | grep -q "jenkins-haproxy.*Up"; then
             echo "Container is running. Checking health status..."
             
             # Check health status if available
-            HEALTH_STATUS=$(docker inspect --format='{{.State.Health.Status}}' jenkins-haproxy 2>/dev/null || echo "unknown")
+            HEALTH_STATUS=$(docker inspect --format='{{ '{{' }}.State.Health.Status{{ '}}' }}' jenkins-haproxy 2>/dev/null || echo "unknown")
             if [[ "$HEALTH_STATUS" == "healthy" || "$HEALTH_STATUS" == "unknown" ]]; then
               echo "HAProxy container is healthy and ready."
               break
@@ -359,10 +359,10 @@
         done
         
         # Final verification
-        if ! docker ps --format 'table {{.Names}}	{{.Status}}' | grep -q "jenkins-haproxy.*Up"; then
+        if ! docker ps --format 'table {{ '{{' }}.Names{{ '}}' }}	{{ '{{' }}.Status{{ '}}' }}' | grep -q "jenkins-haproxy.*Up"; then
           echo "ERROR: HAProxy container failed to start properly"
           echo "Container status:"
-          docker ps -a --format 'table {{.Names}}	{{.Status}}	{{.Ports}}' | grep jenkins-haproxy || echo "Container not found"
+          docker ps -a --format 'table {{ '{{' }}.Names{{ '}}' }}	{{ '{{' }}.Status{{ '}}' }}	{{ '{{' }}.Ports{{ '}}' }}' | grep jenkins-haproxy || echo "Container not found"
           echo "Recent logs:"
           docker logs --tail 50 jenkins-haproxy || echo "No logs available"
           exit 1

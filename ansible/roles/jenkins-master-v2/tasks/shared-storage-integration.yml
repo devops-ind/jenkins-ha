@@ -192,7 +192,11 @@
     - name: Setup unified data management (cron-based)
       cron:
         name: "Jenkins {{ item.team_name }} unified data management"
-        minute: "{{ unified_cron_schedule | default('*/5') }}"
+        minute: "{{ unified_cron_minute | default('*/5') }}"
+        hour: "{{ unified_cron_hour | default('*') }}"
+        day: "{{ unified_cron_day | default('*') }}"
+        month: "{{ unified_cron_month | default('*') }}"
+        weekday: "{{ unified_cron_weekday | default('*') }}"
         job: "/var/jenkins/scripts/unified-{{ item.team_name }}-manager.sh --{{ default_operation_mode | default('sync-only') }}"
         user: "{{ jenkins_user }}"
         state: present
@@ -205,8 +209,11 @@
     - name: Setup backup-only operations (cron-based)
       cron:
         name: "Jenkins {{ item.team_name }} backup"
-        minute: "{{ backup_cron_schedule | default('0 2 * * *') | regex_replace(' \\* \\* \\*', '') }}"
-        hour: "{{ backup_cron_schedule | default('0 2 * * *') | regex_replace('^[0-9]+ ', '') | regex_replace(' \\* \\* \\*', '') }}"
+        minute: "{{ backup_cron_minute | default('0') }}"
+        hour: "{{ backup_cron_hour | default('2') }}"
+        day: "{{ backup_cron_day | default('*') }}"
+        month: "{{ backup_cron_month | default('*') }}"
+        weekday: "{{ backup_cron_weekday | default('*') }}"
         job: "/var/jenkins/scripts/unified-{{ item.team_name }}-manager.sh --backup-only --retention {{ backup_daily_retention | default(7) }}"
         user: "{{ jenkins_user }}"
         state: present
@@ -274,9 +281,9 @@
           Unified Data Management:
           • Operation Mode: {{ default_operation_mode | default('sync-only') }}
           • Backup Enabled: {{ backup_enabled | default(false) }}
-          • Unified Schedule: {{ unified_cron_schedule | default('*/5') }}
+          • Unified Schedule: {{ unified_cron_minute | default('*/5') }} {{ unified_cron_hour | default('*') }} {{ unified_cron_day | default('*') }} {{ unified_cron_month | default('*') }} {{ unified_cron_weekday | default('*') }}
           {% if backup_enabled | default(false) %}
-          • Backup Schedule: {{ backup_cron_schedule | default('0 2 * * *') }}
+          • Backup Schedule: {{ backup_cron_minute | default('0') }} {{ backup_cron_hour | default('2') }} {{ backup_cron_day | default('*') }} {{ backup_cron_month | default('*') }} {{ backup_cron_weekday | default('*') }}
           • Backup Retention: {{ backup_daily_retention | default(7) }} days
           {% endif %}
           

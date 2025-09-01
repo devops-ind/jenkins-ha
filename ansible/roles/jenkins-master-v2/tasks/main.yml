@@ -19,43 +19,72 @@
     jenkins_deployment_mode: "{{ 'multi-team' if (jenkins_teams_config | default(jenkins_teams)) is defined and (jenkins_teams_config | default(jenkins_teams)) | length > 0 else 'single-team' }}"
   tags: ['always']
 
-- name: Filter teams for deployment
+- name: Filter teams for deployment - Deploy specific teams
   set_fact:
-    jenkins_teams_filtered: |
-      {% set all_teams = jenkins_teams_config %}
-      {% if deploy_teams is defined and deploy_teams != "" %}
-        {# Deploy specific teams #}
-        {% set team_list = deploy_teams.split(',') | map('trim') | list %}
-        {% set filtered = all_teams | selectattr('team_name', 'in', team_list) | list %}
-        {% if filtered | length == 0 %}
-          {{ [] }}
-        {% else %}
-          {{ filtered }}
-        {% endif %}
-      {% elif exclude_teams is defined and exclude_teams != "" %}
-        {# Exclude specific teams #}
-        {% set exclude_list = exclude_teams.split(',') | map('trim') | list %}
-        {{ all_teams | rejectattr('team_name', 'in', exclude_list) | list }}
-      {% else %}
-        {# Deploy all teams (default behavior) #}
-        {{ all_teams }}
-      {% endif %}
+    jenkins_teams_filtered: "{{ jenkins_teams_config | selectattr('team_name', 'in', deploy_teams.split(',') | map('trim') | list) | list }}"
+  when: deploy_teams is defined and deploy_teams != ""
   tags: ['always']
+
+- name: Filter teams for deployment - Exclude specific teams  
+  set_fact:
+    jenkins_teams_filtered: "{{ jenkins_teams_config | rejectattr('team_name', 'in', exclude_teams.split(',') | map('trim') | list) | list }}"
+  when: 
+    - exclude_teams is defined and exclude_teams != ""
+    - deploy_teams is not defined or deploy_teams == ""
+  tags: ['always']
+
+- name: Filter teams for deployment - Default (all teams)
+  set_fact:
+    jenkins_teams_filtered: "{{ jenkins_teams_config }}"
+  when: 
+    - deploy_teams is not defined or deploy_teams == ""
+    - exclude_teams is not defined or exclude_teams == ""
+  tags: ['always']
+
+- name: Debug team filtering results
+  debug:
+    msg: |
+      ====================================================
+      Team Filtering Debug Information
+      ====================================================
+      Original teams count: {{ jenkins_teams_config | length }}
+      Original teams: {{ jenkins_teams_config | map(attribute='team_name') | list | join(', ') }}
+      Filtered teams count: {{ jenkins_teams_filtered | length }}
+      Filtered teams type: {{ jenkins_teams_filtered | type_debug }}
+      {% if jenkins_teams_filtered | length > 0 %}
+      Filtered teams: {{ jenkins_teams_filtered | map(attribute='team_name') | list | join(', ') }}
+      {% else %}
+      Filtered teams: (empty)
+      {% endif %}
+      deploy_teams parameter: {{ deploy_teams | default('not set') }}
+      exclude_teams parameter: {{ exclude_teams | default('not set') }}
+      ====================================================
+  tags: ['always']
+  when: ansible_verbosity >= 1
 
 - name: Validate team filtering
   block:
     - name: Check if any teams are selected
       assert:
         that:
+          - jenkins_teams_filtered is defined
           - jenkins_teams_filtered | length > 0
         fail_msg: |
-          No teams selected for deployment. 
+          ERROR: No teams selected for deployment!
+          
           Available teams: {{ jenkins_teams_config | map(attribute='team_name') | list | join(', ') }}
-          {% if deploy_teams is defined %}
+          {% if deploy_teams is defined and deploy_teams != "" %}
           Requested teams: {{ deploy_teams }}
+          
+          Possible issues:
+          - Check team name spelling (case sensitive)
+          - Verify team exists in jenkins_teams configuration
+          - Remove extra spaces around team names
           {% endif %}
-          {% if exclude_teams is defined %}
+          {% if exclude_teams is defined and exclude_teams != "" %}
           Excluded teams: {{ exclude_teams }}
+          
+          WARNING: All teams have been excluded from deployment!
           {% endif %}
 
     - name: Validate requested teams exist
@@ -83,8 +112,13 @@
           {% else %}
           Deployment Filter: All teams (default)
           {% endif %}
+          {% if jenkins_teams_filtered | length > 0 %}
           Teams to Deploy: {{ jenkins_teams_filtered | map(attribute='team_name') | list | join(', ') }}
           Teams Count: {{ jenkins_teams_filtered | length }}
+          {% else %}
+          Teams to Deploy: (none - this will cause deployment to fail)
+          Teams Count: 0
+          {% endif %}
           ====================================================
   tags: ['always']
 

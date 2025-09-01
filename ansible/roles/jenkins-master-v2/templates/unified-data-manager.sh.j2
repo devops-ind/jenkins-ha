@@ -319,7 +319,7 @@ check_prerequisites() {
 
 # Sync functions
 perform_sync_to_shared() {
-    log "🔄 Starting sync to shared storage..."
+    log "[SYNC] Starting sync to shared storage..."
     
     if [[ "$DRY_RUN" == "true" ]]; then
         log "[DRY RUN] Would sync ${TEAM_NAME} data from ${CONTAINER_NAME} to ${TEAM_STORAGE_PATH}"
@@ -330,7 +330,7 @@ perform_sync_to_shared() {
     mkdir -p "${TEAM_STORAGE_PATH}"/{jobs,workspace,builds,userContent,secrets}
     
     local sync_success=0
-    local sync_total=${#DATA_TYPES[@]}
+    local sync_total=${{ '{#' }}DATA_TYPES[@]}
     
     for data_type in "${DATA_TYPES[@]}"; do
         debug "Syncing ${data_type}..."
@@ -350,10 +350,10 @@ perform_sync_to_shared() {
                 if docker cp "${CONTAINER_NAME}:${container_path}/." "${storage_path}/"; then
                     # Set proper ownership
                     chown -R {{ jenkins_user }}:{{ jenkins_group }} "${storage_path}"
-                    debug "✅ Successfully synced ${data_type}"
+                    debug "[SUCCESS] Successfully synced ${data_type}"
                     ((sync_success++))
                 else
-                    error "❌ Failed to sync ${data_type}"
+                    error "[ERROR] Failed to sync ${data_type}"
                 fi
                 ;;
         esac
@@ -363,16 +363,16 @@ perform_sync_to_shared() {
     done
     
     if [[ $sync_success -eq $sync_total ]]; then
-        log "✅ Shared storage sync completed successfully (${sync_success}/${sync_total})"
+        log "[SUCCESS] Shared storage sync completed successfully (${sync_success}/${sync_total})"
         return 0
     else
-        error "⚠️ Partial shared storage sync completed (${sync_success}/${sync_total})"
+        error "[WARNING] Partial shared storage sync completed (${sync_success}/${sync_total})"
         return 1
     fi
 }
 
 perform_sync_to_bluegreen() {
-    log "🔄 Starting blue-green sync: ${ACTIVE_ENV} → ${TARGET_ENV}..."
+    log "[SYNC] Starting blue-green sync: ${ACTIVE_ENV} -> ${TARGET_ENV}..."
     
     if [[ "$DRY_RUN" == "true" ]]; then
         log "[DRY RUN] Would sync from ${ACTIVE_ENV} environment to ${TARGET_ENV} environment"
@@ -394,7 +394,7 @@ perform_sync_to_bluegreen() {
     }
     
     local sync_success=0
-    local sync_total=${#DATA_TYPES[@]}
+    local sync_total=${{ '{#' }}DATA_TYPES[@]}
     
     for data_type in "${DATA_TYPES[@]}"; do
         debug "Blue-green syncing ${data_type}..."
@@ -407,10 +407,10 @@ perform_sync_to_bluegreen() {
                 find . -type f -exec cp -p {} /target/${data_type}/{} \\; 2>/dev/null || true &&
                 find . -type d -exec mkdir -p /target/${data_type}/{} \\; 2>/dev/null || true
             " && {
-                debug "✅ Successfully synced ${data_type}"
+                debug "[SUCCESS] Successfully synced ${data_type}"
                 ((sync_success++))
             } || {
-                error "❌ Failed to sync ${data_type}"
+                error "[ERROR] Failed to sync ${data_type}"
             }
         else
             debug "Source ${data_type} does not exist, skipping"
@@ -422,17 +422,17 @@ perform_sync_to_bluegreen() {
     docker stop "${temp_container}" >/dev/null 2>&1
     
     if [[ $sync_success -eq $sync_total ]]; then
-        log "✅ Blue-green sync completed successfully (${sync_success}/${sync_total})"
+        log "[SUCCESS] Blue-green sync completed successfully (${sync_success}/${sync_total})"
         return 0
     else
-        error "⚠️ Partial blue-green sync completed (${sync_success}/${sync_total})"
+        error "[WARNING] Partial blue-green sync completed (${sync_success}/${sync_total})"
         return 1
     fi
 }
 
 # Backup functions
 perform_backup() {
-    log "💾 Starting backup operation..."
+    log "[BACKUP] Starting backup operation..."
     
     local backup_dir="${BACKUP_LOCAL_DIR}/${TEAM_NAME}"
     local timestamp=$(date '+%Y%m%d_%H%M%S')
@@ -479,7 +479,7 @@ perform_tar_backup() {
     mkdir -p "$temp_dir"
     
     local backup_success=0
-    local backup_total=${#DATA_TYPES[@]}
+    local backup_total=${{ '{#' }}DATA_TYPES[@]}
     
     # Extract data from container
     for data_type in "${DATA_TYPES[@]}"; do
@@ -502,7 +502,7 @@ perform_tar_backup() {
     # Create tar archive
     if [[ $backup_success -eq $backup_total ]]; then
         if tar $tar_options "$backup_file" -C "$temp_dir" .; then
-            log "✅ Backup created successfully: $backup_file"
+            log "[SUCCESS] Backup created successfully: $backup_file"
             
             # Verify backup if enabled
             if [[ "$BACKUP_VERIFICATION_ENABLED" == "true" ]]; then
@@ -549,18 +549,18 @@ verify_tar_backup() {
     
     if [[ "$backup_file" == *.gz ]]; then
         if tar -tzf "$backup_file" >/dev/null 2>&1; then
-            debug "✅ Backup verification passed"
+            debug "[SUCCESS] Backup verification passed"
             return 0
         else
-            error "❌ Backup verification failed"
+            error "[ERROR] Backup verification failed"
             return 1
         fi
     else
         if tar -tf "$backup_file" >/dev/null 2>&1; then
-            debug "✅ Backup verification passed"
+            debug "[SUCCESS] Backup verification passed"
             return 0
         else
-            error "❌ Backup verification failed"
+            error "[ERROR] Backup verification failed"
             return 1
         fi
     fi
@@ -576,19 +576,19 @@ verify_sync_operation() {
         
         # Basic verification - check if target volume has expected data
         if docker run --rm -v "${target_volume}:/target" alpine:latest test -d "/target/jobs"; then
-            debug "✅ Blue-green sync verification passed"
+            debug "[SUCCESS] Blue-green sync verification passed"
             return 0
         else
-            error "❌ Blue-green sync verification failed"
+            error "[ERROR] Blue-green sync verification failed"
             return 1
         fi
     else
         # Shared storage sync verification
         if [[ -d "${TEAM_STORAGE_PATH}/jobs" ]]; then
-            debug "✅ Shared storage sync verification passed"
+            debug "[SUCCESS] Shared storage sync verification passed"
             return 0
         else
-            error "❌ Shared storage sync verification failed"
+            error "[ERROR] Shared storage sync verification failed"
             return 1
         fi
     fi
@@ -610,7 +610,7 @@ cleanup_old_backups() {
 
 # Main execution function
 main() {
-    log "🚀 Starting unified data management for ${TEAM_NAME}"
+    log "[START] Starting unified data management for ${TEAM_NAME}"
     log "Operation mode: ${OPERATION_MODE}"
     log "Active environment: ${ACTIVE_ENV}"
     
@@ -735,10 +735,10 @@ main() {
     
     # Final status report
     if [[ "$overall_success" == "true" ]]; then
-        log "🎉 Unified data management completed successfully"
+        log "[COMPLETE] Unified data management completed successfully"
         exit 0
     else
-        error "💥 Unified data management completed with errors"
+        error "[FAILED] Unified data management completed with errors"
         exit 1
     fi
 }
