@@ -2,8 +2,7 @@
 # Unified Data Management Configuration
 # Enhanced backup and sync operations for Jenkins HA infrastructure
 
-# Unified operation configuration
-unified_data_management_enabled: true
+# Unified operation configuration (always enabled)
 default_operation_mode: "sync-only"  # Options: sync-only, backup-only, sync-and-backup, backup-then-sync, sync-then-backup
 backup_before_sync: false
 sync_verification_enabled: true
@@ -119,10 +118,8 @@ test_mode_enabled: false
 development_mode: false
 debug_mode_enabled: false
 
-# Compatibility settings
-legacy_script_support: true
-migration_mode: false
-backward_compatibility_warnings: true
+# Simplified configuration (legacy scripts removed)
+backward_compatibility_warnings: false
 
 # Feature flags
 experimental_features_enabled: false

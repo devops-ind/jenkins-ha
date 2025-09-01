@@ -95,17 +95,6 @@
         mode: '0755'
       become: yes
 
-    - name: Create data synchronization scripts for teams
-      template:
-        src: sync-jenkins-data.sh.j2
-        dest: "/var/jenkins/scripts/sync-{{ item.team_name }}-data.sh"
-        owner: "{{ jenkins_user }}"
-        group: "{{ jenkins_group }}"
-        mode: '0755'
-      loop: "{{ jenkins_teams_config }}"
-      loop_control:
-        label: "{{ item.team_name }}"
-      tags: ['sync-scripts']
 
     - name: Create unified data management scripts for teams
       template:
@@ -117,7 +106,6 @@
       loop: "{{ jenkins_teams_config }}"
       loop_control:
         label: "{{ item.team_name }}"
-      when: unified_data_management_enabled | default(true)
       tags: ['unified-scripts']
 
     - name: Determine optimal sync source for each team (blue-green vs shared storage)
@@ -168,25 +156,12 @@
       tags: ['sync-detection']
       when: sync_enabled | default(true)
 
-    - name: Perform initial data synchronization from containers to shared storage
+    - name: Perform initial data synchronization using unified script
       block:
-        - name: Create initial sync scripts for teams
-          template:
-            src: initial-sync.sh.j2
-            dest: "/tmp/initial-sync-{{ item.team_name }}.sh"
-            owner: "{{ jenkins_user }}"
-            group: "{{ jenkins_group }}"
-            mode: '0755'
-          loop: "{{ jenkins_teams_config }}"
-          loop_control:
-            label: "{{ item.team_name }}"
-          become: yes
-          when: sync_enabled | default(true)
-
-        - name: Execute initial data synchronization for each team with optimal sync source
+        - name: Execute initial data synchronization for each team
           command: >-
-            /tmp/initial-sync-{{ item.team_name }}.sh
-            {% if team_sync_sources[item.team_name].sync_from != 'shared' %}--sync-from {{ team_sync_sources[item.team_name].sync_from }}{% endif %}
+            /var/jenkins/scripts/unified-{{ item.team_name }}-manager.sh --sync-only
+            {% if team_sync_sources[item.team_name].sync_from != 'shared' %}--target {{ team_sync_sources[item.team_name].sync_from }}{% endif %}
           loop: "{{ jenkins_teams_config }}"
           loop_control:
             label: "{{ item.team_name }}-{{ item.active_environment | default('blue') }}-{{ team_sync_sources[item.team_name].sync_from }}"
@@ -194,48 +169,25 @@
           become: yes
           when: sync_enabled | default(true)
           failed_when: false  # Don't fail deployment if sync fails
-          
-        - name: Cleanup initial sync scripts
-          file:
-            path: "/tmp/initial-sync-{{ item.team_name }}.sh"
-            state: absent
-          loop: "{{ jenkins_teams_config }}"
-          loop_control:
-            label: "{{ item.team_name }}"
-          become: yes
-          when: sync_enabled | default(true)
 
-        - name: Display initial synchronization results with sync source details
+        - name: Display initial synchronization results
           debug:
             msg: |
               ====================================
-              Initial Data Synchronization Results
+              Initial Data Synchronization Results (Unified Script)
               ====================================
               {% for result in initial_sync_results.results %}
               {{ result.item.team_name }}: {{ 'Completed' if result.rc == 0 else 'Failed (non-blocking)' }} 
-                └─ Sync Source: {{ team_sync_sources[result.item.team_name].sync_from }}
+                └─ Sync Target: {{ team_sync_sources[result.item.team_name].sync_from }}
                 {% if team_sync_sources[result.item.team_name].sync_from != 'shared' %}└─ From Environment: {{ team_sync_sources[result.item.team_name].previous_env }}{% endif %}
               {% endfor %}
               ====================================
               Summary:
               - Blue-green syncs: {{ initial_sync_results.results | selectattr('item.team_name', 'in', (team_sync_sources | dict2items | selectattr('value.sync_from', 'ne', 'shared') | map(attribute='key') | list)) | list | length }}
               - Shared storage syncs: {{ initial_sync_results.results | selectattr('item.team_name', 'in', (team_sync_sources | dict2items | selectattr('value.sync_from', 'eq', 'shared') | map(attribute='key') | list)) | list | length }}
-              Note: Sync failures are non-blocking and won't prevent deployment
+              Note: Using unified data management script for improved reliability
           tags: ['sync-status']
           when: initial_sync_results is defined
-
-    - name: Setup continuous data synchronization (cron-based)
-      cron:
-        name: "Jenkins {{ item.team_name }} data sync"
-        minute: "{{ sync_interval | default('*/5') }}"
-        job: "/var/jenkins/scripts/sync-{{ item.team_name }}-data.sh"
-        user: "{{ jenkins_user }}"
-        state: present
-      loop: "{{ jenkins_teams_config }}"
-      loop_control:
-        label: "{{ item.team_name }}"
-      when: sync_enabled | default(true) and not (unified_data_management_enabled | default(true))
-      tags: ['sync-cron']
 
     - name: Setup unified data management (cron-based)
       cron:
@@ -247,7 +199,7 @@
       loop: "{{ jenkins_teams_config }}"
       loop_control:
         label: "{{ item.team_name }}"
-      when: unified_data_management_enabled | default(true)
+      when: sync_enabled | default(true)
       tags: ['unified-cron']
 
     - name: Setup backup-only operations (cron-based)
@@ -262,7 +214,6 @@
       loop_control:
         label: "{{ item.team_name }}"
       when: 
-        - unified_data_management_enabled | default(true)
         - backup_enabled | default(false)
         - default_operation_mode | default('sync-only') in ['sync-only', 'sync-then-backup', 'sync-and-backup']
       tags: ['backup-cron']
@@ -321,15 +272,12 @@
           Health Monitoring: {{ storage_monitoring_enabled | default(true) }}
           
           Unified Data Management:
-          • Enabled: {{ unified_data_management_enabled | default(true) }}
           • Operation Mode: {{ default_operation_mode | default('sync-only') }}
           • Backup Enabled: {{ backup_enabled | default(false) }}
-          {% if unified_data_management_enabled | default(true) %}
           • Unified Schedule: {{ unified_cron_schedule | default('*/5') }}
           {% if backup_enabled | default(false) %}
           • Backup Schedule: {{ backup_cron_schedule | default('0 2 * * *') }}
           • Backup Retention: {{ backup_daily_retention | default(7) }} days
-          {% endif %}
           {% endif %}
           
           Configuration:
@@ -360,10 +308,7 @@
           Available Scripts per Team:
           {% for team in jenkins_teams_config %}
           • {{ team.team_name }}:
-            - /var/jenkins/scripts/sync-{{ team.team_name }}-data.sh (legacy sync)
-          {% if unified_data_management_enabled | default(true) %}
             - /var/jenkins/scripts/unified-{{ team.team_name }}-manager.sh (unified operations)
-          {% endif %}
           {% endfor %}
           ====================================================
       tags: ['integration-status']
