@@ -19,6 +19,81 @@
     jenkins_deployment_mode: "{{ 'multi-team' if (jenkins_teams_config | default(jenkins_teams)) is defined and (jenkins_teams_config | default(jenkins_teams)) | length > 0 else 'single-team' }}"
   tags: ['always']
 
+- name: Filter teams for deployment
+  set_fact:
+    jenkins_teams_filtered: |
+      {% set all_teams = jenkins_teams_config %}
+      {% if deploy_teams is defined and deploy_teams != "" %}
+        {# Deploy specific teams #}
+        {% set team_list = deploy_teams.split(',') | map('trim') | list %}
+        {% set filtered = all_teams | selectattr('team_name', 'in', team_list) | list %}
+        {% if filtered | length == 0 %}
+          {{ [] }}
+        {% else %}
+          {{ filtered }}
+        {% endif %}
+      {% elif exclude_teams is defined and exclude_teams != "" %}
+        {# Exclude specific teams #}
+        {% set exclude_list = exclude_teams.split(',') | map('trim') | list %}
+        {{ all_teams | rejectattr('team_name', 'in', exclude_list) | list }}
+      {% else %}
+        {# Deploy all teams (default behavior) #}
+        {{ all_teams }}
+      {% endif %}
+  tags: ['always']
+
+- name: Validate team filtering
+  block:
+    - name: Check if any teams are selected
+      assert:
+        that:
+          - jenkins_teams_filtered | length > 0
+        fail_msg: |
+          No teams selected for deployment. 
+          Available teams: {{ jenkins_teams_config | map(attribute='team_name') | list | join(', ') }}
+          {% if deploy_teams is defined %}
+          Requested teams: {{ deploy_teams }}
+          {% endif %}
+          {% if exclude_teams is defined %}
+          Excluded teams: {{ exclude_teams }}
+          {% endif %}
+
+    - name: Validate requested teams exist
+      assert:
+        that:
+          - item in (jenkins_teams_config | map(attribute='team_name') | list)
+        fail_msg: "Team '{{ item }}' not found in configuration. Available teams: {{ jenkins_teams_config | map(attribute='team_name') | list | join(', ') }}"
+      loop: "{{ deploy_teams.split(',') | map('trim') | list }}"
+      when: deploy_teams is defined and deploy_teams != ""
+
+    - name: Display filtered deployment configuration
+      debug:
+        msg: |
+          ====================================================
+          Team Deployment Filtering
+          ====================================================
+          Total Available Teams: {{ jenkins_teams_config | length }}
+          Available Teams: {{ jenkins_teams_config | map(attribute='team_name') | list | join(', ') }}
+          {% if deploy_teams is defined and deploy_teams != "" %}
+          Deployment Filter: Specific teams
+          Requested Teams: {{ deploy_teams }}
+          {% elif exclude_teams is defined and exclude_teams != "" %}
+          Deployment Filter: Exclude teams
+          Excluded Teams: {{ exclude_teams }}
+          {% else %}
+          Deployment Filter: All teams (default)
+          {% endif %}
+          Teams to Deploy: {{ jenkins_teams_filtered | map(attribute='team_name') | list | join(', ') }}
+          Teams Count: {{ jenkins_teams_filtered | length }}
+          ====================================================
+  tags: ['always']
+
+- name: Update deployment configuration with filtered teams
+  set_fact:
+    jenkins_teams_config: "{{ jenkins_teams_filtered }}"
+    jenkins_deployment_mode: "{{ 'multi-team' if jenkins_teams_filtered | length > 1 else 'single-team' }}"
+  tags: ['always']
+
 - name: Display deployment configuration
   debug:
     msg: |

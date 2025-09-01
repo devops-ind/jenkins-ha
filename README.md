@@ -25,6 +25,7 @@ This infrastructure provides:
 
 - **Blue-Green Deployment**: Zero-downtime deployments with automated environment switching
 - **Multi-Team Support**: Isolated Jenkins masters with automated pipeline creation
+- **Team-Specific Deployment**: Deploy individual teams or team subsets for focused infrastructure updates
 - **Containerized Architecture**: Docker/Podman containers with native Ansible orchestration
 - **Automated Pipeline Creation**: DSL-driven job creation with team-specific configurations
 - **Dynamic Agent Scaling**: Container-based agents (Maven, Python, Node.js, DIND) provisioned on-demand
@@ -61,8 +62,12 @@ ansible-galaxy collection install -r ansible/requirements.yml
 cp ansible/inventories/staging/hosts.yml ansible/inventories/production/hosts.yml
 # Edit with your production hosts
 
-# 4. Deploy infrastructure
+# 4. Deploy infrastructure (all teams)
 make deploy-production
+
+# 4a. Deploy specific teams only (recommended for large environments)
+make deploy-production-team TEAM=devops          # Deploy single team
+make deploy-teams TEAMS="devops,ma,ba" ENV=production  # Deploy multiple teams
 ```
 
 ### For Developers (Local Development)
@@ -73,7 +78,11 @@ source ./activate-dev-env.sh     # Activate development environment
 
 # 2. Install dependencies and deploy
 pip install -r requirements.txt
-make deploy-local
+make deploy-local                # Deploy all teams locally
+
+# 2a. Deploy specific teams for focused development
+make deploy-local-team TEAM=devops              # Deploy single team for testing
+make deploy-teams TEAMS="devops,developer" ENV=local  # Deploy subset of teams
 
 # 3. Access services
 # Jenkins: http://localhost:8080 (DevOps team)
@@ -338,6 +347,75 @@ Each team automatically receives:
 
 ### DSL Seed Job Integration
 - **Embedded DSL Scripts**: Team configurations automatically generate pipeline jobs
+
+## Team-Specific Deployment
+
+The infrastructure supports flexible team-specific deployments, allowing operators to deploy individual teams or subsets without affecting the entire infrastructure.
+
+### Team Filtering Options
+
+#### Deploy Specific Teams
+```bash
+# Deploy single team
+make deploy-local-team TEAM=devops
+make deploy-production-team TEAM=ma
+
+# Deploy multiple specific teams
+make deploy-teams TEAMS="devops,developer" ENV=local
+make deploy-teams TEAMS="devops,ma,ba" ENV=production
+```
+
+#### Exclude Specific Teams
+```bash
+# Deploy all teams except specified ones
+make deploy-exclude-teams EXCLUDE_TEAMS="staging,test" ENV=local
+make deploy-exclude-teams EXCLUDE_TEAMS="staging" ENV=production
+```
+
+### Team Deployment Features
+
+- **Independent Team Switching**: Each team can independently switch blue/green environments
+- **Selective Infrastructure Updates**: Update specific team configurations without affecting others
+- **Resource Optimization**: Deploy only necessary team containers to reduce resource usage
+- **Validation and Health Checks**: Team-specific validation and health monitoring
+- **Rollback Capability**: Individual team rollback without impacting other teams
+
+### Team Management Commands
+
+```bash
+# Validate team configuration before deployment
+make validate-team TEAM=devops ENV=local
+
+# Check deployment status for specific team
+make status-team TEAM=devops ENV=local
+
+# Perform dry run to preview changes
+make dry-run-team TEAM=devops ENV=production
+
+# List all configured teams
+make list-teams ENV=local
+```
+
+### Advanced Team Deployment Scenarios
+
+```bash
+# Deploy with cleanup of orphaned resources
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml \
+  -e deploy_teams="devops" \
+  -e jenkins_cleanup_enabled=true \
+  --tags cleanup,jenkins,deploy
+
+# Deploy with shared storage integration
+ansible-playbook -i ansible/inventories/local/hosts.yml ansible/site.yml \
+  -e deploy_teams="developer" \
+  -e shared_storage_enabled=true \
+  --tags shared-storage,jenkins
+
+# Deploy with enhanced health checks
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml \
+  -e deploy_teams="ma,ba" \
+  --tags health-fix,verify
+```
 - **Daily Job Updates**: Seed jobs run at 6 AM to create/update team pipelines
 - **Sandbox Security**: All DSL execution runs in sandbox mode with pre-approved signatures
 - **External Pipeline Support**: References external Jenkinsfiles in `pipelines/` directory
@@ -566,23 +644,11 @@ backup_monthly_retention: 12            # 12 months
 
 ### Migration & Compatibility
 
-#### Backward Compatibility
-- **Legacy Script Support**: Existing sync scripts remain fully functional
-- **Gradual Migration**: Teams can adopt unified system at their own pace
-- **Configuration Preservation**: Existing configurations automatically supported
-- **Zero Disruption**: New system deploys alongside existing infrastructure
-
-#### Migration Path
-```bash
-# Enable unified system (default: enabled)
-unified_data_management_enabled: true
-
-# Disable legacy scripts (optional)
-legacy_script_support: false
-
-# Migration mode for gradual transition
-migration_mode: true
-```
+#### Simplified Architecture
+- **Unified Operations**: Single script system for all backup and sync operations
+- **Enhanced Reliability**: Advanced error handling and verification capabilities  
+- **Streamlined Management**: One command interface across all operation types
+- **Enterprise Features**: Built-in monitoring, metrics, and compliance support
 
 ## Prerequisites
 
@@ -853,6 +919,66 @@ make build-images                   # Build and push Docker images
 make backup                         # Run backup procedures
 make monitor                        # Setup monitoring stack
 make status                         # Check service status
+```
+
+#### Team-Specific Deployment Commands
+```bash
+# Deploy specific teams to environments
+make deploy-local-team TEAM=devops                    # Deploy single team to local
+make deploy-production-team TEAM=devops               # Deploy single team to production
+
+# Deploy multiple teams
+make deploy-teams TEAMS="devops,developer" ENV=local     # Deploy multiple teams to local
+make deploy-teams TEAMS="devops,ma,ba" ENV=production    # Deploy multiple teams to production
+
+# Deploy all teams except specified ones
+make deploy-exclude-teams EXCLUDE_TEAMS="staging,test" ENV=local  # Exclude teams from local deployment
+make deploy-exclude-teams EXCLUDE_TEAMS="staging,test" ENV=production  # Exclude teams from production
+```
+
+#### Team Management and Validation Commands
+```bash
+# Team discovery and validation
+make list-teams ENV=local                             # List all configured teams
+make validate-team TEAM=devops ENV=local              # Validate specific team configuration
+make status-team TEAM=devops ENV=local                # Show deployment status for specific team
+make dry-run-team TEAM=devops ENV=local               # Perform dry run for specific team
+
+# Team deployment examples
+make deploy-local-team TEAM=devops                     # Deploy only devops team to local environment
+make deploy-production-team TEAM=ma                   # Deploy only ma team to production
+make dry-run-team TEAM=developer ENV=production       # Test developer team deployment without changes
+```
+
+#### Direct Ansible Team Deployment Commands
+```bash
+# Team-specific deployments with Ansible directly
+ansible-playbook -i ansible/inventories/local/hosts.yml ansible/site.yml -e deploy_teams="devops"
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml -e deploy_teams="devops,ma"
+ansible-playbook -i ansible/inventories/local/hosts.yml ansible/site.yml -e exclude_teams="staging,test"
+
+# Team deployment with specific tags
+ansible-playbook -i ansible/inventories/local/hosts.yml ansible/site.yml -e deploy_teams="devops" --tags jenkins,containers
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml -e deploy_teams="ma,ba" --tags blue-green,deploy
+
+# Dry run and validation for teams
+ansible-playbook -i ansible/inventories/local/hosts.yml ansible/site.yml -e deploy_teams="devops" --check
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml -e deploy_teams="devops" --tags validate
+
+# Team health checks and monitoring
+ansible-playbook -i ansible/inventories/local/hosts.yml ansible/site.yml -e deploy_teams="devops" --tags health,verify
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml -e deploy_teams="ma" --tags health-fix
+
+# Advanced team deployment scenarios
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml \
+  -e deploy_teams="devops" \
+  -e jenkins_cleanup_enabled=true \
+  --tags cleanup,jenkins,deploy
+
+ansible-playbook -i ansible/inventories/local/hosts.yml ansible/site.yml \
+  -e exclude_teams="staging,test" \
+  -e shared_storage_enabled=true \
+  --tags shared-storage,jenkins
 ```
 
 #### Comprehensive Testing Suite

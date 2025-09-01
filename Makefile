@@ -57,6 +57,74 @@ deploy-production: ## Deploy to production environment
 	@echo "$(RED)🚀 Deploying to production environment...$(RESET)"
 	@cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) site.yml
 
+##@ Team-Specific Deployment Commands
+
+.PHONY: deploy-local-team
+deploy-local-team: ## Deploy specific team to local environment (Usage: make deploy-local-team TEAM=devops)
+	@if [ -z "$(TEAM)" ]; then \
+		echo "$(RED)❌ Error: TEAM parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make deploy-local-team TEAM=devops$(RESET)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)🎯 Deploying $(TEAM) team to local environment...$(RESET)"
+	@cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml -e deploy_teams="$(TEAM)"
+
+.PHONY: deploy-production-team
+deploy-production-team: ## Deploy specific team to production environment (Usage: make deploy-production-team TEAM=devops)
+	@if [ -z "$(TEAM)" ]; then \
+		echo "$(RED)❌ Error: TEAM parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make deploy-production-team TEAM=devops$(RESET)"; \
+		exit 1; \
+	fi
+	@echo "$(RED)🎯 Deploying $(TEAM) team to production environment...$(RESET)"
+	@cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) site.yml -e deploy_teams="$(TEAM)"
+
+.PHONY: deploy-teams
+deploy-teams: ## Deploy multiple teams to environment (Usage: make deploy-teams TEAMS="devops,developer" ENV=local)
+	@if [ -z "$(TEAMS)" ]; then \
+		echo "$(RED)❌ Error: TEAMS parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make deploy-teams TEAMS='devops,developer' ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ Error: ENV parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make deploy-teams TEAMS='devops,developer' ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ "$(ENV)" = "local" ]; then \
+		echo "$(BLUE)🎯 Deploying teams [$(TEAMS)] to local environment...$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml -e deploy_teams="$(TEAMS)"; \
+	elif [ "$(ENV)" = "production" ]; then \
+		echo "$(RED)🎯 Deploying teams [$(TEAMS)] to production environment...$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) site.yml -e deploy_teams="$(TEAMS)"; \
+	else \
+		echo "$(RED)❌ Error: ENV must be 'local' or 'production'$(RESET)"; \
+		exit 1; \
+	fi
+
+.PHONY: deploy-exclude-teams
+deploy-exclude-teams: ## Deploy all teams except specified ones (Usage: make deploy-exclude-teams EXCLUDE_TEAMS="staging,test" ENV=local)
+	@if [ -z "$(EXCLUDE_TEAMS)" ]; then \
+		echo "$(RED)❌ Error: EXCLUDE_TEAMS parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make deploy-exclude-teams EXCLUDE_TEAMS='staging,test' ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ Error: ENV parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make deploy-exclude-teams EXCLUDE_TEAMS='staging,test' ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ "$(ENV)" = "local" ]; then \
+		echo "$(BLUE)🎯 Deploying all teams except [$(EXCLUDE_TEAMS)] to local environment...$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml -e exclude_teams="$(EXCLUDE_TEAMS)"; \
+	elif [ "$(ENV)" = "production" ]; then \
+		echo "$(RED)🎯 Deploying all teams except [$(EXCLUDE_TEAMS)] to production environment...$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) site.yml -e exclude_teams="$(EXCLUDE_TEAMS)"; \
+	else \
+		echo "$(RED)❌ Error: ENV must be 'local' or 'production'$(RESET)"; \
+		exit 1; \
+	fi
+
 .PHONY: backup
 backup: ## Run backup procedures
 	@echo "$(GREEN)💾 Running backup procedures...$(RESET)"
@@ -66,6 +134,95 @@ backup: ## Run backup procedures
 monitor: ## Setup monitoring stack
 	@echo "$(GREEN)📊 Setting up monitoring stack...$(RESET)"
 	@cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) site.yml --tags monitoring
+
+##@ Team Validation and Status Commands
+
+.PHONY: list-teams
+list-teams: ## List all configured teams (Usage: make list-teams ENV=local)
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ Error: ENV parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make list-teams ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ "$(ENV)" = "local" ]; then \
+		echo "$(BLUE)📋 Teams configured in local environment:$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) --list-tags site.yml | grep -o 'team_.*' | sort | uniq || echo "$(YELLOW)No teams found$(RESET)"; \
+	elif [ "$(ENV)" = "production" ]; then \
+		echo "$(RED)📋 Teams configured in production environment:$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) --list-tags site.yml | grep -o 'team_.*' | sort | uniq || echo "$(YELLOW)No teams found$(RESET)"; \
+	else \
+		echo "$(RED)❌ Error: ENV must be 'local' or 'production'$(RESET)"; \
+		exit 1; \
+	fi
+
+.PHONY: validate-team
+validate-team: ## Validate specific team configuration (Usage: make validate-team TEAM=devops ENV=local)
+	@if [ -z "$(TEAM)" ]; then \
+		echo "$(RED)❌ Error: TEAM parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make validate-team TEAM=devops ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ Error: ENV parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make validate-team TEAM=devops ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ "$(ENV)" = "local" ]; then \
+		echo "$(BLUE)🔍 Validating $(TEAM) team configuration in local environment...$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml --tags validate -e deploy_teams="$(TEAM)" --check; \
+	elif [ "$(ENV)" = "production" ]; then \
+		echo "$(RED)🔍 Validating $(TEAM) team configuration in production environment...$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) site.yml --tags validate -e deploy_teams="$(TEAM)" --check; \
+	else \
+		echo "$(RED)❌ Error: ENV must be 'local' or 'production'$(RESET)"; \
+		exit 1; \
+	fi
+
+.PHONY: status-team
+status-team: ## Show deployment status for specific team (Usage: make status-team TEAM=devops ENV=local)
+	@if [ -z "$(TEAM)" ]; then \
+		echo "$(RED)❌ Error: TEAM parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make status-team TEAM=devops ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ Error: ENV parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make status-team TEAM=devops ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ "$(ENV)" = "local" ]; then \
+		echo "$(BLUE)📊 Status for $(TEAM) team in local environment:$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml --tags health,verify -e deploy_teams="$(TEAM)" --check || echo "$(YELLOW)Status check completed with warnings$(RESET)"; \
+	elif [ "$(ENV)" = "production" ]; then \
+		echo "$(RED)📊 Status for $(TEAM) team in production environment:$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) site.yml --tags health,verify -e deploy_teams="$(TEAM)" --check || echo "$(YELLOW)Status check completed with warnings$(RESET)"; \
+	else \
+		echo "$(RED)❌ Error: ENV must be 'local' or 'production'$(RESET)"; \
+		exit 1; \
+	fi
+
+.PHONY: dry-run-team
+dry-run-team: ## Perform dry run for specific team deployment (Usage: make dry-run-team TEAM=devops ENV=local)
+	@if [ -z "$(TEAM)" ]; then \
+		echo "$(RED)❌ Error: TEAM parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make dry-run-team TEAM=devops ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ Error: ENV parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make dry-run-team TEAM=devops ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ "$(ENV)" = "local" ]; then \
+		echo "$(BLUE)🔍 Dry run for $(TEAM) team deployment in local environment...$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml -e deploy_teams="$(TEAM)" --check; \
+	elif [ "$(ENV)" = "production" ]; then \
+		echo "$(RED)🔍 Dry run for $(TEAM) team deployment in production environment...$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) site.yml -e deploy_teams="$(TEAM)" --check; \
+	else \
+		echo "$(RED)❌ Error: ENV must be 'local' or 'production'$(RESET)"; \
+		exit 1; \
+	fi
 
 ##@ Build Commands
 
