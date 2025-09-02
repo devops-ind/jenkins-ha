@@ -192,8 +192,8 @@ openssl s_client -connect localhost:443 -servername localhost
 ### SSL Configuration
 ```yaml
 ssl_enabled: true
-jenkins_domain: "192.168.86.30"
-jenkins_wildcard_domain: "*.192.168.86.30"
+jenkins_domain: "192.168.188.142"
+jenkins_wildcard_domain: "*.192.168.188.142"
 ssl_certificate_path: "/etc/haproxy/ssl/combined.pem"
 ```
 

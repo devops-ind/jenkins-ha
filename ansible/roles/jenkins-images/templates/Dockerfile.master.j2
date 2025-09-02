@@ -1,66 +1,241 @@
-ARG JENKINS_VERSION={{ jenkins_version }}
-FROM jenkins/jenkins:${JENKINS_VERSION}
+# syntax=docker/dockerfile:1.4
+# Production-Ready Multi-Stage Jenkins Master Dockerfile
+# Enterprise-grade Jenkins with resilient plugin management and security hardening
 
-# Build arguments
+ARG JENKINS_VERSION={{ jenkins_version }}
+ARG BUILDKIT_INLINE_CACHE=1
+
+#==============================================================================
+# Stage 1: Base image preparation and security hardening
+#==============================================================================
+FROM jenkins/jenkins:${JENKINS_VERSION} as base
+
+# Build arguments and metadata
 ARG BUILD_DATE
 ARG VCS_REF
+ARG JENKINS_VERSION
+ARG BUILD_NUMBER=${BUILD_NUMBER:-unknown}
+ARG CI_PIPELINE_ID=${CI_PIPELINE_ID:-local}
 
-# Metadata
+# Enhanced metadata following OCI specification
 LABEL maintainer="DevOps Team" \
-      org.label-schema.build-date=${BUILD_DATE} \
-      org.label-schema.vcs-ref=${VCS_REF} \
-      org.label-schema.version=${JENKINS_VERSION} \
+      org.opencontainers.image.title="Jenkins Master HA" \
+      org.opencontainers.image.description="Production-ready Jenkins Master with HA support and security hardening" \
+      org.opencontainers.image.version="${JENKINS_VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.source="https://github.com/your-org/jenkins-ha" \
+      org.opencontainers.image.url="https://github.com/your-org/jenkins-ha" \
+      org.opencontainers.image.documentation="https://github.com/your-org/jenkins-ha/blob/main/README.md" \
       org.label-schema.schema-version="1.0" \
-      description="Custom Jenkins Master for HA deployment"
+      jenkins.version="${JENKINS_VERSION}" \
+      build.number="${BUILD_NUMBER}" \
+      ci.pipeline="${CI_PIPELINE_ID}"
 
-# Switch to root to install packages
+# Switch to root for system-level operations
 USER root
 
-# Install essential packages only (minimizing network dependencies)
-RUN apt-get update && apt-get install -y \
-    curl \
-    git \
-    unzip \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+# Install essential packages with version pinning and security updates
+# Using --mount for better caching and security
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    curl=7.81.0-* \
+    git=1:2.34.1-* \
+    unzip=6.0-* \
+    jq=1.6-* \
+    ca-certificates=* \
+    gnupg=* \
+    wget=* \
+    procps=* && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Copy plugins list and install during build for better reliability
-COPY plugins.txt /usr/share/jenkins/ref/plugins.txt
+# Security hardening: Create jenkins user with specific UID/GID for consistency
+RUN groupmod -g {{ jenkins_gid | default('1002') }} jenkins && \
+    usermod -u {{ jenkins_uid | default('1002') }} -g {{ jenkins_gid | default('1002') }} jenkins
 
-# Install plugins during build to ensure CASC plugin availability at startup
-# This prevents setup wizard from appearing due to missing CASC plugin
-RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt --verbose
-
-# Also keep plugins.txt for reference and any additional runtime installations
-# Jenkins will still process /usr/share/jenkins/ref/plugins.txt on startup if needed
-
-# Copy DSL approval initialization script
-COPY init-scripts/setup-dsl-approval.groovy /usr/share/jenkins/ref/init.groovy.d/01-setup-dsl-approval.groovy
-
-# Create necessary directories
+# Create required directories with proper permissions
 RUN mkdir -p /var/jenkins_home/casc_configs \
-    && mkdir -p /var/jenkins_home/init.groovy.d \
-    && mkdir -p /var/jenkins_home/scripts
+             /var/jenkins_home/init.groovy.d \
+             /var/jenkins_home/scripts \
+             /var/jenkins_home/backup \
+             /tmp/plugin-cache \
+             /usr/share/jenkins/ref/plugins && \
+    chown -R jenkins:jenkins /var/jenkins_home /tmp/plugin-cache /usr/share/jenkins
 
-# Set permissions for jenkins user
-RUN chown -R jenkins:jenkins /var/jenkins_home
+#==============================================================================
+# Stage 2: Plugin caching and dependency resolution
+#==============================================================================
+FROM base as plugin-resolver
 
-# Switch back to jenkins user
+USER root
+
+# Copy plugin management scripts
+COPY scripts/plugin-resolver.sh /usr/local/bin/
+COPY scripts/plugin-cache-manager.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/plugin-resolver.sh /usr/local/bin/plugin-cache-manager.sh
+
+# Copy plugin configuration
+{% if jenkins_plugin_version_strategy == 'pinned' %}
+COPY plugins-pinned.txt /tmp/plugins-raw.txt
+{% else %}
+COPY plugins.txt /tmp/plugins-raw.txt
+{% endif %}
+
+# Resolve plugin dependencies and create optimized plugin list
+RUN --mount=type=cache,target=/tmp/plugin-cache,sharing=locked \
+    /usr/local/bin/plugin-resolver.sh \
+    --input /tmp/plugins-raw.txt \
+    --output /usr/share/jenkins/ref/plugins.txt \
+    --cache-dir /tmp/plugin-cache \
+    --resolve-dependencies {{ jenkins_resolve_plugin_dependencies | default('true') | string | lower }} \
+    --max-depth {{ jenkins_plugin_dependency_depth | default('3') }} \
+    --conflict-resolution {{ jenkins_plugin_conflict_resolution | default('latest') }} \
+    --parallel {{ jenkins_build_parallel_downloads | default('4') }} \
+    --retry-count {{ jenkins_network_retry_count | default('5') }} \
+    --retry-delay {{ jenkins_network_retry_delay | default('10') }} \
+    --verify-checksums {{ jenkins_plugin_verify_checksums | default('true') | string | lower }}
+
+#==============================================================================
+# Stage 3: Plugin installation with error handling and caching
+#==============================================================================
+FROM plugin-resolver as plugin-installer
+
 USER jenkins
 
-# Set Java options for HA deployment
+# Install plugins with enhanced error handling and retry logic
+RUN --mount=type=cache,target=/tmp/plugin-cache,sharing=locked,uid={{ jenkins_uid | default('1002') }},gid={{ jenkins_gid | default('1002') }} \
+    set -euo pipefail; \
+    \
+    # Function for robust plugin installation
+    install_plugins_with_retry() { \
+        local retry_count=0; \
+        local max_retries={{ jenkins_build_retry_count | default('3') }}; \
+        local retry_delay={{ jenkins_build_retry_delay | default('30') }}; \
+        \
+        while [ $retry_count -lt $max_retries ]; do \
+            echo "Plugin installation attempt $((retry_count + 1))/$max_retries"; \
+            \
+            if timeout {{ jenkins_build_timeout | default('1800') }} \
+               jenkins-plugin-cli \
+               --plugin-file /usr/share/jenkins/ref/plugins.txt \
+               --cache /tmp/plugin-cache \
+               --verbose \
+               --available-updates; then \
+                echo "Plugin installation successful"; \
+                return 0; \
+            else \
+                local exit_code=$?; \
+                echo "Plugin installation failed with exit code $exit_code"; \
+                retry_count=$((retry_count + 1)); \
+                \
+                if [ $retry_count -lt $max_retries ]; then \
+                    echo "Retrying in ${retry_delay} seconds..."; \
+                    sleep $retry_delay; \
+                    retry_delay=$((retry_delay * 2)); \
+                else \
+                    echo "Max retries exceeded. Installation failed."; \
+                    return $exit_code; \
+                fi; \
+            fi; \
+        done; \
+    }; \
+    \
+    # Perform plugin installation
+    install_plugins_with_retry
+
+# Verify critical plugins are installed
+RUN set -euo pipefail; \
+    critical_plugins=("configuration-as-code" "workflow-aggregator" "job-dsl" "matrix-auth"); \
+    for plugin in "${critical_plugins[@]}"; do \
+        if [ ! -d "/usr/share/jenkins/ref/plugins/$plugin" ]; then \
+            echo "ERROR: Critical plugin $plugin not found"; \
+            exit 1; \
+        fi; \
+        echo "✓ Critical plugin $plugin installed"; \
+    done
+
+#==============================================================================
+# Stage 4: Configuration and initialization
+#==============================================================================
+FROM plugin-installer as configurator
+
+# Copy initialization scripts with enhanced security
+COPY --chown=jenkins:jenkins init-scripts/ /usr/share/jenkins/ref/init.groovy.d/
+
+# Copy security and configuration files
+COPY --chown=jenkins:jenkins config/ /usr/share/jenkins/ref/casc_configs/
+
+# Set up advanced Java options for production
 ENV JAVA_OPTS="-Djenkins.install.runSetupWizard=false \
                -Djenkins.model.Jenkins.slaveAgentPort={{ jenkins_agent_port | default('50000') }} \
                -Djenkins.model.Jenkins.slaveAgentPortEnforce=true \
-               -Dhudson.DNSMultiCast.disabled=true"
+               -Dhudson.DNSMultiCast.disabled=true \
+               -Dhudson.model.DirectoryBrowserSupport.CSP='default-src self; script-src self unsafe-inline; style-src self unsafe-inline;' \
+               -Dhudson.model.ParametersAction.keepUndefinedParameters=false \
+               -Dhudson.model.WorkspaceCleanupThread.retainForDays=2 \
+               -Djenkins.model.Jenkins.crumbIssuerProxyCompatibility=false \
+               -Djenkins.security.ApiTokenProperty.adminCanGenerateNewTokens=false \
+               -Djenkins.CLI.disabled=true \
+               -XX:+UseG1GC \
+               -XX:+UseStringDeduplication \
+               -XX:MaxRAMPercentage=75.0 \
+               -XX:+HeapDumpOnOutOfMemoryError \
+               -XX:HeapDumpPath=/tmp/jenkins_heap_dump.hprof"
 
-# Set Jenkins options
+# Enhanced Jenkins options
 ENV JENKINS_OPTS="--httpPort={{ jenkins_port }} \
-                  --prefix={{ jenkins_context_path | default('') }}"
+                  --prefix={{ jenkins_context_path | default('') }} \
+                  --sessionTimeout=60 \
+                  --sessionEviction=3600"
+
+# Security environment variables
+ENV JENKINS_ENABLE_ACCESS_LOG=yes
+ENV JENKINS_HANDLER_MAX=100
+ENV JENKINS_HANDLER_IDLE=20
+
+#==============================================================================
+# Stage 5: Production image optimization
+#==============================================================================
+{% if jenkins_image_minimize | default(true) %}
+FROM configurator as production
+
+# Remove temporary files and optimize image size
+RUN --mount=type=cache,target=/tmp/plugin-cache,sharing=locked \
+    find /tmp -type f -name '*.tmp' -delete && \
+    find /usr/share/jenkins/ref/plugins -name '*.tmp' -delete && \
+    find /var/jenkins_home -type f -name '*.log' -delete && \
+    \
+    # Optimize plugin storage
+    find /usr/share/jenkins/ref/plugins -name '*.bak' -delete && \
+    find /usr/share/jenkins/ref/plugins -name 'META-INF' -type d -exec rm -rf {} + 2>/dev/null || true
+
+{% else %}
+FROM configurator as production
+{% endif %}
+
+# Final user setup
+USER jenkins
+WORKDIR /var/jenkins_home
 
 # Expose ports
-EXPOSE {{ jenkins_port }} {{ jenkins_agent_port | default('50000') }}
+EXPOSE {{ jenkins_port | default('8080') }} {{ jenkins_agent_port | default('50000') }}
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5m --retries=3 \
-    CMD curl -f http://localhost:{{ jenkins_port }}{{ jenkins_context_path | default('') }}/login || exit 1
+# Volume definitions
+VOLUME ["/var/jenkins_home"]
+
+# Enhanced health check with better error handling
+HEALTHCHECK --interval=30s --timeout=15s --start-period=5m --retries=3 \
+    CMD curl -fsSL --max-time 10 --retry 2 \
+        http://localhost:{{ jenkins_port | default('8080') }}{{ jenkins_context_path | default('') }}/login \
+        || exit 1
+
+# Add build information for debugging
+RUN echo "Build completed at: $(date)" > /tmp/build-info.txt && \
+    echo "Jenkins version: ${JENKINS_VERSION}" >> /tmp/build-info.txt && \
+    echo "Build number: ${BUILD_NUMBER}" >> /tmp/build-info.txt
+
+# Default command with enhanced logging
+CMD ["/sbin/tini", "--", "/usr/local/bin/jenkins.sh"]

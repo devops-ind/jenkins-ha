@@ -1,0 +1,247 @@
+---
+# Test Script for Robust Monitoring Role Target Generation
+# Tests the new multi-task approach vs the original single complex template
+
+- name: Test Enhanced Monitoring Role Target Generation
+  hosts: localhost
+  gather_facts: no
+  vars:
+    # Test configuration matching production setup
+    deployment_mode: "local"
+    
+    # Base Prometheus targets
+    prometheus_base_targets:
+      - job: "prometheus"
+        targets: ["localhost:9090"]
+      - job: "node-exporter"
+        targets: ["localhost:9100"]
+    
+    # Multi-team configuration (matching local inventory)
+    jenkins_teams:
+      - team_name: "devops"
+        blue_green_enabled: true
+        active_environment: "blue"
+        ports:
+          web: 8080
+          agent: 50000
+        resources:
+          memory: "2g"
+          cpu: "1.0"
+        labels:
+          tier: "production"
+          role: "default"
+      
+      - team_name: "ma" 
+        blue_green_enabled: true
+        active_environment: "green"  # Test green environment
+        ports:
+          web: 8081
+          agent: 50001
+        resources:
+          memory: "2g"
+          cpu: "1.0"
+        labels:
+          role: "marketing-analytics"
+      
+      - team_name: "ba"
+        blue_green_enabled: true
+        active_environment: "blue"
+        ports:
+          web: 8082
+          agent: 50002
+        resources:
+          memory: "2g" 
+          cpu: "1.0"
+        labels:
+          role: "business-analytics"
+      
+      - team_name: "tw"
+        blue_green_enabled: false  # Test non-blue-green team
+        active_environment: "blue"
+        ports:
+          web: 8083
+          agent: 50003
+        resources:
+          memory: "2g"
+          cpu: "1.0"
+        labels:
+          role: "test-qa"
+
+  tasks:
+    - name: Display test scenario
+      debug:
+        msg: |
+          ====================================================
+          Testing Enhanced Monitoring Role Implementation
+          ====================================================
+          Test Scenario: Multi-team Jenkins with mixed blue-green configurations
+          Teams: {{ jenkins_teams | length }}
+          Deployment Mode: {{ deployment_mode }}
+          
+          Team Configurations:
+          {% for team in jenkins_teams %}
+          • {{ team.team_name }}: {{ team.active_environment }} environment, port {{ team.ports.web }}, BG: {{ team.blue_green_enabled }}
+          {% endfor %}
+          ====================================================
+
+    # Include the enhanced monitoring tasks
+    - name: Test enhanced monitoring target generation
+      include_role:
+        name: monitoring
+        tasks_from: main
+        apply:
+          tags: ['monitoring', 'targets']
+      tags: ['test']
+
+    - name: Validate generated targets
+      assert:
+        that:
+          - prometheus_jenkins_targets is defined
+          - prometheus_jenkins_targets | length == 4  # Should generate 4 team targets
+          - prometheus_targets is defined
+          - prometheus_targets | length == 6  # 2 base + 4 jenkins = 6 total
+        fail_msg: |
+          Target generation validation failed!
+          Jenkins targets: {{ prometheus_jenkins_targets | length if prometheus_jenkins_targets is defined else 'undefined' }}
+          Total targets: {{ prometheus_targets | length if prometheus_targets is defined else 'undefined' }}
+        success_msg: "✅ All target generation validations passed!"
+
+    - name: Test specific team configurations
+      assert:
+        that:
+          # Test devops team (blue environment, port 8080)
+          - prometheus_jenkins_targets | selectattr('team_name', 'equalto', 'devops') | map(attribute='port') | first == 8080
+          - prometheus_jenkins_targets | selectattr('team_name', 'equalto', 'devops') | map(attribute='active_environment') | first == 'blue'
+          
+          # Test ma team (green environment, port 8081 + 100 = 8181)
+          - prometheus_jenkins_targets | selectattr('team_name', 'equalto', 'ma') | map(attribute='port') | first == 8181
+          - prometheus_jenkins_targets | selectattr('team_name', 'equalto', 'ma') | map(attribute='active_environment') | first == 'green'
+          
+          # Test ba team (blue environment, port 8082)
+          - prometheus_jenkins_targets | selectattr('team_name', 'equalto', 'ba') | map(attribute='port') | first == 8082
+          - prometheus_jenkins_targets | selectattr('team_name', 'equalto', 'ba') | map(attribute='active_environment') | first == 'blue'
+          
+          # Test tw team (no blue-green, port 8083)
+          - prometheus_jenkins_targets | selectattr('team_name', 'equalto', 'tw') | map(attribute='port') | first == 8083
+          - prometheus_jenkins_targets | selectattr('team_name', 'equalto', 'tw') | map(attribute='blue_green_enabled') | first == false
+        fail_msg: |
+          Team-specific configuration validation failed!
+          
+          Generated targets:
+          {% for target in prometheus_jenkins_targets %}
+          • {{ target.team_name }}: port {{ target.port }}, env {{ target.active_environment }}, BG {{ target.blue_green_enabled }}
+          {% endfor %}
+        success_msg: "✅ All team-specific validations passed!"
+
+    - name: Test production deployment mode
+      block:
+        - name: Set production mode variables
+          set_fact:
+            deployment_mode: "production"
+            prometheus_jenkins_targets: []  # Reset for production test
+            
+        - name: Mock production inventory
+          set_fact:
+            groups:
+              jenkins_masters: ["prod-jenkins-01", "prod-jenkins-02"]
+            hostvars:
+              prod-jenkins-01:
+                ansible_default_ipv4:
+                  address: "10.0.1.10"
+              prod-jenkins-02:
+                ansible_default_ipv4:
+                  address: "10.0.1.11"
+
+        - name: Test production target generation
+          include_role:
+            name: monitoring
+            tasks_from: main
+            apply:
+              tags: ['monitoring', 'targets']
+          tags: ['test']
+
+        - name: Validate production targets
+          assert:
+            that:
+              - prometheus_jenkins_targets | length == 4
+              # Each team should have 2 targets (2 hosts)
+              - prometheus_jenkins_targets | selectattr('team_name', 'equalto', 'devops') | map(attribute='targets') | first | length == 2
+              # Validate production IP addresses are used
+              - "'10.0.1.10:8080' in (prometheus_jenkins_targets | selectattr('team_name', 'equalto', 'devops') | map(attribute='targets') | first)"
+              - "'10.0.1.11:8080' in (prometheus_jenkins_targets | selectattr('team_name', 'equalto', 'devops') | map(attribute='targets') | first)"
+            fail_msg: "Production mode validation failed!"
+            success_msg: "✅ Production mode validation passed!"
+
+    - name: Test edge cases and error conditions
+      block:
+        - name: Test empty jenkins_teams
+          block:
+            - name: Set empty teams
+              set_fact:
+                jenkins_teams: []
+                prometheus_jenkins_targets: []  # Reset
+                
+            - name: Test default target generation
+              include_role:
+                name: monitoring
+                tasks_from: main
+                apply:
+                  tags: ['monitoring', 'targets']
+              tags: ['test']
+              
+            - name: Validate default target
+              assert:
+                that:
+                  - prometheus_jenkins_targets | length == 1
+                  - prometheus_jenkins_targets[0].job == "jenkins-default"
+                  - prometheus_jenkins_targets[0].team_name == "default"
+                fail_msg: "Default target generation failed!"
+                success_msg: "✅ Default target generation passed!"
+
+        - name: Test undefined jenkins_teams
+          block:
+            - name: Unset jenkins_teams
+              set_fact:
+                jenkins_teams: null
+                prometheus_jenkins_targets: []  # Reset
+                
+            - name: Test undefined teams handling
+              include_role:
+                name: monitoring
+                tasks_from: main
+                apply:
+                  tags: ['monitoring', 'targets']
+              tags: ['test']
+              
+            - name: Validate undefined teams handling
+              assert:
+                that:
+                  - prometheus_jenkins_targets | length == 1
+                  - prometheus_jenkins_targets[0].team_name == "default"
+                fail_msg: "Undefined teams handling failed!"
+                success_msg: "✅ Undefined teams handling passed!"
+
+    - name: Display comprehensive test results
+      debug:
+        msg: |
+          ====================================================
+          🎉 Enhanced Monitoring Role Test Results
+          ====================================================
+          ✅ All validations passed successfully!
+          
+          🔧 Improvements Implemented:
+          • Split 40-line complex Jinja2 template into 6 safe tasks
+          • Applied type safety with | int filter before arithmetic
+          • Implemented defensive programming patterns
+          • Added comprehensive error handling and validation
+          • Used successful patterns from haproxy.cfg.j2
+          
+          📊 Test Coverage:
+          • Multi-team configurations ✅
+          • Blue-green port calculations ✅  
+          • Local and production deployment modes ✅
+          • Edge cases (empty/undefined teams) ✅
+          • Type casting and arithmetic safety ✅
+          
+          🚀 Ready for Production Deployment!
+          ====================================================

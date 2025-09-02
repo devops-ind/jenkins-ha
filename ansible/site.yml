@@ -167,17 +167,17 @@
       tags: ['security', 'bootstrap']
 
 
-- name: Build and Manage Jenkins Images
-  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'jenkins_masters[0]') }}"  # Build on primary master only
-  become: yes
-  gather_facts: yes
-  vars:
-    jenkins_images_build: true
-    jenkins_images_push: true
-  roles:
-    - role: jenkins-images
-      tags: ['images', 'build']
-      when: build_jenkins_images | default(false) | bool
+# - name: Build and Manage Jenkins Images
+#   hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'jenkins_masters[0]') }}"  # Build on primary master only
+#   become: yes
+#   gather_facts: yes
+#   vars:
+#     jenkins_images_build: false
+#     jenkins_images_push: false
+#   roles:
+#     - role: jenkins-images
+#       tags: ['images', 'build']
+#       when: build_jenkins_images | default(false) | bool
 
 - name: Deploy Jenkins Infrastructure
   hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'jenkins_masters') }}"

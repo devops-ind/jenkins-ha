@@ -7,7 +7,7 @@
   become: yes
   gather_facts: yes
   vars:
-    jenkins_domain: "{{ jenkins_domain | default('192.168.86.30') }}"
+    jenkins_domain: "{{ jenkins_domain | default('192.168.188.142') }}"
     ssl_enabled: true
     haproxy_user: haproxy
     troubleshoot_mode: "{{ troubleshoot_mode | default('diagnose') }}"  # diagnose, fix, recover

@@ -1,0 +1,542 @@
+---
+# Jenkins BuildKit Troubleshooting and Maintenance Playbook
+# Comprehensive diagnostics, repair, and maintenance for BuildKit image building
+#
+# Usage:
+#   # Full diagnostic scan
+#   ansible-playbook -i ansible/inventories/production/hosts.yml troubleshoot-buildkit.yml
+#
+#   # Fix common issues automatically
+#   ansible-playbook -i ansible/inventories/production/hosts.yml troubleshoot-buildkit.yml -e troubleshoot_mode=fix
+#
+#   # Clean up and reset BuildKit environment
+#   ansible-playbook -i ansible/inventories/production/hosts.yml troubleshoot-buildkit.yml -e troubleshoot_mode=reset
+#
+#   # Performance optimization
+#   ansible-playbook -i ansible/inventories/production/hosts.yml troubleshoot-buildkit.yml -e troubleshoot_mode=optimize
+
+- name: Jenkins BuildKit Troubleshooting and Maintenance
+  hosts: jenkins_masters
+  gather_facts: yes
+  become: yes
+
+  vars:
+    troubleshoot_mode: "{{ troubleshoot_mode | default('diagnose') }}"  # diagnose, fix, reset, optimize
+    buildkit_builder_name: "{{ jenkins_build_builder_name | default('jenkins-builder') }}"
+    max_cache_size: "{{ jenkins_buildkit_max_cache_size | default('10GB') }}"
+    cleanup_threshold: "{{ jenkins_buildkit_cleanup_threshold | default('80') }}"  # percentage
+
+  pre_tasks:
+    - name: Display troubleshooting mode
+      debug:
+        msg: |
+          🔧 Jenkins BuildKit Troubleshooting Mode: {{ troubleshoot_mode.upper() }}
+          
+          Available modes:
+          📊 diagnose - Comprehensive system diagnostics
+          🔨 fix - Automatic repair of common issues  
+          🔄 reset - Clean rebuild of BuildKit environment
+          ⚡ optimize - Performance tuning and cleanup
+
+  tasks:
+    - name: Comprehensive BuildKit diagnostics
+      block:
+        - name: Check Docker daemon status
+          shell: |
+            set -e
+            echo "=== Docker Daemon Status ==="
+            systemctl is-active docker || echo "Docker service not active"
+            echo ""
+            
+            echo "=== Docker Version ==="
+            docker version --format 'Client: {{.Client.Version}}, Server: {{.Server.Version}}' 2>/dev/null || echo "Docker not responding"
+            echo ""
+            
+            echo "=== Docker BuildKit Status ==="
+            docker info | grep -E "BuildKit|buildx" || echo "BuildKit info not available"
+            echo ""
+            
+            echo "=== BuildKit Version ==="
+            docker buildx version 2>/dev/null || echo "buildx not available"
+            echo ""
+            
+            echo "=== Current Builders ==="
+            docker buildx ls 2>/dev/null || echo "No builders available"
+          register: docker_diagnostics
+          failed_when: false
+          changed_when: false
+
+        - name: Check BuildKit builder status
+          shell: |
+            set -e
+            BUILDER_NAME="{{ buildkit_builder_name }}"
+            
+            echo "=== Builder Status: ${BUILDER_NAME} ==="
+            
+            if docker buildx inspect "${BUILDER_NAME}" >/dev/null 2>&1; then
+              echo "✅ Builder '${BUILDER_NAME}' exists"
+              
+              # Get detailed builder info
+              echo ""
+              echo "Builder Details:"
+              docker buildx inspect "${BUILDER_NAME}" --format '{{range .Nodes}}Name: {{.Name}}, Status: {{.Status}}, Platform: {{.Platforms}}{{end}}' || echo "Failed to get builder details"
+              
+              # Check builder disk usage
+              echo ""
+              echo "Builder Cache Usage:"
+              docker buildx du --builder "${BUILDER_NAME}" 2>/dev/null | head -20 || echo "Cache usage info not available"
+              
+            else
+              echo "❌ Builder '${BUILDER_NAME}' not found"
+            fi
+          register: builder_diagnostics
+          failed_when: false
+          changed_when: false
+
+        - name: Check Docker disk usage
+          shell: |
+            set -e
+            echo "=== Docker System Disk Usage ==="
+            docker system df --format "table {{.Type}}\t{{.Total}}\t{{.Active}}\t{{.Size}}\t{{.Reclaimable}}" || echo "Docker system df failed"
+            echo ""
+            
+            echo "=== Image Analysis ==="
+            echo "Jenkins Images:"
+            docker images --filter "reference=jenkins/*" --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}" | head -10 || echo "No Jenkins images found"
+            echo ""
+            
+            echo "Dangling Images:"
+            DANGLING_COUNT=$(docker images -f "dangling=true" -q | wc -l)
+            echo "Count: ${DANGLING_COUNT}"
+            if [ "${DANGLING_COUNT}" -gt 0 ]; then
+              docker images -f "dangling=true" --format "table {{.ID}}\t{{.Size}}\t{{.CreatedAt}}" | head -10
+            fi
+          register: disk_usage_diagnostics
+          failed_when: false
+          changed_when: false
+
+        - name: Check system resources
+          shell: |
+            set -e
+            echo "=== System Resources ==="
+            echo "CPU Usage:"
+            top -bn1 | grep "Cpu(s)" | awk '{print $2 $3}' || echo "CPU info not available"
+            echo ""
+            
+            echo "Memory Usage:"
+            free -h | grep -E "Mem:|Swap:" || echo "Memory info not available"
+            echo ""
+            
+            echo "Disk Usage (Docker root):"
+            DOCKER_ROOT=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "/var/lib/docker")
+            df -h "${DOCKER_ROOT}" 2>/dev/null | tail -1 || echo "Docker root disk usage not available"
+            echo ""
+            
+            echo "File Descriptors:"
+            echo "Current: $(lsof | wc -l 2>/dev/null || echo "unknown")"
+            echo "Limit: $(ulimit -n)"
+          register: system_resources
+          failed_when: false
+          changed_when: false
+
+        - name: Display comprehensive diagnostics report
+          debug:
+            msg: |
+              🔍 Jenkins BuildKit Comprehensive Diagnostics Report
+              =====================================================
+              
+              🐳 Docker Status:
+              {{ docker_diagnostics.stdout | indent(2, true) }}
+              
+              🏗️ Builder Status:
+              {{ builder_diagnostics.stdout | indent(2, true) }}
+              
+              💾 Disk Usage:
+              {{ disk_usage_diagnostics.stdout | indent(2, true) }}
+              
+              🖥️ System Resources:
+              {{ system_resources.stdout | indent(2, true) }}
+
+    - name: Automatic issue resolution
+      block:
+        - name: Fix Docker daemon issues
+          block:
+            - name: Restart Docker daemon if needed
+              systemd:
+                name: docker
+                state: restarted
+                daemon_reload: yes
+              when: docker_diagnostics.stdout is not search("Client.*Server")
+
+            - name: Enable Docker BuildKit permanently
+              lineinfile:
+                path: /etc/docker/daemon.json
+                create: yes
+                line: '{"features": {"buildkit": true}}'
+                regexp: '^.*buildkit.*$'
+              register: docker_config_updated
+              notify: restart docker
+
+            - name: Restart Docker if configuration changed
+              systemd:
+                name: docker
+                state: restarted
+              when: docker_config_updated.changed
+
+        - name: Rebuild BuildKit builder
+          shell: |
+            set -e
+            BUILDER_NAME="{{ buildkit_builder_name }}"
+            
+            echo "🔄 Rebuilding BuildKit builder: ${BUILDER_NAME}"
+            
+            # Remove existing builder if it exists
+            if docker buildx inspect "${BUILDER_NAME}" >/dev/null 2>&1; then
+              echo "Removing existing builder..."
+              docker buildx rm "${BUILDER_NAME}" --force
+            fi
+            
+            # Create new builder
+            echo "Creating new builder..."
+            docker buildx create \
+              --name "${BUILDER_NAME}" \
+              --driver docker-container \
+              --bootstrap \
+              --use
+            
+            # Verify builder is working
+            echo "Verifying builder..."
+            docker buildx inspect "${BUILDER_NAME}" --bootstrap
+            
+            echo "✅ Builder rebuilt successfully"
+          register: builder_rebuild
+          when: builder_diagnostics.stdout is not search("✅ Builder")
+
+        - name: Clean up Docker resources
+          shell: |
+            set -e
+            echo "🧹 Performing comprehensive Docker cleanup..."
+            
+            # Remove dangling images
+            DANGLING_COUNT=$(docker images -f "dangling=true" -q | wc -l)
+            if [ "${DANGLING_COUNT}" -gt 0 ]; then
+              echo "Removing ${DANGLING_COUNT} dangling images..."
+              docker images -f "dangling=true" -q | xargs docker rmi -f
+            fi
+            
+            # Clean up build cache if too large
+            BUILDER_NAME="{{ buildkit_builder_name }}"
+            if docker buildx inspect "${BUILDER_NAME}" >/dev/null 2>&1; then
+              echo "Cleaning up build cache..."
+              docker buildx prune --builder "${BUILDER_NAME}" --filter "until=72h" --force
+              
+              # Aggressive cleanup if cache is still too large
+              CACHE_SIZE=$(docker buildx du --builder "${BUILDER_NAME}" 2>/dev/null | head -1 | awk '{print $2}' | sed 's/[^0-9.]//g' || echo "0")
+              MAX_SIZE_NUM=$(echo "{{ max_cache_size }}" | sed 's/[^0-9.]//g')
+              
+              if (( $(echo "${CACHE_SIZE} > ${MAX_SIZE_NUM}" | bc -l 2>/dev/null || echo "0") )); then
+                echo "Cache size (${CACHE_SIZE}GB) exceeds limit ({{ max_cache_size }}), performing aggressive cleanup..."
+                docker buildx prune --builder "${BUILDER_NAME}" --all --force
+              fi
+            fi
+            
+            # System-wide cleanup
+            echo "Performing system-wide Docker cleanup..."
+            docker system prune -f --volumes
+            
+            echo "✅ Cleanup completed"
+          register: cleanup_result
+          changed_when: cleanup_result.stdout is search("Removing")
+
+      when: troubleshoot_mode in ['fix', 'reset']
+
+    - name: Reset BuildKit environment
+      block:
+        - name: Complete BuildKit environment reset
+          shell: |
+            set -e
+            echo "🔄 Performing complete BuildKit environment reset..."
+            
+            # Stop and remove all containers using BuildKit builders
+            echo "Stopping BuildKit containers..."
+            docker ps -a --filter "label=org.mobyproject.buildkit.worker.executor" -q | xargs -r docker stop
+            docker ps -a --filter "label=org.mobyproject.buildkit.worker.executor" -q | xargs -r docker rm -f
+            
+            # Remove all buildx builders
+            echo "Removing all buildx builders..."
+            docker buildx ls --format "{{.Name}}" | grep -v "^default" | xargs -r -I {} docker buildx rm {} --force
+            
+            # Clean up build cache and temporary files
+            echo "Cleaning up build artifacts..."
+            docker buildx prune --all --force
+            docker system prune -a -f --volumes
+            
+            # Remove Docker buildx state
+            echo "Cleaning buildx state..."
+            rm -rf ~/.docker/buildx 2>/dev/null || true
+            
+            # Recreate default setup
+            echo "Recreating BuildKit environment..."
+            docker buildx create \
+              --name "{{ buildkit_builder_name }}" \
+              --driver docker-container \
+              --bootstrap \
+              --use
+            
+            # Verify the reset was successful
+            echo "Verifying reset..."
+            docker buildx inspect "{{ buildkit_builder_name }}" --bootstrap
+            
+            echo "✅ BuildKit environment reset completed"
+          register: reset_result
+
+        - name: Verify reset success
+          shell: |
+            set -e
+            echo "🔍 Verifying BuildKit reset..."
+            
+            # Test basic functionality
+            docker buildx inspect "{{ buildkit_builder_name }}" >/dev/null
+            
+            # Test build capability with a simple Dockerfile
+            cat > /tmp/test-dockerfile << 'EOF'
+            FROM alpine:latest
+            RUN echo "BuildKit test successful" > /test.txt
+            EOF
+            
+            echo "Testing build functionality..."
+            docker buildx build \
+              --builder "{{ buildkit_builder_name }}" \
+              --file /tmp/test-dockerfile \
+              --tag "buildkit-test:reset-$(date +%s)" \
+              --load \
+              /tmp
+            
+            # Cleanup test files
+            rm -f /tmp/test-dockerfile
+            docker rmi "buildkit-test:reset-$(date +%s)" >/dev/null 2>&1 || true
+            
+            echo "✅ BuildKit reset verification successful"
+          register: reset_verification
+
+      when: troubleshoot_mode == 'reset'
+
+    - name: Performance optimization
+      block:
+        - name: Optimize BuildKit performance
+          shell: |
+            set -e
+            echo "⚡ Optimizing BuildKit performance..."
+            
+            BUILDER_NAME="{{ buildkit_builder_name }}"
+            
+            # Configure builder for optimal performance
+            if docker buildx inspect "${BUILDER_NAME}" >/dev/null 2>&1; then
+              # Get current builder config
+              echo "Current builder configuration:"
+              docker buildx inspect "${BUILDER_NAME}" --format '{{json .}}' | jq -r '.nodes[] | "Name: " + .name + ", Status: " + .status'
+              
+              # Remove and recreate with optimized settings
+              docker buildx rm "${BUILDER_NAME}" --force
+            fi
+            
+            # Create optimized builder
+            echo "Creating performance-optimized builder..."
+            docker buildx create \
+              --name "${BUILDER_NAME}" \
+              --driver docker-container \
+              --driver-opt network=host \
+              --driver-opt image=moby/buildkit:buildx-stable-1 \
+              --buildkitd-flags '--allow-insecure-entitlement security.insecure' \
+              --bootstrap \
+              --use
+            
+            # Configure builder limits and optimization
+            echo "Configuring performance settings..."
+            
+            # Pre-warm builder
+            docker buildx inspect "${BUILDER_NAME}" --bootstrap
+            
+            echo "✅ Performance optimization completed"
+          register: optimization_result
+
+        - name: Implement caching strategy
+          shell: |
+            set -e
+            echo "📦 Implementing advanced caching strategy..."
+            
+            # Create cache management script
+            cat > /usr/local/bin/jenkins-buildkit-cache-manager.sh << 'EOF'
+            #!/bin/bash
+            # Jenkins BuildKit Cache Management Script
+            
+            BUILDER_NAME="{{ buildkit_builder_name }}"
+            MAX_CACHE_SIZE="{{ max_cache_size }}"
+            CLEANUP_THRESHOLD="{{ cleanup_threshold }}"
+            
+            # Function to get cache size in GB
+            get_cache_size() {
+              docker buildx du --builder "${BUILDER_NAME}" 2>/dev/null | head -1 | awk '{print $2}' | sed 's/[^0-9.]//g' || echo "0"
+            }
+            
+            # Function to cleanup old cache
+            cleanup_cache() {
+              local cleanup_type="$1"
+              echo "Cleaning up BuildKit cache (${cleanup_type})..."
+              
+              case "${cleanup_type}" in
+                "moderate")
+                  docker buildx prune --builder "${BUILDER_NAME}" --filter "until=168h" --force
+                  ;;
+                "aggressive")
+                  docker buildx prune --builder "${BUILDER_NAME}" --filter "until=72h" --force
+                  ;;
+                "full")
+                  docker buildx prune --builder "${BUILDER_NAME}" --all --force
+                  ;;
+              esac
+            }
+            
+            # Main cache management logic
+            CURRENT_SIZE=$(get_cache_size)
+            MAX_SIZE_NUM=$(echo "${MAX_CACHE_SIZE}" | sed 's/[^0-9.]//g')
+            
+            echo "Current cache size: ${CURRENT_SIZE}GB (limit: ${MAX_CACHE_SIZE})"
+            
+            if (( $(echo "${CURRENT_SIZE} > ${MAX_SIZE_NUM}" | bc -l 2>/dev/null || echo "0") )); then
+              echo "Cache size exceeds limit, starting cleanup..."
+              
+              # Try moderate cleanup first
+              cleanup_cache "moderate"
+              
+              CURRENT_SIZE=$(get_cache_size)
+              if (( $(echo "${CURRENT_SIZE} > ${MAX_SIZE_NUM}" | bc -l 2>/dev/null || echo "0") )); then
+                echo "Moderate cleanup insufficient, trying aggressive cleanup..."
+                cleanup_cache "aggressive"
+                
+                CURRENT_SIZE=$(get_cache_size)
+                if (( $(echo "${CURRENT_SIZE} > ${MAX_SIZE_NUM}" | bc -l 2>/dev/null || echo "0") )); then
+                  echo "Aggressive cleanup insufficient, performing full cleanup..."
+                  cleanup_cache "full"
+                fi
+              fi
+              
+              echo "Final cache size: $(get_cache_size)GB"
+            else
+              echo "Cache size within limits, no cleanup needed"
+            fi
+            EOF
+            
+            chmod +x /usr/local/bin/jenkins-buildkit-cache-manager.sh
+            
+            # Run initial cache optimization
+            /usr/local/bin/jenkins-buildkit-cache-manager.sh
+            
+            echo "✅ Caching strategy implemented"
+          register: caching_strategy
+
+      when: troubleshoot_mode == 'optimize'
+
+  handlers:
+    - name: restart docker
+      systemd:
+        name: docker
+        state: restarted
+        daemon_reload: yes
+
+  post_tasks:
+    - name: Generate troubleshooting report
+      set_fact:
+        troubleshoot_report:
+          timestamp: "{{ ansible_date_time.iso8601 }}"
+          mode: "{{ troubleshoot_mode }}"
+          host: "{{ inventory_hostname }}"
+          actions_performed:
+            diagnostics_run: true
+            docker_restarted: "{{ docker_config_updated.changed | default(false) }}"
+            builder_rebuilt: "{{ builder_rebuild.changed | default(false) }}"
+            cleanup_performed: "{{ cleanup_result.changed | default(false) }}"
+            reset_completed: "{{ reset_result.changed | default(false) }}"
+            optimization_applied: "{{ optimization_result.changed | default(false) }}"
+          final_status:
+            docker_running: "{{ docker_diagnostics.stdout is search('Server Version') }}"
+            builder_available: "{{ builder_diagnostics.stdout is search('✅ Builder') or builder_rebuild.changed | default(false) }}"
+            cleanup_needed: "{{ disk_usage_diagnostics.stdout is search('dangling=true') }}"
+
+    - name: Display final troubleshooting summary
+      debug:
+        msg: |
+          🔧 Jenkins BuildKit Troubleshooting Summary
+          ==========================================
+          
+          ⏰ Completed: {{ troubleshoot_report.timestamp }}
+          🎯 Mode: {{ troubleshoot_report.mode.upper() }}
+          🖥️ Host: {{ troubleshoot_report.host }}
+          
+          📋 Actions Performed:
+          ├─ Diagnostics: {{ '✅' if troubleshoot_report.actions_performed.diagnostics_run else '❌' }}
+          ├─ Docker Restart: {{ '✅' if troubleshoot_report.actions_performed.docker_restarted else '⏭️' }}
+          ├─ Builder Rebuild: {{ '✅' if troubleshoot_report.actions_performed.builder_rebuilt else '⏭️' }}
+          ├─ Cleanup: {{ '✅' if troubleshoot_report.actions_performed.cleanup_performed else '⏭️' }}
+          ├─ Reset: {{ '✅' if troubleshoot_report.actions_performed.reset_completed else '⏭️' }}
+          └─ Optimization: {{ '✅' if troubleshoot_report.actions_performed.optimization_applied else '⏭️' }}
+          
+          🎯 Final Status:
+          ├─ Docker Running: {{ '✅' if troubleshoot_report.final_status.docker_running else '❌' }}
+          ├─ Builder Available: {{ '✅' if troubleshoot_report.final_status.builder_available else '❌' }}
+          └─ System Clean: {{ '✅' if not troubleshoot_report.final_status.cleanup_needed else '⚠️' }}
+          
+          {{ '🎉 All systems operational!' if (troubleshoot_report.final_status.docker_running and troubleshoot_report.final_status.builder_available) else '⚠️ Manual intervention may be required' }}
+
+    - name: Save troubleshooting report
+      copy:
+        content: "{{ troubleshoot_report | to_nice_yaml }}"
+        dest: "/tmp/jenkins-buildkit-troubleshoot-{{ ansible_date_time.epoch }}.yml"
+        mode: '0644'
+
+    - name: Provide next steps guidance
+      debug:
+        msg: |
+          🔮 Next Steps Guidance
+          =====================
+          
+          {% if troubleshoot_mode == 'diagnose' %}
+          📊 Diagnostics completed. Based on results:
+          
+          🔨 To fix issues automatically:
+          ansible-playbook troubleshoot-buildkit.yml -e troubleshoot_mode=fix
+          
+          🔄 To reset BuildKit environment:
+          ansible-playbook troubleshoot-buildkit.yml -e troubleshoot_mode=reset
+          
+          ⚡ To optimize performance:
+          ansible-playbook troubleshoot-buildkit.yml -e troubleshoot_mode=optimize
+          
+          {% elif troubleshoot_mode == 'fix' %}
+          🔧 Issues fixed. Test the build system:
+          ansible-playbook test-buildkit-images.yml -e images_to_build=master
+          
+          {% elif troubleshoot_mode == 'reset' %}
+          🔄 Environment reset completed. Verify functionality:
+          ansible-playbook test-buildkit-images.yml -e jenkins_build_validate_images=true
+          
+          {% elif troubleshoot_mode == 'optimize' %}
+          ⚡ Optimization completed. Monitor performance:
+          - Set up regular cache cleanup: cron job for /usr/local/bin/jenkins-buildkit-cache-manager.sh
+          - Monitor build times and cache hit rates
+          - Consider scaling BuildKit workers for high load
+          
+          {% endif %}
+          
+          📚 Additional Resources:
+          - Build logs: /var/log/jenkins/builds/
+          - Docker logs: journalctl -u docker
+          - BuildKit logs: docker logs <buildkit-container>
+          
+          🆘 For persistent issues:
+          1. Check system resources (CPU, memory, disk)
+          2. Verify network connectivity for image pulls
+          3. Review Docker daemon configuration
+          4. Consider BuildKit version compatibility
+          
+          Report location: /tmp/jenkins-buildkit-troubleshoot-{{ ansible_date_time.epoch }}.yml

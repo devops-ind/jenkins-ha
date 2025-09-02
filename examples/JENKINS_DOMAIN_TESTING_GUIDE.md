@@ -29,12 +29,12 @@ Each Jenkins team has dual ports for zero-downtime deployment:
 For production environments, configure DNS A records:
 
 ```dns
-jenkins.example.com          A    192.168.86.30
-*.jenkins.example.com        A    192.168.86.30
-devops.jenkins.example.com   A    192.168.86.30
-developer.jenkins.example.com A   192.168.86.30
-prometheus.jenkins.example.com A  192.168.86.30
-grafana.jenkins.example.com A    192.168.86.30
+jenkins.example.com          A    192.168.188.142
+*.jenkins.example.com        A    192.168.188.142
+devops.jenkins.example.com   A    192.168.188.142
+developer.jenkins.example.com A   192.168.188.142
+prometheus.jenkins.example.com A  192.168.188.142
+grafana.jenkins.example.com A    192.168.188.142
 ```
 
 ### Local Testing with /etc/hosts
@@ -42,18 +42,18 @@ For testing without DNS, add to `/etc/hosts`:
 
 ```bash
 # Jenkins HA Teams
-192.168.86.30 jenkins.example.com
-192.168.86.30 devops.jenkins.example.com
-192.168.86.30 developer.jenkins.example.com
-192.168.86.30 jenkins.jenkins.example.com
+192.168.188.142 jenkins.example.com
+192.168.188.142 devops.jenkins.example.com
+192.168.188.142 developer.jenkins.example.com
+192.168.188.142 jenkins.jenkins.example.com
 
 # Monitoring Stack
-192.168.86.30 prometheus.jenkins.example.com
-192.168.86.30 grafana.jenkins.example.com  
-192.168.86.30 node-exporter.jenkins.example.com
+192.168.188.142 prometheus.jenkins.example.com
+192.168.188.142 grafana.jenkins.example.com  
+192.168.188.142 node-exporter.jenkins.example.com
 
 # HAProxy Stats
-192.168.86.30 haproxy-stats.jenkins.example.com
+192.168.188.142 haproxy-stats.jenkins.example.com
 ```
 
 ## 🚀 Deployment and Testing
@@ -75,7 +75,7 @@ ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml --
 docker exec jenkins-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
 
 # View HAProxy stats
-curl -u admin:admin123 http://192.168.86.30:8404/stats
+curl -u admin:admin123 http://192.168.188.142:8404/stats
 
 # Test configuration generation
 ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml --tags configuration --check
@@ -87,15 +87,15 @@ ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml --
 
 ```bash
 # Test DevOps team (Blue environment - port 8080)
-curl -H "Host: devops.jenkins.example.com" http://192.168.86.30:8000/login
+curl -H "Host: devops.jenkins.example.com" http://192.168.188.142:8000/login
 # Expected: Jenkins login page
 
 # Test Developer team (Blue environment - port 8081)  
-curl -H "Host: developer.jenkins.example.com" http://192.168.86.30:8000/login
+curl -H "Host: developer.jenkins.example.com" http://192.168.188.142:8000/login
 # Expected: Jenkins login page
 
 # Test Jenkins admin team (Blue environment - port 8082)
-curl -H "Host: jenkins.jenkins.example.com" http://192.168.86.30:8000/login
+curl -H "Host: jenkins.jenkins.example.com" http://192.168.188.142:8000/login
 # Expected: Jenkins login page
 ```
 
@@ -103,15 +103,15 @@ curl -H "Host: jenkins.jenkins.example.com" http://192.168.86.30:8000/login
 
 ```bash
 # Test Prometheus access
-curl -H "Host: prometheus.jenkins.example.com" http://192.168.86.30:9090/graph
+curl -H "Host: prometheus.jenkins.example.com" http://192.168.188.142:9090/graph
 # Expected: Prometheus web interface
 
 # Test Grafana access  
-curl -H "Host: grafana.jenkins.example.com" http://192.168.86.30:9300/login
+curl -H "Host: grafana.jenkins.example.com" http://192.168.188.142:9300/login
 # Expected: Grafana login page
 
 # Test Node Exporter metrics
-curl -H "Host: node-exporter.jenkins.example.com" http://192.168.86.30:9100/metrics
+curl -H "Host: node-exporter.jenkins.example.com" http://192.168.188.142:9100/metrics
 # Expected: Prometheus metrics
 ```
 
@@ -138,7 +138,7 @@ ansible-playbook -i ansible/inventories/production/hosts.yml \
   -e '{"jenkins_teams": [{"team_name": "devops", "active_environment": "green", "ports": {"web": 8080}}]}'
 
 # Verify routing to green port (8180)
-curl -v -H "Host: devops.jenkins.example.com" http://192.168.86.30:8000/login
+curl -v -H "Host: devops.jenkins.example.com" http://192.168.188.142:8000/login
 # Should show routing to port 8180
 ```
 
@@ -148,7 +148,7 @@ curl -v -H "Host: devops.jenkins.example.com" http://192.168.86.30:8000/login
 for team in devops developer jenkins; do
   echo "Testing $team team health..."
   curl -f -H "Host: $team.jenkins.example.com" \
-    http://192.168.86.30:8000/api/json?pretty=true
+    http://192.168.188.142:8000/api/json?pretty=true
 done
 ```
 
@@ -158,7 +158,7 @@ done
 Access comprehensive routing statistics:
 ```bash
 # Web interface
-http://192.168.86.30:8404/stats
+http://192.168.188.142:8404/stats
 
 # Command line stats
 echo "show stat" | socat stdio /run/haproxy/admin.sock
@@ -181,9 +181,9 @@ docker logs jenkins-jenkins-blue --tail 50
 netstat -tlnp | grep -E ':8080|:8081|:8082|:8180|:8181|:8182|:9090|:9300|:9100'
 
 # Test direct port access (bypassing domain routing)
-curl http://192.168.86.30:8080/login  # DevOps blue
-curl http://192.168.86.30:8081/login  # Developer blue  
-curl http://192.168.86.30:8082/login  # Jenkins blue
+curl http://192.168.188.142:8080/login  # DevOps blue
+curl http://192.168.188.142:8081/login  # Developer blue  
+curl http://192.168.188.142:8082/login  # Jenkins blue
 ```
 
 ## 🔧 Common Issues and Solutions
@@ -198,10 +198,10 @@ curl http://192.168.86.30:8082/login  # Jenkins blue
 **Solution:**
 ```bash
 # For testing, use HTTP instead of HTTPS
-curl -H "Host: devops.jenkins.example.com" http://192.168.86.30:8000/login
+curl -H "Host: devops.jenkins.example.com" http://192.168.188.142:8000/login
 
 # Or ignore SSL for testing
-curl -k -H "Host: devops.jenkins.example.com" https://192.168.86.30:8000/login
+curl -k -H "Host: devops.jenkins.example.com" https://192.168.188.142:8000/login
 ```
 
 ### Issue: Backend services unavailable (502/503 errors)
@@ -229,9 +229,9 @@ docker restart jenkins-devops-blue
 ```bash
 # Test concurrent requests to different teams
 for i in {1..10}; do
-  curl -H "Host: devops.jenkins.example.com" http://192.168.86.30:8000/login &
-  curl -H "Host: developer.jenkins.example.com" http://192.168.86.30:8000/login &
-  curl -H "Host: jenkins.jenkins.example.com" http://192.168.86.30:8000/login &
+  curl -H "Host: devops.jenkins.example.com" http://192.168.188.142:8000/login &
+  curl -H "Host: developer.jenkins.example.com" http://192.168.188.142:8000/login &
+  curl -H "Host: jenkins.jenkins.example.com" http://192.168.188.142:8000/login &
 done
 wait
 ```
@@ -261,7 +261,7 @@ curl -v https://jenkins.jenkins.example.com/login
 ### Security Headers Validation
 ```bash
 # Check security headers are applied
-curl -I -H "Host: devops.jenkins.example.com" http://192.168.86.30:8000/login | grep -E "X-Content-Type|X-Frame|X-XSS"
+curl -I -H "Host: devops.jenkins.example.com" http://192.168.188.142:8000/login | grep -E "X-Content-Type|X-Frame|X-XSS"
 ```
 
 ---

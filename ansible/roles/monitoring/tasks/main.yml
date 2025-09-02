@@ -2,57 +2,143 @@
 # Monitoring Role - Prometheus, Grafana, and Exporters
 # Complete monitoring stack for Jenkins infrastructure
 
-- name: Generate team-aware Jenkins Prometheus targets
+# ==============================================================================
+# ROBUST PROMETHEUS TARGET GENERATION - Split Complex Template into Safe Tasks
+# ==============================================================================
+# Applying successful patterns from haproxy.cfg.j2 and jenkins-master-v2 roles:
+# 1. Pre-assignment with {% set team_ports = team.ports | default({'web': 8080}) %}
+# 2. Type safety with | int filter before arithmetic
+# 3. String concatenation with | string filter
+# 4. Defensive programming with multiple validation layers
+# 5. Split complex logic into multiple safer set_fact tasks
+
+- name: Initialize Prometheus target configuration
   set_fact:
-    prometheus_jenkins_targets: >-
-      {%- set jenkins_targets = [] -%}
+    prometheus_jenkins_targets: []
+    prometheus_deployment_mode: "{{ deployment_mode | default('local') }}"
+    prometheus_jenkins_hosts: "{{ groups['jenkins_masters'] | default(['localhost']) }}"
+  tags: ['monitoring', 'targets']
+
+- name: Validate team configuration for monitoring
+  set_fact:
+    prometheus_teams_validated: >
       {%- if jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0 -%}
-        {%- for team in jenkins_teams -%}
-          {%- set team_targets = [] -%}
-          {%- if deployment_mode | default('local') == 'local' -%}
-            {%- if team.active_environment | default('blue') == 'blue' -%}
-              {%- set _ = team_targets.append('localhost:' + (team.ports.web | default(8080) | string)) -%}
-            {%- else -%}
-              {%- set _ = team_targets.append('localhost:' + ((team.ports.web | default(8080)) + 100 | string)) -%}
-            {%- endif -%}
-          {%- else -%}
-            {%- for host in groups['jenkins_masters'] | default(['localhost']) -%}
-              {%- if team.active_environment | default('blue') == 'blue' -%}
-                {%- set _ = team_targets.append(hostvars[host]['ansible_default_ipv4']['address'] + ':' + (team.ports.web | default(8080) | string)) -%}
-              {%- else -%}
-                {%- set _ = team_targets.append(hostvars[host]['ansible_default_ipv4']['address'] + ':' + ((team.ports.web | default(8080)) + 100 | string)) -%}
-              {%- endif -%}
-            {%- endfor -%}
-          {%- endif -%}
-          {%- set _ = jenkins_targets.append({'job': 'jenkins-' + team.team_name, 'targets': team_targets, 'team_name': team.team_name, 'active_environment': team.active_environment | default('blue')}) -%}
-        {%- endfor -%}
+      {{ jenkins_teams }}
       {%- else -%}
-        {%- set default_targets = [] -%}
-        {%- if deployment_mode | default('local') == 'local' -%}
-          {%- set _ = default_targets.append('localhost:8080') -%}
-        {%- else -%}
-          {%- for host in groups['jenkins_masters'] | default(['localhost']) -%}
-            {%- set _ = default_targets.append(hostvars[host]['ansible_default_ipv4']['address'] + ':8080') -%}
-          {%- endfor -%}
-        {%- endif -%}
-        {%- set _ = jenkins_targets.append({'job': 'jenkins-default', 'targets': default_targets, 'team_name': 'default', 'active_environment': 'blue'}) -%}
+      []
       {%- endif -%}
-      {{ jenkins_targets }}
-    prometheus_targets: "{{ prometheus_base_targets + prometheus_jenkins_targets }}"
+  tags: ['monitoring', 'targets']
+
+# Split the complex logic into safer, more explicit tasks
+- name: Calculate effective ports for each team (separate task for clarity)
+  set_fact:
+    team_port_calculations: "{{ team_port_calculations | default({}) | combine({item.team_name: calculated_port}) }}"
+  vars:
+    team_web_port: "{{ item.ports.web | default(8080) | int }}"
+    team_active_env: "{{ item.active_environment | default('blue') }}"
+    team_bg_enabled: "{{ item.blue_green_enabled | default(true) }}"
+    calculated_port: "{{ team_web_port | int + (100 if (team_bg_enabled and team_active_env == 'green') else 0) }}"
+  loop: "{{ prometheus_teams_validated }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  when: prometheus_teams_validated | length > 0
+  tags: ['monitoring', 'targets']
+
+- name: Generate team-specific Jenkins Prometheus targets (safe approach)
+  set_fact:
+    prometheus_jenkins_targets: "{{ prometheus_jenkins_targets + [team_target_config] }}"
+  vars:
+    team_effective_port: "{{ team_port_calculations[item.team_name] }}"
+    team_target_list: >
+      {%- if prometheus_deployment_mode == 'local' -%}
+      ["localhost:{{ team_effective_port }}"] 
+      {%- else -%}
+      [{% for host in prometheus_jenkins_hosts %}"{{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team_effective_port }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+      {%- endif -%}
+    team_target_config:
+      job: "jenkins-{{ item.team_name }}"
+      targets: "{{ team_target_list | from_yaml }}"
+      team_name: "{{ item.team_name }}"
+      active_environment: "{{ item.active_environment | default('blue') }}"
+      port: "{{ team_effective_port | int }}"
+      blue_green_enabled: "{{ item.blue_green_enabled | default(true) }}"
+  loop: "{{ prometheus_teams_validated }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  when: prometheus_teams_validated | length > 0
+  tags: ['monitoring', 'targets']
+
+- name: Generate default Jenkins Prometheus target (fallback - safe approach)
+  set_fact:
+    prometheus_jenkins_targets: "{{ prometheus_jenkins_targets + [default_target_config] }}"
+  vars:
+    default_target_list: >
+      {%- if prometheus_deployment_mode == 'local' -%}
+      ["localhost:8080"]
+      {%- else -%}
+      [{% for host in prometheus_jenkins_hosts %}"{{ hostvars[host]['ansible_default_ipv4']['address'] }}:8080"{% if not loop.last %}, {% endif %}{% endfor %}]
+      {%- endif -%}
+    default_target_config:
+      job: "jenkins-default"
+      targets: "{{ default_target_list | from_yaml }}"
+      team_name: "default"
+      active_environment: "blue"
+      port: 8080
+      blue_green_enabled: false
+  when: prometheus_teams_validated | length == 0
+  tags: ['monitoring', 'targets']
+
+- name: Merge Jenkins targets with base Prometheus targets
+  set_fact:
+    prometheus_targets: "{{ prometheus_base_targets | default([]) + prometheus_jenkins_targets }}"
+  tags: ['monitoring', 'targets']
+
+- name: Validate final Prometheus configuration
+  assert:
+    that:
+      - prometheus_jenkins_targets is defined
+      - prometheus_jenkins_targets | length > 0
+      - prometheus_targets is defined
+      - prometheus_targets | length > 0
+    fail_msg: |
+      ERROR: Prometheus target generation failed!
+      
+      Teams validated: {{ prometheus_teams_validated | length }}
+      Jenkins targets generated: {{ prometheus_jenkins_targets | length }}
+      Total targets: {{ prometheus_targets | length }}
+      
+      This indicates a configuration or template processing error.
+    success_msg: |
+      ✅ Prometheus target generation successful!
+      
+      Teams configured: {{ prometheus_teams_validated | length }}
+      Jenkins targets: {{ prometheus_jenkins_targets | length }}
+      Total targets: {{ prometheus_targets | length }}
   tags: ['monitoring', 'targets']
 
 - name: Display monitoring target configuration
   debug:
     msg: |
-      🎯 Monitoring Target Configuration:
-      Teams to Monitor: {{ jenkins_teams | length if (jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string) else 1 }}
-      Jenkins Jobs: {{ prometheus_jenkins_targets | map(attribute='job') | join(', ') if prometheus_jenkins_targets else 'jenkins-default' }}
-      Total Targets: {{ prometheus_targets | length }}
+      ====================================================
+      🎯 Monitoring Target Configuration Summary
+      ====================================================
+      Deployment Mode: {{ prometheus_deployment_mode }}
+      Teams Validated: {{ prometheus_teams_validated | length }}
+      Jenkins Jobs Generated: {{ prometheus_jenkins_targets | map(attribute='job') | join(', ') if prometheus_jenkins_targets else 'none' }}
+      Total Prometheus Targets: {{ prometheus_targets | length }}
       
-      Jenkins Monitoring Details:
+      📊 Jenkins Monitoring Details:
       {% for target in prometheus_jenkins_targets %}
-      • {{ target.job }} ({{ target.team_name }} - {{ target.active_environment }}): {{ target.targets | join(', ') }}
+      • {{ target.job }} ({{ target.team_name }} - {{ target.active_environment }})
+        Port: {{ target.port }} | Blue-Green: {{ target.blue_green_enabled }}
+        Targets: {{ target.targets | join(', ') }}
       {% endfor %}
+      
+      🌐 All Prometheus Targets:
+      {% for target in prometheus_targets %}
+      • {{ target.job }}: {{ target.targets | join(', ') }}
+      {% endfor %}
+      ====================================================
   tags: ['monitoring', 'targets']
 
 - name: Create monitoring user and group
@@ -234,7 +320,12 @@
       • Infrastructure Health - VM and container metrics
       • Security Metrics - Security events and compliance
       
-      🎯 Monitored Targets:
+      🎯 Monitored Targets ({{ prometheus_targets | length }}):
       {% for target in prometheus_targets %}
       • {{ target.job }}: {{ target.targets | join(', ') }}
+      {% endfor %}
+      
+      🔍 Jenkins-Specific Monitoring:
+      {% for target in prometheus_jenkins_targets %}
+      • {{ target.team_name }} ({{ target.active_environment }}): {{ target.targets | join(', ') }}
       {% endfor %}

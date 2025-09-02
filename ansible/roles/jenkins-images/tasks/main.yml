@@ -44,6 +44,17 @@
     mode: '0644'
   when: images_to_build == 'all' or images_to_build == 'master'
 
+- name: Generate Legacy Jenkins Master Dockerfile (BuildKit fallback)
+  template:
+    src: Dockerfile.master-legacy.j2
+    dest: "{{ jenkins_images_build_dir }}/master/Dockerfile.legacy"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  when: 
+    - images_to_build == 'all' or images_to_build == 'master'
+    - jenkins_build_fallback_enabled | default(true)
+
 - name: Generate plugins list for master
   template:
     src: plugins.txt.j2
@@ -119,108 +130,630 @@
   when: images_to_build == 'all' or images_to_build == 'master'
 
 
-- name: Build Jenkins master image
+# Production-Ready BuildKit Docker Image Building
+# Advanced Docker buildx integration with comprehensive error handling
+
+- name: Check Docker BuildKit availability
+  shell: |
+    set -euo pipefail
+    if docker buildx version >/dev/null 2>&1; then
+      echo "buildkit_available"
+    else
+      echo "buildkit_unavailable"
+    fi
+  register: buildkit_check
+  changed_when: false
+  failed_when: false
+  when: images_to_build == 'all' or images_to_build == 'master'
+
+- name: Initialize BuildKit builder if not exists
+  shell: |
+    set -euo pipefail
+    # Check if builder exists
+    if ! docker buildx inspect jenkins-builder >/dev/null 2>&1; then
+      echo "Creating BuildKit builder instance: jenkins-builder"
+      docker buildx create \
+        --name jenkins-builder \
+        --driver docker-container \
+        --bootstrap \
+        --use
+      echo "builder_created"
+    else
+      echo "Using existing BuildKit builder: jenkins-builder"
+      docker buildx use jenkins-builder
+      echo "builder_exists"
+    fi
+  register: buildkit_builder_setup
+  changed_when: buildkit_builder_setup.stdout_lines | select('match', '.*builder_created.*') | list | length > 0
+  when: 
+    - images_to_build == 'all' or images_to_build == 'master'
+    - buildkit_check.stdout == 'buildkit_available'
+    - jenkins_build_use_buildkit | default(true)
+
+- name: Set build environment variables
+  set_fact:
+    jenkins_build_env:
+      DOCKER_BUILDKIT: "1"
+      BUILDKIT_PROGRESS: "{{ jenkins_build_progress | default('plain') }}"
+      DOCKER_BUILDKIT_INLINE_CACHE: "{{ jenkins_build_cache_inline | default('1') }}"
+  when: images_to_build == 'all' or images_to_build == 'master'
+
+# Advanced BuildKit-compatible Jenkins Master Image Build
+- name: Build Jenkins master image with BuildKit (Production Method)
+  shell: |
+    set -euo pipefail
+    
+    # Build configuration
+    BUILD_CONTEXT="{{ jenkins_images_build_dir }}/master"
+    IMAGE_NAME="jenkins/jenkins-master"
+    IMAGE_TAG="{{ jenkins_master_image_tag }}"
+    FULL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
+    
+    # Build arguments preparation
+    BUILD_ARGS=""
+    BUILD_ARGS="${BUILD_ARGS} --build-arg JENKINS_VERSION={{ jenkins_version }}"
+    BUILD_ARGS="${BUILD_ARGS} --build-arg BUILD_DATE={{ ansible_date_time.iso8601 }}"
+    BUILD_ARGS="${BUILD_ARGS} --build-arg VCS_REF={{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
+    BUILD_ARGS="${BUILD_ARGS} --build-arg BUILD_NUMBER={{ lookup('env', 'BUILD_NUMBER') | default('unknown') }}"
+    BUILD_ARGS="${BUILD_ARGS} --build-arg CI_PIPELINE_ID={{ lookup('env', 'CI_PIPELINE_ID') | default('local') }}"
+    BUILD_ARGS="${BUILD_ARGS} --build-arg BUILDKIT_INLINE_CACHE={{ jenkins_build_cache_inline | default('1') }}"
+    
+    # Cache configuration
+    {% for cache_source in jenkins_build_cache_from | default([]) %}
+    BUILD_ARGS="${BUILD_ARGS} --cache-from type=registry,ref={{ cache_source }}"
+    {% endfor %}
+    
+    # Advanced build options
+    BUILD_OPTIONS=""
+    {{ 'BUILD_OPTIONS="${BUILD_OPTIONS} --target ' + (jenkins_build_target | default('')) + '"' if jenkins_build_target | default('') != '' else '' }}
+    {{ 'BUILD_OPTIONS="${BUILD_OPTIONS} --no-cache"' if jenkins_images_force_rebuild | default(false) else '' }}
+    {{ 'BUILD_OPTIONS="${BUILD_OPTIONS} --cache-to type=inline"' if jenkins_build_cache_inline | default('1') == '1' else '' }}
+    {{ 'BUILD_OPTIONS="${BUILD_OPTIONS} --network ' + (jenkins_build_network | default('default')) + '"' if jenkins_build_network | default('default') != 'default' else '' }}
+    
+    # Resource limits
+    {{ 'BUILD_OPTIONS="${BUILD_OPTIONS} --memory ' + (jenkins_build_memory_limit | default('')) + '"' if jenkins_build_memory_limit | default('') != '' else '' }}
+    
+    # Platform specification for multi-arch builds
+    BUILD_OPTIONS="${BUILD_OPTIONS} --platform linux/amd64"
+    
+    # Progress output
+    BUILD_OPTIONS="${BUILD_OPTIONS} --progress {{ jenkins_build_progress | default('plain') }}"
+    
+    # Retry mechanism with exponential backoff
+    retry_count=0
+    max_retries={{ jenkins_build_retry_count | default(3) }}
+    retry_delay={{ jenkins_build_retry_delay | default(30) }}
+    
+    while [ $retry_count -lt $max_retries ]; do
+      echo "=== Jenkins Master Image Build Attempt $((retry_count + 1))/$max_retries ==="
+      echo "Image: ${FULL_IMAGE}"
+      echo "Context: ${BUILD_CONTEXT}"
+      echo "Builder: $(docker buildx inspect --format '{{ '{{' }}.Name{{ '}}' }}' 2>/dev/null || echo 'default')"
+      
+      # Execute build with timeout
+      if timeout {{ jenkins_build_timeout | default(1800) }} \
+         docker buildx build \
+         --builder jenkins-builder \
+         --file "${BUILD_CONTEXT}/Dockerfile" \
+         --tag "${FULL_IMAGE}" \
+         --load \
+         --pull \
+         ${BUILD_ARGS} \
+         ${BUILD_OPTIONS} \
+         "${BUILD_CONTEXT}"; then
+         
+        echo "✅ Jenkins master image build successful"
+        
+        # Verify image exists and get metadata
+        if docker inspect "${FULL_IMAGE}" >/dev/null 2>&1; then
+          IMAGE_ID=$(docker inspect "${FULL_IMAGE}" --format '{{ '{{' }}.Id{{ '}}' }}')
+          IMAGE_SIZE=$(docker inspect "${FULL_IMAGE}" --format '{{ '{{' }}.Size{{ '}}' }}' | numfmt --to=iec)
+          echo "📦 Image ID: ${IMAGE_ID}"
+          echo "📏 Image Size: ${IMAGE_SIZE}"
+          
+          # Extract build info if available
+          BUILD_INFO=$(docker inspect "${FULL_IMAGE}" --format '{{ '{{' }}range $k,$v := .Config.Labels{{ '}}' }}{{ '{{' }}$k{{ '}}' }}={{ '{{' }}$v{{ '}}' }}{{ '{{' }}"\n"{{ '}}' }}{{ '{{' }}end{{ '}}' }}' | grep -E '(jenkins.version|build.number|org.opencontainers)' | head -10 || true)
+          if [ -n "${BUILD_INFO}" ]; then
+            echo "🏷️ Build Labels:"
+            echo "${BUILD_INFO}" | sed 's/^/  /'
+          fi
+          
+          echo "build_successful"
+          exit 0
+        else
+          echo "❌ Image build succeeded but image not found in local registry"
+          exit 1
+        fi
+      else
+        build_exit_code=$?
+        echo "❌ Jenkins master image build failed with exit code: ${build_exit_code}"
+        
+        retry_count=$((retry_count + 1))
+        if [ $retry_count -lt $max_retries ]; then
+          echo "⏳ Retrying in ${retry_delay} seconds..."
+          sleep $retry_delay
+          retry_delay=$((retry_delay * 2))  # Exponential backoff
+        else
+          echo "💥 Max retries exceeded. Build failed permanently."
+          
+          # Cleanup on final failure
+          docker builder prune -f --filter "until=1h" >/dev/null 2>&1 || true
+          
+          exit $build_exit_code
+        fi
+      fi
+    done
+  environment: "{{ jenkins_build_env }}"
+  register: jenkins_master_buildkit_result
+  changed_when: jenkins_master_buildkit_result.stdout_lines | select('match', '.*build_successful.*') | list | length > 0
+  failed_when: jenkins_master_buildkit_result.rc != 0
+  when: 
+    - images_to_build == 'all' or images_to_build == 'master'
+    - buildkit_check.stdout == 'buildkit_available'
+    - jenkins_build_use_buildkit | default(true)
+
+# Legacy Fallback Build Method
+- name: Build Jenkins master image (Legacy Docker Build Fallback)
   community.docker.docker_image:
     name: "jenkins/jenkins-master"
     tag: "{{ jenkins_master_image_tag }}"
     build:
       path: "{{ jenkins_images_build_dir }}/master"
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.legacy
       pull: yes
       nocache: "{{ jenkins_images_force_rebuild | default(false) }}"
+      network: "{{ jenkins_build_network | default('default') }}"
       args:
         JENKINS_VERSION: "{{ jenkins_version }}"
         BUILD_DATE: "{{ ansible_date_time.iso8601 }}"
         VCS_REF: "{{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
+        BUILD_NUMBER: "{{ lookup('env', 'BUILD_NUMBER') | default('unknown') }}"
+        CI_PIPELINE_ID: "{{ lookup('env', 'CI_PIPELINE_ID') | default('local') }}"
     source: build
     state: present
-    push: "false"
-  register: master_image_build
-  when: images_to_build == 'all' or images_to_build == 'master'
+    push: false
+  register: jenkins_master_legacy_result
+  when: 
+    - (images_to_build == 'all' or images_to_build == 'master')
+    - (
+        buildkit_check.stdout != 'buildkit_available' or
+        not (jenkins_build_use_buildkit | default(true)) or
+        jenkins_master_buildkit_result is failed
+      )
+    - jenkins_build_fallback_enabled | default(true)
 
-- name: Build DIND agent image
-  community.docker.docker_image:
-    name: "jenkins/jenkins-agent-dind"
-    tag: "{{ jenkins_agent_image_tag }}"
-    build:
-      path: "{{ jenkins_images_build_dir }}/agents/dind"
-      dockerfile: Dockerfile
-      pull: yes
-      nocache: "{{ jenkins_images_force_rebuild | default(false) }}"
-      args:
+# Unified build result processing
+- name: Set master image build result
+  set_fact:
+    master_image_build:
+      changed: "{{ jenkins_master_buildkit_result.changed | default(false) or jenkins_master_legacy_result.changed | default(false) }}"
+      image:
+        Id: "{{ 
+          (jenkins_master_buildkit_result.stdout_lines | select('match', '.*Image ID:.*') | first | regex_replace('.*Image ID: ', '') | default('')) if jenkins_master_buildkit_result is succeeded else
+          (jenkins_master_legacy_result.image.Id if jenkins_master_legacy_result is defined and jenkins_master_legacy_result.image is defined else 'unknown')
+        }}"
+      build_method: "{{ 'buildkit' if jenkins_master_buildkit_result is succeeded else 'legacy' }}"
+      build_time: "{{ ansible_date_time.iso8601 }}"
+  when: 
+    - images_to_build == 'all' or images_to_build == 'master'
+    - (jenkins_master_buildkit_result is succeeded or jenkins_master_legacy_result is succeeded)
+
+# Advanced Agent Image Building with BuildKit Support
+# Unified build approach for all agent types
+
+- name: Build Jenkins agent images with BuildKit
+  shell: |
+    set -euo pipefail
+    
+    # Image configuration
+    AGENT_TYPE="{{ item.type }}"
+    BUILD_CONTEXT="{{ jenkins_images_build_dir }}/agents/{{ item.type }}"
+    IMAGE_NAME="{{ item.image_name }}"
+    IMAGE_TAG="{{ jenkins_agent_image_tag }}"
+    FULL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
+    
+    # Build arguments preparation
+    BUILD_ARGS=""
+    {% for arg_key, arg_value in item.build_args.items() %}
+    BUILD_ARGS="${BUILD_ARGS} --build-arg {{ arg_key }}={{ arg_value }}"
+    {% endfor %}
+    BUILD_ARGS="${BUILD_ARGS} --build-arg BUILD_DATE={{ ansible_date_time.iso8601 }}"
+    BUILD_ARGS="${BUILD_ARGS} --build-arg VCS_REF={{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
+    
+    # Advanced build options
+    BUILD_OPTIONS=""
+    {% if jenkins_images_force_rebuild | default(false) %}
+    BUILD_OPTIONS="${BUILD_OPTIONS} --no-cache"
+    {% endif %}
+    
+    {% if jenkins_build_cache_inline | default('1') == '1' %}
+    BUILD_OPTIONS="${BUILD_OPTIONS} --cache-to type=inline"
+    {% endif %}
+    
+    BUILD_OPTIONS="${BUILD_OPTIONS} --platform linux/amd64"
+    BUILD_OPTIONS="${BUILD_OPTIONS} --progress {{ jenkins_build_progress | default('plain') }}"
+    
+    # Retry mechanism
+    retry_count=0
+    max_retries={{ jenkins_build_retry_count | default(3) }}
+    retry_delay={{ jenkins_build_retry_delay | default(15) }}
+    
+    while [ $retry_count -lt $max_retries ]; do
+      echo "=== Jenkins ${AGENT_TYPE} Agent Build Attempt $((retry_count + 1))/$max_retries ==="
+      echo "Image: ${FULL_IMAGE}"
+      echo "Context: ${BUILD_CONTEXT}"
+      
+      # Execute build with timeout
+      if timeout {{ jenkins_build_timeout | default(1200) }} \
+         docker buildx build \
+         --builder jenkins-builder \
+         --file "${BUILD_CONTEXT}/Dockerfile" \
+         --tag "${FULL_IMAGE}" \
+         --load \
+         --pull \
+         ${BUILD_ARGS} \
+         ${BUILD_OPTIONS} \
+         "${BUILD_CONTEXT}"; then
+         
+        echo "✅ ${AGENT_TYPE} agent image build successful"
+        
+        # Verify and get metadata
+        if docker inspect "${FULL_IMAGE}" >/dev/null 2>&1; then
+          IMAGE_ID=$(docker inspect "${FULL_IMAGE}" --format '{{ '{{' }}.Id{{ '}}' }}')
+          IMAGE_SIZE=$(docker inspect "${FULL_IMAGE}" --format '{{ '{{' }}.Size{{ '}}' }}' | numfmt --to=iec)
+          echo "📦 Image ID: ${IMAGE_ID}"
+          echo "📏 Image Size: ${IMAGE_SIZE}"
+          
+          echo "agent_build_successful"
+          exit 0
+        else
+          echo "❌ Agent build succeeded but image not found"
+          exit 1
+        fi
+      else
+        build_exit_code=$?
+        echo "❌ ${AGENT_TYPE} agent build failed with exit code: ${build_exit_code}"
+        
+        retry_count=$((retry_count + 1))
+        if [ $retry_count -lt $max_retries ]; then
+          echo "⏳ Retrying in ${retry_delay} seconds..."
+          sleep $retry_delay
+          retry_delay=$((retry_delay + 10))
+        else
+          echo "💥 Max retries exceeded for ${AGENT_TYPE} agent build"
+          exit $build_exit_code
+        fi
+      fi
+    done
+  environment: "{{ jenkins_build_env }}"
+  register: agent_buildkit_result
+  changed_when: agent_buildkit_result.stdout_lines | select('match', '.*agent_build_successful.*') | list | length > 0
+  failed_when: agent_buildkit_result.rc != 0
+  loop:
+    - type: "dind"
+      image_name: "jenkins/jenkins-agent-dind"
+      build_args:
         AGENT_VERSION: "{{ jenkins_agent_version }}"
-        BUILD_DATE: "{{ ansible_date_time.iso8601 }}"
-        VCS_REF: "{{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
-    source: build
-    state: present
-    push: "{{ jenkins_images_push | default(false) }}"
-  register: dind_image_build
-  when: images_to_build == 'all' or images_to_build == 'dind-agent'
+      register_var: "dind_image_build"
+      condition: "{{ images_to_build == 'all' or images_to_build == 'dind-agent' }}"
+    - type: "maven"
+      image_name: "jenkins/jenkins-agent-maven"
+      build_args:
+        MAVEN_VERSION: "{{ maven_version | default('3.9.6') }}"
+        JDK_VERSION: "{{ default_jdk_version | default('21') }}"
+      register_var: "maven_image_build"
+      condition: "{{ images_to_build == 'all' or images_to_build == 'maven-agent' }}"
+    - type: "python"
+      image_name: "jenkins/jenkins-agent-python"
+      build_args:
+        PYTHON_VERSION: "{{ python_version | default('3.12') }}"
+      register_var: "python_image_build"
+      condition: "{{ images_to_build == 'all' or images_to_build == 'python-agent' }}"
+    - type: "nodejs"
+      image_name: "jenkins/jenkins-agent-nodejs"
+      build_args:
+        NODE_VERSION: "{{ nodejs_version | default('20') }}"
+      register_var: "nodejs_image_build"
+      condition: "{{ images_to_build == 'all' or images_to_build == 'nodejs-agent' }}"
+  when: 
+    - item.condition | bool
+    - buildkit_check.stdout == 'buildkit_available'
+    - jenkins_build_use_buildkit | default(true)
 
-- name: Build Maven agent image
+# Legacy fallback for agent images
+- name: Build agent images (Legacy Docker Build Fallback)
   community.docker.docker_image:
-    name: "jenkins/jenkins-agent-maven"
+    name: "{{ item.image_name }}"
     tag: "{{ jenkins_agent_image_tag }}"
     build:
-      path: "{{ jenkins_images_build_dir }}/agents/maven"
+      path: "{{ jenkins_images_build_dir }}/agents/{{ item.type }}"
       dockerfile: Dockerfile
       pull: yes
       nocache: "{{ jenkins_images_force_rebuild | default(false) }}"
-      args:
-        MAVEN_VERSION: "{{ maven_version }}"
-        JDK_VERSION: "{{ default_jdk_version }}"
-        BUILD_DATE: "{{ ansible_date_time.iso8601 }}"
-        VCS_REF: "{{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
+      args: "{{ item.build_args | combine({'BUILD_DATE': ansible_date_time.iso8601, 'VCS_REF': lookup('env', 'GIT_COMMIT') | default('unknown')}) }}"
     source: build
     state: present
     push: "{{ jenkins_images_push | default(false) }}"
-  register: maven_image_build
-  when: images_to_build == 'all' or images_to_build == 'maven-agent'
+  register: agent_legacy_result
+  loop:
+    - type: "dind"
+      image_name: "jenkins/jenkins-agent-dind"
+      build_args:
+        AGENT_VERSION: "{{ jenkins_agent_version }}"
+      register_var: "dind_image_build"
+      condition: "{{ images_to_build == 'all' or images_to_build == 'dind-agent' }}"
+    - type: "maven"
+      image_name: "jenkins/jenkins-agent-maven"
+      build_args:
+        MAVEN_VERSION: "{{ maven_version | default('3.9.6') }}"
+        JDK_VERSION: "{{ default_jdk_version | default('21') }}"
+      register_var: "maven_image_build"
+      condition: "{{ images_to_build == 'all' or images_to_build == 'maven-agent' }}"
+    - type: "python"
+      image_name: "jenkins/jenkins-agent-python"
+      build_args:
+        PYTHON_VERSION: "{{ python_version | default('3.12') }}"
+      register_var: "python_image_build"
+      condition: "{{ images_to_build == 'all' or images_to_build == 'python-agent' }}"
+    - type: "nodejs"
+      image_name: "jenkins/jenkins-agent-nodejs"
+      build_args:
+        NODE_VERSION: "{{ nodejs_version | default('20') }}"
+      register_var: "nodejs_image_build"
+      condition: "{{ images_to_build == 'all' or images_to_build == 'nodejs-agent' }}"
+  when: 
+    - item.condition | bool
+    - (
+        buildkit_check.stdout != 'buildkit_available' or
+        not (jenkins_build_use_buildkit | default(true)) or
+        vars[item.register_var + '_buildkit_result'] is failed
+      )
+    - jenkins_build_fallback_enabled | default(true)
 
-- name: Build Python agent image
-  community.docker.docker_image:
-    name: "jenkins/jenkins-agent-python"
-    tag: "{{ jenkins_agent_image_tag }}"
-    build:
-      path: "{{ jenkins_images_build_dir }}/agents/python"
-      dockerfile: Dockerfile
-      pull: yes
-      nocache: "{{ jenkins_images_force_rebuild | default(false) }}"
-      args:
-        PYTHON_VERSION: "{{ python_version }}"
-        BUILD_DATE: "{{ ansible_date_time.iso8601 }}"
-        VCS_REF: "{{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
-    source: build
-    state: present
-    push: "{{ jenkins_images_push | default(false) }}"
-  register: python_image_build
-  when: images_to_build == 'all' or images_to_build == 'python-agent'
+# Unified agent build results processing
+- name: Set agent image build results
+  set_fact:
+    "{{ item.register_var }}": {
+      "changed": "{{ vars[item.register_var + '_buildkit_result'].changed | default(false) or vars[item.register_var + '_legacy_result'].changed | default(false) }}",
+      "image": {
+        "Id": "{{ 
+          (vars[item.register_var + '_buildkit_result'].stdout_lines | select('match', '.*Image ID:.*') | first | regex_replace('.*Image ID: ', '') | default('')) if vars[item.register_var + '_buildkit_result'] is succeeded else
+          (vars[item.register_var + '_legacy_result'].image.Id if vars[item.register_var + '_legacy_result'] is defined and vars[item.register_var + '_legacy_result'].image is defined else 'unknown')
+        }}"
+      },
+      "build_method": "{{ 'buildkit' if vars[item.register_var + '_buildkit_result'] is succeeded else 'legacy' }}",
+      "build_time": "{{ ansible_date_time.iso8601 }}"
+    }
+  loop:
+    - type: "dind"
+      register_var: "dind_image_build"
+      condition: "{{ images_to_build == 'all' or images_to_build == 'dind-agent' }}"
+    - type: "maven"
+      register_var: "maven_image_build"
+      condition: "{{ images_to_build == 'all' or images_to_build == 'maven-agent' }}"
+    - type: "python"
+      register_var: "python_image_build"
+      condition: "{{ images_to_build == 'all' or images_to_build == 'python-agent' }}"
+    - type: "nodejs"
+      register_var: "nodejs_image_build"
+      condition: "{{ images_to_build == 'all' or images_to_build == 'nodejs-agent' }}"
+  when: 
+    - item.condition | bool
+    - (vars[item.register_var + '_buildkit_result'] is succeeded or vars[item.register_var + '_legacy_result'] is succeeded)
 
-- name: Build Node.js agent image
-  community.docker.docker_image:
-    name: "jenkins/jenkins-agent-nodejs"
-    tag: "{{ jenkins_agent_image_tag }}"
-    build:
-      path: "{{ jenkins_images_build_dir }}/agents/nodejs"
-      dockerfile: Dockerfile
-      pull: yes
-      nocache: "{{ jenkins_images_force_rebuild | default(false) }}"
-      args:
-        NODE_VERSION: "{{ nodejs_version }}"
-        BUILD_DATE: "{{ ansible_date_time.iso8601 }}"
-        VCS_REF: "{{ lookup('env', 'GIT_COMMIT') | default('unknown') }}"
-    source: build
-    state: present
-    push: "{{ jenkins_images_push | default(false) }}"
-  register: nodejs_image_build
-  when: images_to_build == 'all' or images_to_build == 'nodejs-agent'
+# Advanced Build Validation and Security Scanning
 
-- name: Clean up old images (keep last 3 versions)
-  community.docker.docker_prune:
-    images: yes
-    images_filters:
-      dangling: false
-      until: "72h"
+- name: Validate built images with comprehensive checks
+  shell: |
+    set -euo pipefail
+    
+    IMAGE_NAME="{{ item.image_name }}"
+    IMAGE_TAG="{{ jenkins_master_image_tag if item.type == 'master' else jenkins_agent_image_tag }}"
+    FULL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
+    
+    echo "=== Validating ${FULL_IMAGE} ==="
+    
+    # Basic image existence check
+    if ! docker inspect "${FULL_IMAGE}" >/dev/null 2>&1; then
+      echo "❌ Image ${FULL_IMAGE} not found"
+      exit 1
+    fi
+    
+    # Image metadata validation
+    IMAGE_SIZE=$(docker inspect "${FULL_IMAGE}" --format '{{ '{{' }}.Size{{ '}}' }}')
+    IMAGE_LAYERS=$(docker inspect "${FULL_IMAGE}" --format '{{ '{{' }}len .RootFS.Layers{{ '}}' }}')
+    CREATED_DATE=$(docker inspect "${FULL_IMAGE}" --format '{{ '{{' }}.Created{{ '}}' }}')
+    
+    echo "📊 Image Size: $(echo $IMAGE_SIZE | numfmt --to=iec)"
+    echo "🍰 Layers: ${IMAGE_LAYERS}"
+    echo "📅 Created: ${CREATED_DATE}"
+    
+    # Security validation
+    if [ "{{ jenkins_build_scan_vulnerabilities | default(true) }}" = "true" ]; then
+      echo "🔍 Running security scan with Trivy..."
+      
+      # Install trivy if not present
+      if ! command -v trivy >/dev/null 2>&1; then
+        echo "📦 Installing Trivy security scanner..."
+        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+      fi
+      
+      # Run security scan
+      TRIVY_OUTPUT="/tmp/trivy-${item.type}-$(date +%s).json"
+      
+      if trivy image \
+        --format json \
+        --output "${TRIVY_OUTPUT}" \
+        --severity HIGH,CRITICAL \
+        --quiet \
+        "${FULL_IMAGE}"; then
+        
+        # Parse results
+        CRITICAL_COUNT=$(jq '[.Results[]? | select(.Vulnerabilities != null) | .Vulnerabilities[] | select(.Severity == "CRITICAL")] | length' "${TRIVY_OUTPUT}" 2>/dev/null || echo "0")
+        HIGH_COUNT=$(jq '[.Results[]? | select(.Vulnerabilities != null) | .Vulnerabilities[] | select(.Severity == "HIGH")] | length' "${TRIVY_OUTPUT}" 2>/dev/null || echo "0")
+        
+        echo "🛡️  Security Scan Results:"
+        echo "   Critical: ${CRITICAL_COUNT}"
+        echo "   High: ${HIGH_COUNT}"
+        
+        # Fail on critical vulnerabilities if configured
+        if [ "{{ jenkins_build_fail_on_critical | default(true) }}" = "true" ] && [ "${CRITICAL_COUNT}" -gt 0 ]; then
+          echo "❌ Build failed: ${CRITICAL_COUNT} critical vulnerabilities found"
+          echo "📄 Detailed report: ${TRIVY_OUTPUT}"
+          exit 1
+        fi
+        
+        # Fail on high vulnerabilities if configured
+        if [ "{{ jenkins_build_fail_on_high | default(false) }}" = "true" ] && [ "${HIGH_COUNT}" -gt 0 ]; then
+          echo "❌ Build failed: ${HIGH_COUNT} high vulnerabilities found"
+          echo "📄 Detailed report: ${TRIVY_OUTPUT}"
+          exit 1
+        fi
+        
+        # Clean up scan results
+        rm -f "${TRIVY_OUTPUT}"
+      else
+        echo "⚠️  Security scan failed, continuing without validation"
+      fi
+    fi
+    
+    # Functional validation for specific image types
+    if [ "{{ item.type }}" = "master" ]; then
+      echo "🔧 Running Jenkins master functional validation..."
+      
+      # Check if Jenkins starts properly (with timeout)
+      CONTAINER_ID=$(docker run -d --rm \
+        -p 0:8080 \
+        -e JENKINS_OPTS="--httpPort=8080" \
+        -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" \
+        "${FULL_IMAGE}" || echo "failed")
+      
+      if [ "${CONTAINER_ID}" != "failed" ] && [ -n "${CONTAINER_ID}" ]; then
+        sleep 30  # Wait for Jenkins to start
+        
+        # Get the mapped port
+        MAPPED_PORT=$(docker port "${CONTAINER_ID}" 8080/tcp | cut -d: -f2)
+        
+        if [ -n "${MAPPED_PORT}" ]; then
+          # Test Jenkins accessibility
+          if curl -f -s --max-time 10 "http://localhost:${MAPPED_PORT}/login" >/dev/null; then
+            echo "✅ Jenkins master validation successful"
+          else
+            echo "❌ Jenkins master not accessible"
+            docker logs "${CONTAINER_ID}" | tail -20
+            docker stop "${CONTAINER_ID}" >/dev/null 2>&1
+            exit 1
+          fi
+        fi
+        
+        # Cleanup
+        docker stop "${CONTAINER_ID}" >/dev/null 2>&1
+      else
+        echo "❌ Failed to start Jenkins master container"
+        exit 1
+      fi
+    fi
+    
+    echo "✅ Image validation completed successfully"
+    echo "image_validation_successful"
+  register: image_validation_result
+  changed_when: false
+  failed_when: image_validation_result.rc != 0
+  loop:
+    - type: "master"
+      image_name: "jenkins/jenkins-master"
+      register_var: "master_image_validation"
+      condition: "{{ (images_to_build == 'all' or images_to_build == 'master') and master_image_build is defined and master_image_build.changed }}"
+    - type: "dind"
+      image_name: "jenkins/jenkins-agent-dind"
+      register_var: "dind_image_validation"
+      condition: "{{ (images_to_build == 'all' or images_to_build == 'dind-agent') and dind_image_build is defined and dind_image_build.changed }}"
+    - type: "maven"
+      image_name: "jenkins/jenkins-agent-maven"
+      register_var: "maven_image_validation"
+      condition: "{{ (images_to_build == 'all' or images_to_build == 'maven-agent') and maven_image_build is defined and maven_image_build.changed }}"
+    - type: "python"
+      image_name: "jenkins/jenkins-agent-python"
+      register_var: "python_image_validation"
+      condition: "{{ (images_to_build == 'all' or images_to_build == 'python-agent') and python_image_build is defined and python_image_build.changed }}"
+    - type: "nodejs"
+      image_name: "jenkins/jenkins-agent-nodejs"
+      register_var: "nodejs_image_validation"
+      condition: "{{ (images_to_build == 'all' or images_to_build == 'nodejs-agent') and nodejs_image_build is defined and nodejs_image_build.changed }}"
+  when: 
+    - item.condition | bool
+    - jenkins_build_validate_images | default(true)
+
+# Enhanced image cleanup with BuildKit builder maintenance
+- name: Clean up old images and maintain BuildKit builder
+  shell: |
+    set -euo pipefail
+    
+    echo "🧹 Starting comprehensive cleanup..."
+    
+    # Clean up dangling images
+    DANGLING_IMAGES=$(docker images -f "dangling=true" -q | wc -l | tr -d ' ')
+    if [ "${DANGLING_IMAGES}" -gt 0 ]; then
+      echo "🗑️  Removing ${DANGLING_IMAGES} dangling images"
+      docker images -f "dangling=true" -q | xargs -r docker rmi -f
+    fi
+    
+    # Clean up old Jenkins images (keep last 3 versions)
+    echo "🏷️  Cleaning up old Jenkins images (keeping last 3 versions)"
+    
+    # Function to clean up old images for specific repository
+    cleanup_old_images() {
+      local repo="$1"
+      local keep_count=3
+      
+      # Get image IDs sorted by creation date (newest first)
+      local old_images=$(docker images "${repo}" --format "{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.CreatedAt{{ '}}' }}" | \
+        sort -k2 -r | \
+        tail -n +$((keep_count + 1)) | \
+        cut -d' ' -f1)
+      
+      if [ -n "${old_images}" ]; then
+        echo "  📦 Removing old ${repo} images"
+        echo "${old_images}" | xargs -r docker rmi -f
+      fi
+    }
+    
+    # Clean up each image repository
+    cleanup_old_images "jenkins/jenkins-master"
+    cleanup_old_images "jenkins/jenkins-agent-dind"
+    cleanup_old_images "jenkins/jenkins-agent-maven"
+    cleanup_old_images "jenkins/jenkins-agent-python"
+    cleanup_old_images "jenkins/jenkins-agent-nodejs"
+    
+    # BuildKit builder maintenance
+    if docker buildx inspect jenkins-builder >/dev/null 2>&1; then
+      echo "🏗️  Performing BuildKit builder maintenance"
+      
+      # Prune build cache older than 7 days
+      docker buildx prune --builder jenkins-builder --filter "until=168h" --force >/dev/null 2>&1 || true
+      
+      # Check builder disk usage
+      BUILDER_SIZE=$(docker system df --format "table {{ '{{' }}.Type{{ '}}' }}\t{{ '{{' }}.Size{{ '}}' }}" | grep -E "Build|Cache" | awk '{sum += $2} END {print sum}' || echo "0")
+      echo "💾 Builder cache size: ${BUILDER_SIZE} bytes"
+      
+      # If cache is too large (> 5GB), aggressive cleanup
+      if [ "${BUILDER_SIZE}" -gt 5368709120 ]; then
+        echo "⚠️  Large build cache detected, performing aggressive cleanup"
+        docker buildx prune --builder jenkins-builder --all --force >/dev/null 2>&1 || true
+      fi
+    fi
+    
+    # System-wide Docker cleanup
+    echo "🧽 Running system-wide Docker cleanup"
+    docker system prune -f >/dev/null 2>&1 || true
+    
+    # Final disk usage report
+    TOTAL_SIZE=$(docker system df --format "table {{ '{{' }}.Type{{ '}}' }}\t{{ '{{' }}.Size{{ '}}' }}" | awk 'NR>1 {sum += $2} END {print sum}' || echo "0")
+    echo "📊 Total Docker disk usage: $(echo $TOTAL_SIZE | numfmt --to=iec)"
+    
+    echo "✅ Cleanup completed successfully"
+  register: cleanup_result
+  changed_when: cleanup_result.stdout_lines | select('match', '.*Removing.*') | list | length > 0
   when: jenkins_images_cleanup | default(true)
 
 - name: Create dynamic images built list
@@ -260,42 +793,124 @@
 #     images_built: "{{ images_built_list | default([]) }}"
 #   when: images_built_list is defined and images_built_list | length > 0
 
-- name: Display image build summary
+- name: Generate comprehensive build report
+  set_fact:
+    jenkins_build_report:
+      build_timestamp: "{{ ansible_date_time.iso8601 }}"
+      build_configuration:
+        images_to_build: "{{ images_to_build }}"
+        force_rebuild: "{{ jenkins_images_force_rebuild | default(false) }}"
+        push_enabled: "{{ jenkins_images_push | default(true) }}"
+        buildkit_enabled: "{{ jenkins_build_use_buildkit | default(true) }}"
+        validation_enabled: "{{ jenkins_build_validate_images | default(true) }}"
+        security_scan_enabled: "{{ jenkins_build_scan_vulnerabilities | default(true) }}"
+      build_results:
+        jenkins_master:
+          built: "{{ (images_to_build == 'all' or images_to_build == 'master') and master_image_build is defined }}"
+          method: "{{ master_image_build.build_method | default('not_built') }}"
+          image_id: "{{ master_image_build.image.Id | default('unknown') }}"
+          validated: "{{ master_image_validation is defined and master_image_validation is succeeded }}"
+        jenkins_agents:
+          dind:
+            built: "{{ (images_to_build == 'all' or images_to_build == 'dind-agent') and dind_image_build is defined }}"
+            method: "{{ dind_image_build.build_method | default('not_built') }}"
+            image_id: "{{ dind_image_build.image.Id | default('unknown') }}"
+            validated: "{{ dind_image_validation is defined and dind_image_validation is succeeded }}"
+          maven:
+            built: "{{ (images_to_build == 'all' or images_to_build == 'maven-agent') and maven_image_build is defined }}"
+            method: "{{ maven_image_build.build_method | default('not_built') }}"
+            image_id: "{{ maven_image_build.image.Id | default('unknown') }}"
+            validated: "{{ maven_image_validation is defined and maven_image_validation is succeeded }}"
+          python:
+            built: "{{ (images_to_build == 'all' or images_to_build == 'python-agent') and python_image_build is defined }}"
+            method: "{{ python_image_build.build_method | default('not_built') }}"
+            image_id: "{{ python_image_build.image.Id | default('unknown') }}"
+            validated: "{{ python_image_validation is defined and python_image_validation is succeeded }}"
+          nodejs:
+            built: "{{ (images_to_build == 'all' or images_to_build == 'nodejs-agent') and nodejs_image_build is defined }}"
+            method: "{{ nodejs_image_build.build_method | default('not_built') }}"
+            image_id: "{{ nodejs_image_build.image.Id | default('unknown') }}"
+            validated: "{{ nodejs_image_validation is defined and nodejs_image_validation is succeeded }}"
+      build_environment:
+        buildkit_available: "{{ buildkit_check.stdout | default('unknown') }}"
+        builder_name: "{{ buildkit_builder_setup.stdout_lines | select('match', '.*builder.*') | first | default('default') }}"
+        ansible_host: "{{ inventory_hostname }}"
+        ansible_user: "{{ ansible_user | default(ansible_ssh_user) | default('unknown') }}"
+
+- name: Display comprehensive build summary
   debug:
     msg: |
       🎉 Jenkins Images Build Completed!
       
-      🎯 Images to Build: {{ images_to_build }}
-      📦 Successfully Built Images ({{ images_built_list | default([]) | length }}):
-      {% for image in images_built_list | default([]) %}
-      • {{ image.name }}: jenkins/{{ image.name }}:{{ image.tag }}
-      {% endfor %}
+      📋 Build Configuration:
+      ┌─ Images to Build: {{ jenkins_build_report.build_configuration.images_to_build }}
+      ├─ Force Rebuild: {{ jenkins_build_report.build_configuration.force_rebuild }}
+      ├─ BuildKit Enabled: {{ jenkins_build_report.build_configuration.buildkit_enabled }}
+      ├─ Security Scan: {{ jenkins_build_report.build_configuration.security_scan_enabled }}
+      └─ Validation: {{ jenkins_build_report.build_configuration.validation_enabled }}
       
-      🏷️ Registry: docker.io/jenkins
-      📅 Build Date: {{ ansible_date_time.iso8601 }}
-      🔨 Force Rebuild: {{ jenkins_images_force_rebuild | default(false) }}
-      📤 Push to Registry: {{ jenkins_images_push | default(true) }}
-
-- name: Display individual image build status
-  debug:
-    msg: |
-      📊 Image Build Status Details:
+      🏗️ Build Environment:
+      ┌─ BuildKit Available: {{ jenkins_build_report.build_environment.buildkit_available }}
+      ├─ Builder: {{ jenkins_build_report.build_environment.builder_name }}
+      ├─ Host: {{ jenkins_build_report.build_environment.ansible_host }}
+      └─ Timestamp: {{ jenkins_build_report.build_timestamp }}
       
-      • Jenkins Master: {{ 'BUILT' if (images_to_build == 'all' or images_to_build == 'master') and master_image_build is defined else 'SKIPPED' }}
-      • DIND Agent: {{ 'BUILT' if (images_to_build == 'all' or images_to_build == 'dind-agent') and dind_image_build is defined else 'SKIPPED' }}
-      • Maven Agent: {{ 'BUILT' if (images_to_build == 'all' or images_to_build == 'maven-agent') and maven_image_build is defined else 'SKIPPED' }}
-      • Python Agent: {{ 'BUILT' if (images_to_build == 'all' or images_to_build == 'python-agent') and python_image_build is defined else 'SKIPPED' }}
-      • Node.js Agent: {{ 'BUILT' if (images_to_build == 'all' or images_to_build == 'nodejs-agent') and nodejs_image_build is defined else 'SKIPPED' }}
+      📦 Build Results:
+      ┌─ Jenkins Master:
+      │  ├─ Built: {{ '✅' if jenkins_build_report.build_results.jenkins_master.built else '⏭️' }} ({{ jenkins_build_report.build_results.jenkins_master.method }})
+      │  ├─ Validated: {{ '✅' if jenkins_build_report.build_results.jenkins_master.validated else '⚠️' }}
+      │  └─ Image ID: {{ jenkins_build_report.build_results.jenkins_master.image_id[:12] }}...
+      ├─ DIND Agent:
+      │  ├─ Built: {{ '✅' if jenkins_build_report.build_results.jenkins_agents.dind.built else '⏭️' }} ({{ jenkins_build_report.build_results.jenkins_agents.dind.method }})
+      │  ├─ Validated: {{ '✅' if jenkins_build_report.build_results.jenkins_agents.dind.validated else '⚠️' }}
+      │  └─ Image ID: {{ jenkins_build_report.build_results.jenkins_agents.dind.image_id[:12] }}...
+      ├─ Maven Agent:
+      │  ├─ Built: {{ '✅' if jenkins_build_report.build_results.jenkins_agents.maven.built else '⏭️' }} ({{ jenkins_build_report.build_results.jenkins_agents.maven.method }})
+      │  ├─ Validated: {{ '✅' if jenkins_build_report.build_results.jenkins_agents.maven.validated else '⚠️' }}
+      │  └─ Image ID: {{ jenkins_build_report.build_results.jenkins_agents.maven.image_id[:12] }}...
+      ├─ Python Agent:
+      │  ├─ Built: {{ '✅' if jenkins_build_report.build_results.jenkins_agents.python.built else '⏭️' }} ({{ jenkins_build_report.build_results.jenkins_agents.python.method }})
+      │  ├─ Validated: {{ '✅' if jenkins_build_report.build_results.jenkins_agents.python.validated else '⚠️' }}
+      │  └─ Image ID: {{ jenkins_build_report.build_results.jenkins_agents.python.image_id[:12] }}...
+      └─ Node.js Agent:
+         ├─ Built: {{ '✅' if jenkins_build_report.build_results.jenkins_agents.nodejs.built else '⏭️' }} ({{ jenkins_build_report.build_results.jenkins_agents.nodejs.method }})
+         ├─ Validated: {{ '✅' if jenkins_build_report.build_results.jenkins_agents.nodejs.validated else '⚠️' }}
+         └─ Image ID: {{ jenkins_build_report.build_results.jenkins_agents.nodejs.image_id[:12] }}...
 
-- name: Fail if no images were built
+- name: Export build report to file
+  copy:
+    content: "{{ jenkins_build_report | to_nice_yaml }}"
+    dest: "{{ jenkins_images_build_dir }}/build-report-{{ ansible_date_time.epoch }}.yml"
+    mode: '0644'
+  when: jenkins_build_export_report | default(true)
+
+- name: Validate build completion
   fail:
     msg: |
-      ❌ No images were built! 
+      ❌ Jenkins Image Build Validation Failed!
       
-      Selected: {{ images_to_build }}
-      Possible values: all, master, dind-agent, maven-agent, python-agent, nodejs-agent
+      🎯 Selected: {{ images_to_build }}
+      📋 Valid options: all, master, dind-agent, maven-agent, python-agent, nodejs-agent
       
-      Please check your images_to_build parameter.
+      🔍 Build Status:
+      • Jenkins Master: {{ 'BUILT' if jenkins_build_report.build_results.jenkins_master.built else 'NOT BUILT' }}
+      • DIND Agent: {{ 'BUILT' if jenkins_build_report.build_results.jenkins_agents.dind.built else 'NOT BUILT' }}
+      • Maven Agent: {{ 'BUILT' if jenkins_build_report.build_results.jenkins_agents.maven.built else 'NOT BUILT' }}
+      • Python Agent: {{ 'BUILT' if jenkins_build_report.build_results.jenkins_agents.python.built else 'NOT BUILT' }}
+      • Node.js Agent: {{ 'BUILT' if jenkins_build_report.build_results.jenkins_agents.nodejs.built else 'NOT BUILT' }}
+      
+      🛠️ Environment Info:
+      • BuildKit Available: {{ jenkins_build_report.build_environment.buildkit_available }}
+      • Builder: {{ jenkins_build_report.build_environment.builder_name }}
+      • Host: {{ jenkins_build_report.build_environment.ansible_host }}
+      
+      Please check the build logs and configuration.
   when: 
-    - images_built_list is not defined or images_built_list | length == 0
+    - not (
+        jenkins_build_report.build_results.jenkins_master.built or
+        jenkins_build_report.build_results.jenkins_agents.dind.built or
+        jenkins_build_report.build_results.jenkins_agents.maven.built or
+        jenkins_build_report.build_results.jenkins_agents.python.built or
+        jenkins_build_report.build_results.jenkins_agents.nodejs.built
+      )
     - images_to_build != ''

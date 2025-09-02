@@ -139,6 +139,28 @@ scripts/rollback-smart-sharing.sh --team devops
 ansible-playbook ansible/site.yml --tags shared-storage,validation
 ```
 
+### Unified Data Management Commands (Enterprise Backup & Sync)
+```bash
+# Basic operations
+scripts/unified-devops-manager.sh --sync-only             # Traditional sync operations
+scripts/unified-devops-manager.sh --backup-only           # Backup operations only  
+scripts/unified-devops-manager.sh --sync-and-backup       # Parallel sync and backup
+
+# Sequential operations
+scripts/unified-devops-manager.sh --backup-then-sync      # Backup first, then sync
+scripts/unified-devops-manager.sh --sync-then-backup      # Sync first, then backup
+
+# Advanced targeting
+scripts/unified-devops-manager.sh --target green --sync-only        # Blue-green sync
+scripts/unified-devops-manager.sh --backup-only --retention 30      # Custom retention  
+scripts/unified-devops-manager.sh --sync-and-backup --dry-run       # Preview operations
+scripts/unified-devops-manager.sh --backup-then-sync --verbose      # Detailed logging
+
+# Team-specific operations
+scripts/unified-developer-manager.sh --sync-only          # Developer team sync only
+scripts/unified-qa-manager.sh --backup-then-sync          # QA team backup then sync
+```
+
 ### Environment Setup
 ```bash
 # Install Python dependencies
@@ -186,10 +208,9 @@ scripts/disaster-recovery.sh production --validate
 10. **Post-Deployment Verification**: Multi-layer health checks, security validation, and comprehensive deployment summary
 
 ### Key Ansible Roles
-- `jenkins-master-v2`: **OPTIMIZED** Unified Jenkins deployment with single configuration per team, **resource-optimized blue-green deployment** (active-only containers), production-safe DSL architecture, and 55% code reduction (4 files vs 13 files)
+- `jenkins-master-v2`: **OPTIMIZED** Unified Jenkins deployment with single configuration per team, **resource-optimized blue-green deployment** (active-only containers), production-safe DSL architecture, 55% code reduction (4 files vs 13 files), and **INTEGRATED BACKUP** via unified-data-manager.sh with 5-mode operations
 - `high-availability-v2`: **ENHANCED** Advanced HA configuration with perfect jenkins-master-v2 compatibility, dynamic team discovery, resource-optimized blue-green deployment, and **NEW** dynamic SSL certificate generation based on `jenkins_teams`
 - `monitoring`: Enhanced Prometheus/Grafana stack with 26-panel dashboards, DORA metrics, SLI tracking, and automated alerting
-- `backup`: Enterprise-grade automated backup procedures with RTO/RPO compliance and disaster recovery automation
 - `security`: **REFACTORED** System hardening and compliance validation (SSL generation moved to high-availability-v2 for better separation of concerns)
 - `common`: System bootstrap with pre-deployment validation framework
 
@@ -298,7 +319,7 @@ Required inventory groups for proper deployment:
 - **Compliance Reporting**: RTO/RPO compliance tracking with automated reporting and alerting
 
 ### Development and Code Quality
-- **🪝 Comprehensive Pre-commit Framework**: **NEW** Advanced code quality enforcement with automated validation pipeline including:
+- **Comprehensive Pre-commit Framework**: **NEW** Advanced code quality enforcement with automated validation pipeline including:
   - **Groovy Validation**: Syntax checking for all 22 Groovy files with Groovy compiler integration and fallback validation
   - **Jenkinsfile Validation**: Structure validation for all 7 Jenkinsfiles with pipeline best practices enforcement
   - **Security Scanning**: Multi-pattern security analysis with 25+ risk detection patterns
@@ -308,3 +329,6 @@ Required inventory groups for proper deployment:
   - **Multiple Output Formats**: Text and JSON reporting for human and machine consumption
   - **Complexity Analysis**: Code complexity monitoring with configurable thresholds and reporting
 - always update documentation for the work in repository.
+- use code-searcher for all the code scanning
+- never use Unicode emoji symbols or images in the code, like these ❌
+- always use bash-executor for running any bash commands

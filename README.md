@@ -43,6 +43,7 @@ This infrastructure provides:
 - **Dynamic Agent Templates**: On-demand containerized agents with security constraints
 - **Monitoring**: Enhanced Grafana dashboards with SLI tracking and DORA metrics
 - **Storage**: NFS/GlusterFS shared storage with encryption and access controls
+- **Unified Backup System**: Team-specific backup and sync integrated into jenkins-master-v2 role with 5-mode operations
 - **Security**: Trivy vulnerability scanning, container security monitoring, and compliance validation
 - **Code Quality Framework**: Pre-commit hooks with Groovy/Jenkins validation, security scanning, and CI/CD integration
 
@@ -122,8 +123,8 @@ make dev-test                   # Run fast development tests
 # Monitor infrastructure
 make monitor
 
-# Run backups and disaster recovery
-make backup
+# Team-specific backup and sync operations (integrated into jenkins deployment)
+# Backup functionality is now handled by unified-data-manager.sh per team
 ./scripts/disaster-recovery.sh production --validate
 
 # Comprehensive security operations
@@ -729,19 +730,19 @@ Required inventory groups:
 jenkins_masters:
   hosts:
     jenkins-01:
-      ansible_host: 192.168.86.30
+      ansible_host: 192.168.188.142
     jenkins-02:
-      ansible_host: 192.168.86.30
+      ansible_host: 192.168.188.142
 
 load_balancers:
   hosts:
     haproxy-01:
-      ansible_host: 192.168.86.30
+      ansible_host: 192.168.188.142
 
 monitoring:
   hosts:
     monitoring-01:
-      ansible_host: 192.168.86.30
+      ansible_host: 192.168.188.142
 ```
 
 ### 3. Vault Setup

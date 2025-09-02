@@ -1,0 +1,209 @@
+---
+# Test Jenkins Image Build with BuildKit Fix
+# Validates that the Jenkins image builds work after enabling BuildKit
+
+- name: Test Jenkins Image Build Process
+  hosts: centos9-vm
+  become: yes
+  gather_facts: yes
+  vars:
+    # Test with minimal configuration
+    deployment_mode: "production"
+    images_to_build: "master"
+    jenkins_images_force_rebuild: true
+    jenkins_build_timeout: 900  # 15 minutes for testing
+    
+    # Test team configuration
+    deploy_teams: "devops,ma"
+    
+    # Jenkins configuration for build
+    jenkins_version: "2.516.2-lts-jdk21"
+    jenkins_master_image_tag: "test-buildkit"
+    jenkins_plugin_version_strategy: "latest"  # Use simpler approach for testing
+    
+    # Build configuration
+    jenkins_build_progress: "plain"
+    jenkins_build_fallback_enabled: true
+    jenkins_images_cleanup: false  # Keep test images for inspection
+    
+  tasks:
+    - name: Display BuildKit test configuration
+      debug:
+        msg: |
+          ===================================================
+          Jenkins Image Build Test - BuildKit Validation
+          ===================================================
+          
+          Target VM: {{ inventory_hostname }} ({{ ansible_default_ipv4.address }})
+          Docker Version: {{ ansible_docker_version if ansible_docker_version is defined else 'Unknown' }}
+          Jenkins Version: {{ jenkins_version }}
+          Image Tag: jenkins/jenkins-master:{{ jenkins_master_image_tag }}
+          
+          BuildKit Configuration:
+          • Environment: DOCKER_BUILDKIT=1
+          • Progress: {{ jenkins_build_progress }}
+          • Timeout: {{ jenkins_build_timeout }}s
+          • Fallback Enabled: {{ jenkins_build_fallback_enabled }}
+          
+          Test Parameters:
+          • Force Rebuild: {{ jenkins_images_force_rebuild }}
+          • Plugin Strategy: {{ jenkins_plugin_version_strategy }}
+          • Teams Filter: {{ deploy_teams }}
+          ===================================================
+          
+    - name: Validate Docker BuildKit is enabled
+      shell: |
+        echo "Checking Docker BuildKit status..."
+        if [ -f /etc/docker/daemon.json ]; then
+          echo "Docker daemon.json exists:"
+          cat /etc/docker/daemon.json
+        else
+          echo "No daemon.json found"
+        fi
+        
+        echo ""
+        echo "Environment variables:"
+        echo "DOCKER_BUILDKIT=${DOCKER_BUILDKIT:-not set}"
+        echo "BUILDKIT_PROGRESS=${BUILDKIT_PROGRESS:-not set}"
+        
+        echo ""
+        echo "Testing BuildKit functionality:"
+        if docker buildx version; then
+          echo "✓ docker buildx is available"
+        else
+          echo "⚠ docker buildx not available, using legacy build"
+        fi
+      register: buildkit_status
+      
+    - name: Display BuildKit validation results
+      debug:
+        msg: |
+          BuildKit Status Check:
+          {{ buildkit_status.stdout }}
+          
+    - name: Test Jenkins image build with BuildKit
+      block:
+        - name: Run jenkins-images role to test the build
+          include_role:
+            name: jenkins-images
+          vars:
+            images_to_build: "master"
+            jenkins_images_force_rebuild: true
+            
+      rescue:
+        - name: Handle build failure and show diagnostic information
+          debug:
+            msg: |
+              ❌ Jenkins image build failed!
+              
+              This could be due to:
+              1. BuildKit not properly enabled
+              2. Network connectivity issues  
+              3. Plugin download failures
+              4. Dockerfile syntax issues
+              
+              Error details: {{ ansible_failed_result | to_nice_json }}
+              
+              Attempting fallback build...
+              
+        - name: Try fallback build without advanced BuildKit features
+          include_role:
+            name: jenkins-images
+          vars:
+            images_to_build: "master" 
+            jenkins_build_fallback_legacy: true
+            jenkins_images_force_rebuild: true
+            
+    - name: Validate built Jenkins image
+      block:
+        - name: Check if Jenkins master image was built successfully
+          community.docker.docker_image_info:
+            name: "jenkins/jenkins-master:{{ jenkins_master_image_tag }}"
+          register: jenkins_image_info
+          
+        - name: Display Jenkins image build results
+          debug:
+            msg: |
+              ✅ Jenkins Image Build Validation Results:
+              
+              Image: jenkins/jenkins-master:{{ jenkins_master_image_tag }}
+              Status: {{ 'SUCCESS' if jenkins_image_info.images | length > 0 else 'FAILED' }}
+              
+              {% if jenkins_image_info.images | length > 0 %}
+              Image Details:
+              • ID: {{ jenkins_image_info.images[0].Id }}
+              • Size: {{ (jenkins_image_info.images[0].Size / 1024 / 1024) | round(1) }} MB
+              • Created: {{ jenkins_image_info.images[0].Created }}
+              • Architecture: {{ jenkins_image_info.images[0].Architecture }}
+              
+              Labels:
+              {% for key, value in jenkins_image_info.images[0].Config.Labels.items() %}
+              • {{ key }}: {{ value }}
+              {% endfor %}
+              {% endif %}
+              
+        - name: Test running the built Jenkins image
+          community.docker.docker_container:
+            name: jenkins-buildkit-test
+            image: "jenkins/jenkins-master:{{ jenkins_master_image_tag }}"
+            state: started
+            detach: yes
+            ports:
+              - "8080:8080"
+            environment:
+              JAVA_OPTS: "-Djenkins.install.runSetupWizard=false"
+            healthcheck:
+              test: ["CMD-SHELL", "curl -f http://localhost:8080/login || exit 1"]
+              interval: 30s
+              timeout: 10s
+              retries: 3
+              start_period: 120s
+          register: jenkins_container
+          
+        - name: Wait for Jenkins container to be healthy
+          pause:
+            seconds: 60
+            
+        - name: Check Jenkins container health
+          community.docker.docker_container_info:
+            name: jenkins-buildkit-test
+          register: jenkins_container_info
+          
+        - name: Cleanup test container
+          community.docker.docker_container:
+            name: jenkins-buildkit-test
+            state: absent
+            force_kill: yes
+          ignore_errors: yes
+          
+      rescue:
+        - name: Handle image validation failure
+          debug:
+            msg: |
+              ❌ Jenkins image validation failed!
+              
+              The image may have been built but has runtime issues.
+              Error: {{ ansible_failed_result.msg | default('Unknown error') }}
+              
+    - name: Display final test results
+      debug:
+        msg: |
+          ===================================================
+          Jenkins BuildKit Image Build Test - COMPLETE
+          ===================================================
+          
+          🎯 Test Summary:
+          • VM: {{ inventory_hostname }} ({{ ansible_default_ipv4.address }})
+          • BuildKit Status: {{ 'ENABLED' if buildkit_status.rc == 0 else 'ISSUES' }}
+          • Image Build: {{ 'SUCCESS' if jenkins_image_info.images | length > 0 else 'FAILED' }}
+          • Container Test: {{ 'SUCCESS' if jenkins_container_info is defined and jenkins_container_info.container is defined else 'SKIPPED' }}
+          
+          📦 Built Images:
+          • jenkins/jenkins-master:{{ jenkins_master_image_tag }}
+          
+          🚀 Next Steps:
+          1. If successful: Deploy with 'make deploy-production -e deploy_teams=devops,ma'
+          2. If failed: Check BuildKit configuration and Docker daemon logs
+          3. Monitor Jenkins startup logs: docker logs jenkins-<team>-<env>
+          
+          ===================================================

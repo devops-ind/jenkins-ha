@@ -23,8 +23,8 @@ pipelineJob('Infrastructure/Ansible-Image-Builder') {
     parameters {
         textParam('TARGET_HOSTS', '', '''List of target hosts for image building (one per line)
 Example:
-192.168.86.30
-192.168.86.30
+192.168.188.142
+192.168.188.142
 build-server-1.example.com''')
         
         credentialsParam('SSH_PRIVATE_KEY_ID') {

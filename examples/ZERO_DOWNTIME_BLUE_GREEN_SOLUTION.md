@@ -61,11 +61,11 @@ notify: reload haproxy config  # Instead of restart haproxy container
 ./haproxy-runtime-api.sh disable jenkins_backend_devops devops-active
 
 # Add/remove servers dynamically  
-./haproxy-runtime-api.sh add jenkins_backend_devops devops-green 192.168.86.30 8180
+./haproxy-runtime-api.sh add jenkins_backend_devops devops-green 192.168.188.142 8180
 ./haproxy-runtime-api.sh remove jenkins_backend_devops devops-blue
 
 # Zero-downtime blue-green switch via runtime API
-./haproxy-runtime-api.sh switch devops blue green 8080 192.168.86.30
+./haproxy-runtime-api.sh switch devops blue green 8080 192.168.188.142
 
 # Real-time status monitoring
 ./haproxy-runtime-api.sh status jenkins_backend_devops
