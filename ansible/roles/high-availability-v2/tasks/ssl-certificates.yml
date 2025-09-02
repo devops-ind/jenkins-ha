@@ -10,7 +10,7 @@
       - Wildcard Domain: {{ jenkins_wildcard_domain | default('*.devops.local') }}
       - Environment: {{ deployment_environment | default('local') }}
       - SSL Enabled: {{ ssl_enabled | default(false) }}
-      - Teams: {{ jenkins_teams | map(attribute='team_name') | list | join(', ') if jenkins_teams is defined else 'None' }}
+      - Teams: {{ (jenkins_teams | selectattr('team_name', 'defined') | map(attribute='team_name') | list | join(', ')) if (jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0) else 'None' }}
   tags: ['ssl', 'debug']
 
 - name: Create SSL directories for HAProxy certificates
@@ -50,7 +50,7 @@
           "DNS:" + (jenkins_domain | default('devops.local')),
           "DNS:jenkins." + (jenkins_domain | default('devops.local'))
         ] +
-        (jenkins_teams | default([]) | map(attribute='team_name') | map('regex_replace', '^(.*)$', 'DNS:\\1jenkins.' + (jenkins_domain | default('devops.local'))) | list) +
+        ((jenkins_teams | selectattr('team_name', 'defined') | map(attribute='team_name') | map('regex_replace', '^(.*)$', 'DNS:\\1jenkins.' + (jenkins_domain | default('devops.local'))) | list) if (jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0) else []) +
         [
           "DNS:prometheus." + (jenkins_domain | default('devops.local')),
           "DNS:grafana." + (jenkins_domain | default('devops.local')), 
@@ -244,7 +244,7 @@
         [
           "127.0.0.1 jenkins." + (jenkins_domain | default('devops.local'))
         ] +
-        (jenkins_teams | default([]) | map(attribute='team_name') | map('regex_replace', '^(.*)$', '127.0.0.1 \\1jenkins.' + (jenkins_domain | default('devops.local'))) | list) +
+        ((jenkins_teams | selectattr('team_name', 'defined') | map(attribute='team_name') | map('regex_replace', '^(.*)$', '127.0.0.1 \\1jenkins.' + (jenkins_domain | default('devops.local'))) | list) if (jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0) else []) +
         [
           "127.0.0.1 prometheus." + (jenkins_domain | default('devops.local')),
           "127.0.0.1 grafana." + (jenkins_domain | default('devops.local')),
@@ -272,9 +272,11 @@
       Wildcard Domain: {{ jenkins_wildcard_domain | default('*.devops.local') }}
       
       Supported Team Subdomains:
-      {% if jenkins_teams is defined and jenkins_teams | length > 0 %}
+      {% if jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0 %}
       {% for team in jenkins_teams %}
-      - {{ team.team_name }}jenkins.{{ jenkins_domain | default('devops.local') }} ({{ team.labels.role | default(team.team_name + ' team') }})
+      {% if team is mapping and team.team_name is defined %}
+      - {{ team.team_name }}jenkins.{{ jenkins_domain | default('devops.local') }} ({{ team.labels.role | default(team.team_name + ' team') if (team.labels is defined and team.labels is mapping) else (team.team_name + ' team') }})
+      {% endif %}
       {% endfor %}
       {% else %}
       - jenkins.{{ jenkins_domain | default('devops.local') }} (default single-team setup)
@@ -296,9 +298,11 @@
       {% endfor %}
       
       Then access your services via HTTPS:
-      {% if jenkins_teams is defined and jenkins_teams | length > 0 %}
+      {% if jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0 %}
       {% for team in jenkins_teams %}
+      {% if team is mapping and team.team_name is defined %}
       - https://{{ team.team_name }}jenkins.{{ jenkins_domain | default('devops.local') }}
+      {% endif %}
       {% endfor %}
       {% endif %}
       - https://prometheus.{{ jenkins_domain | default('devops.local') }}

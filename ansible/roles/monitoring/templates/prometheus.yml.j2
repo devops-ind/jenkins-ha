@@ -22,9 +22,22 @@ scrape_configs:
   - job_name: '{{ target.job }}'
     static_configs:
       - targets: {{ target.targets | to_json }}
-{% if target.job == 'jenkins' %}
+    {% if target.job is defined and (target.job.startswith('jenkins') or target.job == 'jenkins') %}
+    # Jenkins-specific configuration
     metrics_path: /prometheus
-{% endif %}
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    {% if target.team_name is defined %}
+    # Team-specific labels for better metrics organization
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        target_label: jenkins_team
+        replacement: '{{ target.team_name }}'
+      - source_labels: [__name__]
+        target_label: jenkins_environment
+        replacement: '{{ target.active_environment | default("blue") }}'
+    {% endif %}
+    {% endif %}
 {% endfor %}
 
 {% if cadvisor_enabled | default(true) %}

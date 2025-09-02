@@ -120,7 +120,7 @@ main() {
     echo ""
     
     # Check team endpoints
-    {% if jenkins_teams is defined and jenkins_teams | length > 0 %}
+    {% if jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0 %}
     echo "Team Health Checks:"
     echo "-------------------"
     {% for team in jenkins_teams %}

@@ -207,19 +207,68 @@
   hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'load_balancers:jenkins_masters') }}"
   become: yes
   gather_facts: yes
+  pre_tasks:
+    - name: Apply team filtering logic for HAProxy configuration - Deploy Teams
+      set_fact:
+        jenkins_teams_for_haproxy: "{{ jenkins_teams_config | selectattr('team_name', 'in', deploy_teams.split(',') | map('trim') | list) | list }}"
+      when: deploy_teams is defined and deploy_teams != ""
+      tags: ['ha', 'filter']
+
+    - name: Apply team filtering logic for HAProxy configuration - Exclude Teams
+      set_fact:
+        jenkins_teams_for_haproxy: "{{ jenkins_teams_config | rejectattr('team_name', 'in', exclude_teams.split(',') | map('trim') | list) | list }}"
+      when: 
+        - exclude_teams is defined and exclude_teams != ""
+        - deploy_teams is not defined or deploy_teams == ""
+      tags: ['ha', 'filter']
+
+    - name: Apply team filtering logic for HAProxy configuration - All Teams
+      set_fact:
+        jenkins_teams_for_haproxy: "{{ jenkins_teams_config | default([]) }}"
+      when:
+        - deploy_teams is not defined or deploy_teams == ""
+        - exclude_teams is not defined or exclude_teams == ""
+      tags: ['ha', 'filter']
   roles:
     - role: high-availability-v2
+      vars:
+        jenkins_teams: "{{ jenkins_teams_for_haproxy }}"
       tags: ['ha', 'cluster', 'haproxy', 'loadbalancer']
       when: 
         - (jenkins_ha_enabled | default(false)) | bool
-        - (groups['jenkins_masters'] | default([]) | length > 1) or (jenkins_teams | default([]) | length > 1)
+        - (groups['jenkins_masters'] | default([]) | length > 1) or (jenkins_teams_for_haproxy | default([]) | length > 1)
 
 - name: Setup Monitoring Stack
   hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'monitoring') }}"
   become: yes
   gather_facts: yes
+  pre_tasks:
+    - name: Apply team filtering logic for Monitoring configuration - Deploy Teams
+      set_fact:
+        jenkins_teams_for_monitoring: "{{ jenkins_teams_config | selectattr('team_name', 'in', deploy_teams.split(',') | map('trim') | list) | list }}"
+      when: deploy_teams is defined and deploy_teams != ""
+      tags: ['monitoring', 'filter']
+
+    - name: Apply team filtering logic for Monitoring configuration - Exclude Teams
+      set_fact:
+        jenkins_teams_for_monitoring: "{{ jenkins_teams_config | rejectattr('team_name', 'in', exclude_teams.split(',') | map('trim') | list) | list }}"
+      when: 
+        - exclude_teams is defined and exclude_teams != ""
+        - deploy_teams is not defined or deploy_teams == ""
+      tags: ['monitoring', 'filter']
+
+    - name: Apply team filtering logic for Monitoring configuration - All Teams
+      set_fact:
+        jenkins_teams_for_monitoring: "{{ jenkins_teams_config | default([]) }}"
+      when:
+        - deploy_teams is not defined or deploy_teams == ""
+        - exclude_teams is not defined or exclude_teams == ""
+      tags: ['monitoring', 'filter']
   roles:
     - role: monitoring
+      vars:
+        jenkins_teams: "{{ jenkins_teams_for_monitoring }}"
+        jenkins_deployment_mode: "{{ 'multi-team' if jenkins_teams_for_monitoring | length > 1 else 'single-team' }}"
       tags: ['monitoring', 'prometheus', 'grafana']
       when: monitoring_enabled | default(true)
 
@@ -231,6 +280,40 @@
   become: no
   gather_facts: yes
   tasks:
+    - name: Apply robust team filtering logic for verification - Deploy Teams
+      set_fact:
+        jenkins_teams_for_verification: "{{ jenkins_teams_config | default([]) | selectattr('team_name', 'in', deploy_teams.split(',') | map('trim') | list) | list }}"
+      when: deploy_teams is defined and deploy_teams != ""
+      tags: ['verify', 'filter']
+
+    - name: Apply robust team filtering logic for verification - Exclude Teams
+      set_fact:
+        jenkins_teams_for_verification: "{{ jenkins_teams_config | default([]) | rejectattr('team_name', 'in', exclude_teams.split(',') | map('trim') | list) | list }}"
+      when: 
+        - exclude_teams is defined and exclude_teams != ""
+        - deploy_teams is not defined or deploy_teams == ""
+      tags: ['verify', 'filter']
+
+    - name: Apply robust team filtering logic for verification - All Teams
+      set_fact:
+        jenkins_teams_for_verification: "{{ jenkins_teams_config | default([]) }}"
+      when:
+        - deploy_teams is not defined or deploy_teams == ""
+        - exclude_teams is not defined or exclude_teams == ""
+      tags: ['verify', 'filter']
+
+    - name: Display teams for verification
+      debug:
+        msg: |
+          [VERIFICATION] Team Filtering Summary:
+          {% if jenkins_teams_for_verification | length > 0 %}
+          Teams to Verify: {{ jenkins_teams_for_verification | map(attribute='team_name') | list | join(', ') }}
+          Teams Count: {{ jenkins_teams_for_verification | length }}
+          {% else %}
+          No teams to verify (all teams filtered out)
+          {% endif %}
+      tags: ['verify', 'filter']
+
     - name: Verify Jenkins teams accessibility
       uri:
         url: "http://{{ ansible_default_ipv4.address }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web | default(8080) }}{% else %}{{ (item.ports.web | default(8080)) + 100 }}{% endif %}/api/json"
@@ -240,7 +323,7 @@
         force_basic_auth: yes
         status_code: [200, 403]
       register: jenkins_team_checks
-      loop: "{{ jenkins_teams | default([{'team_name': 'default', 'ports': {'web': 8080}}]) }}"
+      loop: "{{ jenkins_teams_for_verification | default([{'team_name': 'default', 'ports': {'web': 8080}}]) }}"
       ignore_errors: yes
       tags: ['verify', 'api']
 

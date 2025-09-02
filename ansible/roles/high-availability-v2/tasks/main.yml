@@ -25,7 +25,7 @@
     msg: |
       HAProxy Deployment Configuration:
       Mode: {{ haproxy_deployment_mode }}
-      Teams: {{ haproxy_effective_teams | map(attribute='team_name') | list | join(', ') if haproxy_effective_teams else 'single-team' }}
+      Teams: {{ (haproxy_effective_teams | selectattr('team_name', 'defined') | map(attribute='team_name') | list | join(', ')) if (haproxy_effective_teams is iterable and haproxy_effective_teams is not string and haproxy_effective_teams | length > 0) else 'single-team' }}
       Container Runtime: {{ haproxy_container_runtime }}
       SSL Enabled: {{ ssl_enabled | default(false) }}
       Domain: {{ jenkins_domain | default('devops.example.com') }}
@@ -71,10 +71,12 @@
       ======================================================
       Access Information:
       ======================================================
-      {% if haproxy_effective_teams | length > 0 %}
+      {% if haproxy_effective_teams is defined and haproxy_effective_teams is iterable and haproxy_effective_teams is not string and haproxy_effective_teams | length > 0 %}
       Team Access URLs:
       {% for team in haproxy_effective_teams %}
+      {% if team is mapping and team.team_name is defined %}
       • {{ team.team_name | title }}: https://{{ team.team_name }}.{{ jenkins_domain | default('devops.example.com') }}
+      {% endif %}
       {% endfor %}
       {% endif %}
       HAProxy Stats: http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port | default(8404) }}/stats

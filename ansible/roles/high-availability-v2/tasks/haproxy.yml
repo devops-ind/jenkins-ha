@@ -319,7 +319,7 @@
     _haproxy_labels:
       service: "haproxy"
       role: "load-balancer"
-      teams: "{{ haproxy_effective_teams | map(attribute='team_name') | join(',') }}"
+      teams: "{{ (haproxy_effective_teams | map(attribute='team_name') | join(',')) if (haproxy_effective_teams is iterable and haproxy_effective_teams is not string and haproxy_effective_teams | length > 0) else 'single-team' }}"
       ssl_enabled: "{{ ssl_enabled | default(false) | string }}"
       deployment_mode: "{{ deployment_mode }}"
       managed_by: "ansible"
@@ -332,34 +332,56 @@
 
 - name: Enhanced HAProxy deployment verification
   block:
+    - name: Set team filtering status for HAProxy readiness check
+      set_fact:
+        haproxy_team_filtering_active: "{{ (deploy_teams is defined and deploy_teams != '') or (exclude_teams is defined and exclude_teams != '') }}"
+        haproxy_team_filter_info: "{% if deploy_teams is defined and deploy_teams != '' %}{{ deploy_teams }}{% elif exclude_teams is defined and exclude_teams != '' %}excluding {{ exclude_teams }}{% else %}none{% endif %}"
+
     - name: Wait for HAProxy container to be fully ready
       shell: |
         set -euo pipefail
         echo "Waiting for HAProxy container to be ready..."
         
-        for i in {1..60}; do
+        TEAM_FILTERING="{{ haproxy_team_filtering_active | lower }}"
+        FILTER_INFO="{{ haproxy_team_filter_info }}"
+        
+        CONTAINER_READY=false
+        for i in {1..30}; do
           if docker ps --format 'table {{ '{{' }}.Names{{ '}}' }}	{{ '{{' }}.Status{{ '}}' }}' | grep -q "jenkins-haproxy.*Up"; then
             echo "Container is running. Checking health status..."
             
             # Check health status if available
             HEALTH_STATUS=$(docker inspect --format='{{ '{{' }}.State.Health.Status{{ '}}' }}' jenkins-haproxy 2>/dev/null || echo "unknown")
             if [[ "$HEALTH_STATUS" == "healthy" || "$HEALTH_STATUS" == "unknown" ]]; then
-              echo "HAProxy container is healthy and ready."
+              echo "✓ HAProxy container is healthy and ready."
+              CONTAINER_READY=true
               break
             elif [[ "$HEALTH_STATUS" == "starting" ]]; then
-              echo "Container is still starting (attempt $i/60)..."
+              echo "Container is still starting (attempt $i/30)..."
             else
-              echo "Container health status: $HEALTH_STATUS (attempt $i/60)"
+              echo "Container health status: $HEALTH_STATUS (attempt $i/30)"
+              if [[ "$TEAM_FILTERING" == "true" ]]; then
+                echo "ℹ️ Team filtering active - continuing despite health status"
+              fi
             fi
           else
-            echo "Waiting for container to start (attempt $i/60)..."
+            echo "Waiting for container to start (attempt $i/30)..."
           fi
           
-          sleep 2
+          sleep 3
         done
         
-        # Final verification
-        if ! docker ps --format 'table {{ '{{' }}.Names{{ '}}' }}	{{ '{{' }}.Status{{ '}}' }}' | grep -q "jenkins-haproxy.*Up"; then
+        # Final verification - be more lenient with team filtering
+        if docker ps --format 'table {{ '{{' }}.Names{{ '}}' }}	{{ '{{' }}.Status{{ '}}' }}' | grep -q "jenkins-haproxy.*Up"; then
+          echo "✓ HAProxy container is running"
+          if [[ "$TEAM_FILTERING" == "true" ]]; then
+            echo "ℹ️ Team filtering active ($FILTER_INFO) - some backends may be unavailable by design"
+            echo "ℹ️ This is expected behavior when deploying specific teams only"
+          fi
+          if [[ "$CONTAINER_READY" == "false" ]]; then
+            echo "⚠️ Health checks didn't pass but container is running - proceeding"
+          fi
+        else
           echo "ERROR: HAProxy container failed to start properly"
           echo "Container status:"
           docker ps -a --format 'table {{ '{{' }}.Names{{ '}}' }}	{{ '{{' }}.Status{{ '}}' }}	{{ '{{' }}.Ports{{ '}}' }}' | grep jenkins-haproxy || echo "Container not found"
@@ -419,23 +441,41 @@
       when: ssl_enabled | default(false)
       tags: ['verification', 'ssl']
 
-    - name: Test HAProxy endpoints connectivity
+    - name: Get HAProxy container information
+      community.docker.docker_container_info:
+        name: "jenkins-haproxy"
+      register: haproxy_info
+      ignore_errors: yes
+      tags: ['verification', 'container']
+
+    - name: Verify HAProxy configuration syntax
+      command: docker exec jenkins-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+      register: haproxy_config_check
+      failed_when: false
+      changed_when: false
+      tags: ['verification', 'config']
+
+    - name: Test HAProxy frontend endpoint
       uri:
-        url: "{{ item.url }}"
+        url: "{{ 'https://' + (ansible_default_ipv4.address | default('localhost')) + '/' if ssl_enabled | default(false) else 'http://' + (ansible_default_ipv4.address | default('localhost')) + ':' + (haproxy_frontend_port | default(8000) | string) + '/' }}"
         method: GET
-        status_code: [200, 301, 302, 503]  # Accept redirect or service unavailable
+        status_code: [200, 301, 302, 503]
         timeout: 10
-        validate_certs: no  # For self-signed certificates
-      loop: >
-        {%- set endpoints = [] -%}
-        {%- if ssl_enabled | default(false) -%}
-          {%- set _ = endpoints.append({'name': 'HTTPS Frontend', 'url': 'https://' + (ansible_default_ipv4.address | default('localhost')) + '/'}) -%}
-        {%- else -%}
-          {%- set _ = endpoints.append({'name': 'HTTP Frontend', 'url': 'http://' + (ansible_default_ipv4.address | default('localhost')) + ':' + (haproxy_frontend_port | default(8000) | string) + '/'}) -%}
-        {%- endif -%}
-        {%- set _ = endpoints.append({'name': 'HAProxy Stats', 'url': 'http://' + (ansible_default_ipv4.address | default('localhost')) + ':' + (haproxy_stats_port | default(8404) | string) + '/stats'}) -%}
-        {{ endpoints }}
-      register: endpoint_connectivity_check
+        validate_certs: no
+      register: frontend_connectivity_check
+      ignore_errors: yes
+      tags: ['verification', 'connectivity']
+
+    - name: Test HAProxy stats endpoint with authentication
+      uri:
+        url: "http://{{ ansible_default_ipv4.address | default('localhost') }}:{{ haproxy_stats_port | default(8404) }}/stats"
+        method: GET
+        status_code: [200, 401]
+        timeout: 10
+        user: "{{ haproxy_stats_user | default('admin') }}"
+        password: "{{ haproxy_stats_password | default('admin123') }}"
+        force_basic_auth: true
+      register: stats_connectivity_check
       ignore_errors: yes
       tags: ['verification', 'connectivity']
 
@@ -446,18 +486,17 @@
           HAProxy Deployment Verification Results
           ====================================
           
-          Container Status: {{ 'RUNNING' if container_readiness_check.rc == 0 else 'FAILED' }}
-          Configuration: {{ 'VALID' if config_syntax_check.rc == 0 else 'INVALID' }}
+          Container Status: {{ 'RUNNING' if (haproxy_info.exists | default(false)) and (haproxy_info.container.State.Status | default('not found')) == 'running' else 'FAILED' }}
+          Configuration: {{ 'VALID' if haproxy_config_check.rc | default(1) == 0 else 'INVALID' }}
           {{ 'SSL Certificate: ACCESSIBLE' if ssl_enabled and ssl_container_check is defined and ssl_container_check.rc == 0 else 'SSL Certificate: INACCESSIBLE' if ssl_enabled else '' }}
           
           Endpoint Connectivity:
-          {% for result in endpoint_connectivity_check.results %}
-          - {{ result.item.name }}: {{ 'OK' if result.status in [200, 301, 302] else 'FAILED (' + (result.status | string) + ')' if result.status is defined else 'ERROR' }}
-          {% endfor %}
+          - Frontend: {{ 'OK' if frontend_connectivity_check.status | default(0) in [200, 301, 302] else 'FAILED (' + (frontend_connectivity_check.status | default('ERROR') | string) + ')' }}
+          - HAProxy Stats: {{ 'OK' if stats_connectivity_check.status | default(0) == 200 else 'AUTH REQUIRED' if stats_connectivity_check.status | default(0) == 401 else 'FAILED (' + (stats_connectivity_check.status | default('ERROR') | string) + ')' }}
           
           Access URLs:
           {{ 'HTTPS: https://' + (ansible_default_ipv4.address | default('localhost')) + '/' if ssl_enabled | default(false) else 'HTTP: http://' + (ansible_default_ipv4.address | default('localhost')) + ':' + (haproxy_frontend_port | default(8000) | string) + '/' }}
-          HAProxy Stats: http://{{ ansible_default_ipv4.address | default('localhost') }}:{{ haproxy_stats_port | default(8404) }}/stats
+          HAProxy Stats: http://{{ ansible_default_ipv4.address | default('localhost') }}:{{ haproxy_stats_port | default(8404) }}/stats (admin:admin123)
           
           ====================================
       tags: ['verification', 'summary']
@@ -470,9 +509,10 @@
       ====================================
       HAProxy Deployment Complete
       ====================================
-      Container: jenkins-haproxy ({{ haproxy_info.container.State.Status }})
-      Configuration: {{ 'Valid' if haproxy_config_check.rc == 0 else 'Invalid' }}
+      Container: jenkins-haproxy ({{ haproxy_info.container.State.Status | default('unknown') if haproxy_info.exists | default(false) else 'not found' }})
+      Configuration: {{ 'Valid' if haproxy_config_check.rc | default(1) == 0 else 'Invalid' }}
       Teams configured: {{ haproxy_effective_teams | length }}
       SSL enabled: {{ ssl_enabled | default(false) }}
       ====================================
   tags: ['haproxy']
+  when: haproxy_info is defined

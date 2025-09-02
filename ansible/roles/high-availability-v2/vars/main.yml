@@ -43,7 +43,7 @@ _ssl_mount_path: "{{ '/etc/haproxy/ssl/combined.pem:/usr/local/etc/haproxy/ssl/c
 _haproxy_unified_labels:
   service: "haproxy"
   role: "load-balancer"
-  teams: "{{ haproxy_effective_teams | map(attribute='team_name') | join(',') if haproxy_effective_teams else 'single-team' }}"
+  teams: "{{ (haproxy_effective_teams | map(attribute='team_name') | join(',')) if (haproxy_effective_teams is iterable and haproxy_effective_teams is not string and haproxy_effective_teams | length > 0) else 'single-team' }}"
   ssl_enabled: "{{ ssl_enabled | default(false) | string }}"
   deployment_mode: "{{ deployment_mode | default('local') }}"
   managed_by: "ansible"

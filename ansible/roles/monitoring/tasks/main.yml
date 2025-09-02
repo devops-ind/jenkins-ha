@@ -2,6 +2,59 @@
 # Monitoring Role - Prometheus, Grafana, and Exporters
 # Complete monitoring stack for Jenkins infrastructure
 
+- name: Generate team-aware Jenkins Prometheus targets
+  set_fact:
+    prometheus_jenkins_targets: >-
+      {%- set jenkins_targets = [] -%}
+      {%- if jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0 -%}
+        {%- for team in jenkins_teams -%}
+          {%- set team_targets = [] -%}
+          {%- if deployment_mode | default('local') == 'local' -%}
+            {%- if team.active_environment | default('blue') == 'blue' -%}
+              {%- set _ = team_targets.append('localhost:' + (team.ports.web | default(8080) | string)) -%}
+            {%- else -%}
+              {%- set _ = team_targets.append('localhost:' + ((team.ports.web | default(8080)) + 100 | string)) -%}
+            {%- endif -%}
+          {%- else -%}
+            {%- for host in groups['jenkins_masters'] | default(['localhost']) -%}
+              {%- if team.active_environment | default('blue') == 'blue' -%}
+                {%- set _ = team_targets.append(hostvars[host]['ansible_default_ipv4']['address'] + ':' + (team.ports.web | default(8080) | string)) -%}
+              {%- else -%}
+                {%- set _ = team_targets.append(hostvars[host]['ansible_default_ipv4']['address'] + ':' + ((team.ports.web | default(8080)) + 100 | string)) -%}
+              {%- endif -%}
+            {%- endfor -%}
+          {%- endif -%}
+          {%- set _ = jenkins_targets.append({'job': 'jenkins-' + team.team_name, 'targets': team_targets, 'team_name': team.team_name, 'active_environment': team.active_environment | default('blue')}) -%}
+        {%- endfor -%}
+      {%- else -%}
+        {%- set default_targets = [] -%}
+        {%- if deployment_mode | default('local') == 'local' -%}
+          {%- set _ = default_targets.append('localhost:8080') -%}
+        {%- else -%}
+          {%- for host in groups['jenkins_masters'] | default(['localhost']) -%}
+            {%- set _ = default_targets.append(hostvars[host]['ansible_default_ipv4']['address'] + ':8080') -%}
+          {%- endfor -%}
+        {%- endif -%}
+        {%- set _ = jenkins_targets.append({'job': 'jenkins-default', 'targets': default_targets, 'team_name': 'default', 'active_environment': 'blue'}) -%}
+      {%- endif -%}
+      {{ jenkins_targets }}
+    prometheus_targets: "{{ prometheus_base_targets + prometheus_jenkins_targets }}"
+  tags: ['monitoring', 'targets']
+
+- name: Display monitoring target configuration
+  debug:
+    msg: |
+      🎯 Monitoring Target Configuration:
+      Teams to Monitor: {{ jenkins_teams | length if (jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string) else 1 }}
+      Jenkins Jobs: {{ prometheus_jenkins_targets | map(attribute='job') | join(', ') if prometheus_jenkins_targets else 'jenkins-default' }}
+      Total Targets: {{ prometheus_targets | length }}
+      
+      Jenkins Monitoring Details:
+      {% for target in prometheus_jenkins_targets %}
+      • {{ target.job }} ({{ target.team_name }} - {{ target.active_environment }}): {{ target.targets | join(', ') }}
+      {% endfor %}
+  tags: ['monitoring', 'targets']
+
 - name: Create monitoring user and group
   group:
     name: "{{ monitoring_group }}"

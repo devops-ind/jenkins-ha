@@ -12,9 +12,14 @@
           echo "{{ item.active_environment | default('blue') }}"
         fi
       register: team_current_environments
-      loop: "{{ jenkins_teams }}"
+      loop: "{{ jenkins_teams if (jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string) else [] }}"
       loop_control:
         label: "{{ item.team_name }}"
+      when:
+        - jenkins_teams is defined
+        - jenkins_teams is iterable
+        - jenkins_teams is not string
+        - jenkins_teams | length > 0
       delegate_to: "{{ groups['jenkins_masters'][0] }}"
       changed_when: false
 
@@ -85,7 +90,7 @@
         timeout: 10
         headers:
           Host: "{{ item.team_name }}jenkins.{{ jenkins_domain | default('devops.local') }}"
-      loop: "{{ jenkins_teams_synced }}"
+      loop: "{{ jenkins_teams_synced if (jenkins_teams_synced is defined and jenkins_teams_synced is iterable and jenkins_teams_synced is not string) else [] }}"
       loop_control:
         label: "{{ item.team_name }}:{{ 'port ' + (item.ports.web + 100) | string if item.active_environment == 'green' else 'port ' + item.ports.web | string }}"
       register: team_routing_verification

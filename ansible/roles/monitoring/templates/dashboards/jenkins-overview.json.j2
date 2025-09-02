@@ -2,13 +2,47 @@
   "dashboard": {
     "id": null,
     "title": "Jenkins Overview - {{ deployment_environment | default('local') | title }}",
-    "tags": ["jenkins", "overview"],
+    "tags": ["jenkins", "overview", "multi-team"],
     "style": "dark",
     "timezone": "browser",
     "refresh": "30s",
     "time": {
       "from": "now-1h",
       "to": "now"
+    },
+    "templating": {
+      "list": [
+        {
+          "name": "jenkins_team",
+          "type": "query",
+          "query": "label_values(up{job=~\"jenkins.*\"}, jenkins_team)",
+          "refresh": 1,
+          "includeAll": true,
+          "multi": true,
+          "allValue": ".*",
+          "current": {
+            "text": "All",
+            "value": "$__all"
+          },
+          "options": [],
+          "label": "Team"
+        },
+        {
+          "name": "jenkins_environment",
+          "type": "query",
+          "query": "label_values(up{job=~\"jenkins.*\"}, jenkins_environment)",
+          "refresh": 1,
+          "includeAll": true,
+          "multi": true,
+          "allValue": ".*",
+          "current": {
+            "text": "All",
+            "value": "$__all"
+          },
+          "options": [],
+          "label": "Environment"
+        }
+      ]
     },
     "panels": [
       {
@@ -17,8 +51,8 @@
         "type": "stat",
         "targets": [
           {
-            "expr": "up{job=\"jenkins\"}",
-            "legendFormat": "Jenkins Up"
+            "expr": "up{job=~\"jenkins.*\", jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}",
+            "legendFormat": "{{ '{{' }}jenkins_team{{ '}}' }} ({{ '{{' }}jenkins_environment{{ '}}' }})"
           }
         ],
         "gridPos": {
@@ -34,8 +68,8 @@
         "type": "stat",
         "targets": [
           {
-            "expr": "jenkins_queue_size_value",
-            "legendFormat": "Queue Size"
+            "expr": "jenkins_queue_size_value{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}",
+            "legendFormat": "{{ '{{' }}jenkins_team{{ '}}' }} Queue"
           }
         ],
         "gridPos": {

@@ -84,18 +84,26 @@
         success_msg: "VIP configuration validated: {{ jenkins_vip }} with priority {{ keepalived_priority }}"
       when: jenkins_vip is defined and jenkins_vip != ""
 
-    - name: Validate team port configurations
+    - name: Validate team port configurations with defensive programming
       assert:
         that:
+          - item is mapping
+          - item.team_name is defined
+          - item.ports is defined
+          - item.ports is mapping
           - item.ports.web is defined
           - item.ports.web | int > 1024
           - item.ports.web | int < 65535
-        fail_msg: "Team {{ item.team_name }} has invalid web port: {{ item.ports.web | default('undefined') }}"
+        fail_msg: "Team {{ item.team_name | default('unknown') }} has invalid configuration or web port: {{ item.ports.web | default('undefined') }}"
         success_msg: "Team {{ item.team_name }} port configuration validated: {{ item.ports.web }}"
-      loop: "{{ haproxy_effective_teams }}"
+      loop: "{{ haproxy_effective_teams if (haproxy_effective_teams is iterable and haproxy_effective_teams is not string) else [] }}"
       loop_control:
-        label: "{{ item.team_name }}"
-      when: haproxy_effective_teams | length > 0
+        label: "{{ item.team_name | default('invalid-team') }}"
+      when: 
+        - haproxy_effective_teams is defined
+        - haproxy_effective_teams is iterable
+        - haproxy_effective_teams is not string
+        - haproxy_effective_teams | length > 0
   tags: ['validation']
 
 # ====================================
@@ -248,18 +256,26 @@
       become: yes
       ignore_errors: true
 
-    - name: Open team-specific ports for direct access
+    - name: Open team-specific ports for direct access with defensive programming
       community.general.ufw:
         rule: allow
         port: "{{ item.ports.web | default(8080) }}"
         proto: tcp
         comment: "Jenkins {{ item.team_name }} team access"
-      loop: "{{ haproxy_effective_teams }}"
+      loop: "{{ haproxy_effective_teams if (haproxy_effective_teams is iterable and haproxy_effective_teams is not string) else [] }}"
       loop_control:
-        label: "{{ item.team_name }}:{{ item.ports.web }}"
+        label: "{{ item.team_name | default('unknown') }}:{{ item.ports.web | default('N/A') }}"
       when: 
+        - haproxy_effective_teams is defined
+        - haproxy_effective_teams is iterable
+        - haproxy_effective_teams is not string
         - haproxy_effective_teams | length > 0
         - ansible_os_family == "Debian"
+        - item is mapping
+        - item.team_name is defined
+        - item.ports is defined
+        - item.ports is mapping
+        - item.ports.web is defined
       become: yes
       ignore_errors: true
 

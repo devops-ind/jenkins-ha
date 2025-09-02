@@ -137,7 +137,7 @@ main() {
     echo ""
     log "Checking individual backends:"
     
-    {% if jenkins_teams is defined and jenkins_teams | length > 0 %}
+    {% if jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0 %}
     {% for team in jenkins_teams %}
     check_backend_health "jenkins_backend_{{ team.team_name }}" || log "Backend jenkins_backend_{{ team.team_name }} unhealthy"
     {% endfor %}

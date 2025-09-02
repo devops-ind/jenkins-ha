@@ -2,7 +2,7 @@ groups:
 - name: jenkins
   rules:
   - alert: JenkinsDown
-    expr: up{job="jenkins"} == 0
+    expr: up{job=~"jenkins.*"} == 0
     for: 5m
     labels:
       severity: critical
@@ -10,7 +10,7 @@ groups:
       environment: {{ deployment_environment | default('local') }}
     annotations:
       summary: "Jenkins instance is down"
-      description: "Jenkins instance {{ "{{ $labels.instance }}" }} has been down for more than 5 minutes."
+      description: "Jenkins instance {{ "{{ $labels.instance }}" }} (team: {{ "{{ $labels.jenkins_team }}" }}, env: {{ "{{ $labels.jenkins_environment }}" }}) has been down for more than 5 minutes."
 
   - alert: JenkinsHighQueueSize
     expr: jenkins_queue_size_value > 10
@@ -19,9 +19,10 @@ groups:
       severity: warning
       service: jenkins
       environment: {{ deployment_environment | default('local') }}
+      team: "{{ "{{ $labels.jenkins_team }}" }}"
     annotations:
-      summary: "Jenkins queue size is high"
-      description: "Jenkins queue size is {{ "{{ $value }}" }}, which is above the threshold of 10."
+      summary: "Jenkins queue size is high for team {{ "{{ $labels.jenkins_team }}" }}"
+      description: "Jenkins queue size is {{ "{{ $value }}" }} for team {{ "{{ $labels.jenkins_team }}" }} ({{ "{{ $labels.jenkins_environment }}" }}), which is above the threshold of 10."
 
   - alert: JenkinsHighBuildFailureRate
     expr: rate(jenkins_builds_total{result="FAILURE"}[15m]) / rate(jenkins_builds_total[15m]) > 0.3
@@ -30,6 +31,7 @@ groups:
       severity: warning
       service: jenkins
       environment: {{ deployment_environment | default('local') }}
+      team: "{{ "{{ $labels.jenkins_team }}" }}"
     annotations:
-      summary: "High Jenkins build failure rate"
-      description: "Jenkins build failure rate is {{ "{{ $value | humanizePercentage }}" }} over the last 15 minutes."
+      summary: "High Jenkins build failure rate for team {{ "{{ $labels.jenkins_team }}" }}"
+      description: "Jenkins build failure rate is {{ "{{ $value | humanizePercentage }}" }} for team {{ "{{ $labels.jenkins_team }}" }} ({{ "{{ $labels.jenkins_environment }}" }}) over the last 15 minutes."

@@ -49,18 +49,21 @@ node_exporter_enabled: true
 node_exporter_port: 9100
 node_exporter_version: "latest"
 
-# Prometheus targets configuration
-prometheus_targets:
+# Base Prometheus targets configuration
+prometheus_base_targets:
   - job: "prometheus"
     targets:
       - "localhost:9090"
   - job: "node-exporter"
     targets:
       - "localhost:9100"
-  - job: "jenkins"
-    targets:
-      - "localhost:8080"
-      - "localhost:8081"
+
+# Dynamic Jenkins targets - generated based on team configuration
+# This will be overridden in tasks/main.yml with team-aware targets
+prometheus_jenkins_targets: []
+
+# Combined prometheus targets (base + dynamic jenkins)
+prometheus_targets: "{{ prometheus_base_targets + prometheus_jenkins_targets }}"
 
 # Docker configuration for monitoring services
 monitoring_docker_network: "{{ monitoring_network_name }}"

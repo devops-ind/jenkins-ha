@@ -72,14 +72,16 @@ frontend jenkins_http
     http-request set-header X-Real-IP %[src]
     
     # Monitoring services routing (high priority - checked first)
+    {% if monitoring_enabled | default(true) %}
     use_backend prometheus_backend if { hdr_beg(host) -i prometheus.{{ jenkins_domain }} }
     use_backend grafana_backend if { hdr_beg(host) -i grafana.{{ jenkins_domain }} }
     use_backend node_exporter_backend if { hdr_beg(host) -i node-exporter.{{ jenkins_domain }} }
+    {% endif %}
     
-    # Team-specific routing - corrected subdomain format ({team}jenkins.domain.com)
-    {% if jenkins_teams is defined and jenkins_teams | length > 0 %}
+    # Team-specific routing - corrected subdomain format ({team}jenkins.domain.com) with defensive programming
+    {% if jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0 %}
     {% for team in jenkins_teams %}
-    {% if team.team_name != 'devops' %}
+    {% if team is mapping and team.team_name is defined and team.team_name != 'devops' %}
     use_backend jenkins_backend_{{ team.team_name }} if { hdr_beg(host) -i {{ team.team_name }}jenkins.{{ jenkins_domain }} }
     {% endif %}
     {% endfor %}
@@ -99,53 +101,60 @@ frontend jenkins_http
 # JENKINS TEAM BACKENDS - Simplified Multi-Team Configuration
 # =============================================================================
 
-{% if jenkins_teams is defined and jenkins_teams | length > 0 %}
-# Generate backend for each team
+{% if jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0 %}
+# Generate backend for each team with defensive programming
 {% for team in jenkins_teams %}
-backend jenkins_backend_{{ team.team_name }}
+{% if team is mapping and team.team_name is defined %}
+{% set team_name = team.team_name %}
+{% set team_ports = team.ports | default({'web': 8080}) %}
+{% set team_web_port = team_ports.web | default(8080) %}
+{% set team_active_env = team.active_environment | default('blue') %}
+{% set team_bg_enabled = team.blue_green_enabled | default(true) %}
+backend jenkins_backend_{{ team_name }}
     balance {{ backend_balance_method | default('roundrobin') }}
     option httpchk GET /login
     http-check expect status 200
     
-    # Optimized Blue-Green deployment - ONLY active environment for {{ team.team_name }} team
+    # Optimized Blue-Green deployment - ONLY active environment for {{ team_name }} team
     {% if groups['jenkins_masters'] is defined and groups['jenkins_masters'] | length > 0 %}
     {% for host in groups['jenkins_masters'] %}
-    {% if team.blue_green_enabled | default(true) %}
-    {% if team.active_environment | default('blue') == 'blue' %}
+    {% if team_bg_enabled %}
+    {% if team_active_env == 'blue' %}
     # Blue environment active (green environment not running - resource optimization)
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-active {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}
+    server {{ team_name }}-{{ hostvars[host]['inventory_hostname'] }}-active {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team_web_port }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}
     {% else %}
     # Green environment active (blue environment not running - resource optimization)
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }}-active {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ (team.ports.web | default(8080)) + 100 }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}
+    server {{ team_name }}-{{ hostvars[host]['inventory_hostname'] }}-active {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team_web_port | int + 100 }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}
     {% endif %}
     {% else %}
     # Blue-green disabled, single environment
-    server {{ team.team_name }}-{{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}
+    server {{ team_name }}-{{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team_web_port }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}
     {% endif %}
     {% endfor %}
     {% else %}
-    # Localhost fallback for {{ team.team_name }} - optimized active-only
-    {% if team.blue_green_enabled | default(true) %}
-    {% if team.active_environment | default('blue') == 'blue' %}
+    # Localhost fallback for {{ team_name }} - optimized active-only
+    {% if team_bg_enabled %}
+    {% if team_active_env == 'blue' %}
     # Blue environment active (green environment not running - resource optimization)
-    server {{ team.team_name }}-localhost-active 127.0.0.1:{{ team.ports.web | default(8080) }} check
+    server {{ team_name }}-localhost-active 127.0.0.1:{{ team_web_port }} check
     {% else %}
     # Green environment active (blue environment not running - resource optimization)
-    server {{ team.team_name }}-localhost-active 127.0.0.1:{{ (team.ports.web | default(8080)) + 100 }} check
+    server {{ team_name }}-localhost-active 127.0.0.1:{{ team_web_port | int + 100 }} check
     {% endif %}
     {% else %}
     # Blue-green disabled, single environment
-    server {{ team.team_name }}-localhost 127.0.0.1:{{ team.ports.web | default(8080) }} check
+    server {{ team_name }}-localhost 127.0.0.1:{{ team_web_port }} check
     {% endif %}
     {% endif %}
     
-    # Team-specific headers
-    http-response set-header X-Jenkins-Team {{ team.team_name }}
-    http-response set-header X-Jenkins-Environment {{ team.active_environment | default('blue') }}
-    {% if team.labels is defined and team.labels.role is defined %}
+    # Team-specific headers with safe access
+    http-response set-header X-Jenkins-Team {{ team_name }}
+    http-response set-header X-Jenkins-Environment {{ team_active_env }}
+    {% if team.labels is defined and team.labels is mapping and team.labels.role is defined %}
     http-response set-header X-Team-Role {{ team.labels.role }}
     {% endif %}
 
+{% endif %}
 {% endfor %}
 {% else %}
 # Fallback single team backend
@@ -167,6 +176,7 @@ backend jenkins_backend_devops
 # MONITORING SERVICES BACKENDS
 # =============================================================================
 
+{% if monitoring_enabled | default(true) %}
 # Prometheus backend
 backend prometheus_backend
     balance {{ backend_balance_method | default('roundrobin') }}
@@ -182,7 +192,9 @@ backend prometheus_backend
     # Prometheus-specific headers
     http-response set-header X-Service-Type prometheus
     http-response set-header X-Service-Version {{ prometheus_version | default('latest') }}
+{% endif %}
 
+{% if monitoring_enabled | default(true) %}
 # Grafana backend
 backend grafana_backend
     balance {{ backend_balance_method | default('roundrobin') }}
@@ -198,7 +210,9 @@ backend grafana_backend
     # Grafana-specific headers
     http-response set-header X-Service-Type grafana
     http-response set-header X-Service-Version {{ grafana_version | default('latest') }}
+{% endif %}
 
+{% if monitoring_enabled | default(true) %}
 # Node Exporter backend
 backend node_exporter_backend
     balance {{ backend_balance_method | default('roundrobin') }}
@@ -214,6 +228,7 @@ backend node_exporter_backend
     # Node Exporter headers
     http-response set-header X-Service-Type node-exporter
     http-response set-header Content-Type "text/plain; version=0.0.4; charset=utf-8"
+{% endif %}
 
 # =============================================================================
 # STATISTICS AND MONITORING

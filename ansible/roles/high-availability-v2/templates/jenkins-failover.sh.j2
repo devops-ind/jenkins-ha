@@ -196,7 +196,7 @@ main() {
         "auto")
             log "Performing automatic failover based on health status"
             
-            {% if jenkins_teams is defined and jenkins_teams | length > 0 %}
+            {% if jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0 %}
             {% for team in jenkins_teams %}
             if [ -z "$team" ] || [ "$team" = "{{ team.team_name }}" ]; then
                 perform_team_failover "{{ team.team_name }}"
@@ -220,7 +220,7 @@ main() {
             if [ -n "$team" ]; then
                 emergency_failover "jenkins_backend_$team"
             else
-                {% if jenkins_teams is defined and jenkins_teams | length > 0 %}
+                {% if jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0 %}
                 {% for team in jenkins_teams %}
                 emergency_failover "jenkins_backend_{{ team.team_name }}"
                 {% endfor %}
