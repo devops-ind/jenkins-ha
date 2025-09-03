@@ -21,12 +21,7 @@
 
 - name: Validate team configuration for monitoring
   set_fact:
-    prometheus_teams_validated: >
-      {%- if jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0 -%}
-      {{ jenkins_teams }}
-      {%- else -%}
-      []
-      {%- endif -%}
+    prometheus_teams_validated: "{{ jenkins_teams if (jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0) else [] }}"
   tags: ['monitoring', 'targets']
 
 # Split the complex logic into safer, more explicit tasks

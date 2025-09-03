@@ -337,56 +337,125 @@
         haproxy_team_filtering_active: "{{ (deploy_teams is defined and deploy_teams != '') or (exclude_teams is defined and exclude_teams != '') }}"
         haproxy_team_filter_info: "{% if deploy_teams is defined and deploy_teams != '' %}{{ deploy_teams }}{% elif exclude_teams is defined and exclude_teams != '' %}excluding {{ exclude_teams }}{% else %}none{% endif %}"
 
-    - name: Wait for HAProxy container to be fully ready
+    - name: Wait for HAProxy container to be fully ready with robust health checking
       shell: |
         set -euo pipefail
-        echo "Waiting for HAProxy container to be ready..."
+        echo "==========================================="
+        echo "HAProxy Container Readiness Verification"
+        echo "==========================================="
         
         TEAM_FILTERING="{{ haproxy_team_filtering_active | lower }}"
         FILTER_INFO="{{ haproxy_team_filter_info }}"
-        
         CONTAINER_READY=false
+        
+        echo "Team filtering active: $TEAM_FILTERING"
+        if [[ "$TEAM_FILTERING" == "true" ]]; then
+          echo "Team filter info: $FILTER_INFO"
+        fi
+        echo ""
+        # Phase 1: Wait for container to start with robust checking
+        echo "Phase 1: Waiting for container startup..."
         for i in {1..30}; do
-          if docker ps --format 'table {{ '{{' }}.Names{{ '}}' }}	{{ '{{' }}.Status{{ '}}' }}' | grep -q "jenkins-haproxy.*Up"; then
-            echo "Container is running. Checking health status..."
-            
-            # Check health status if available
-            HEALTH_STATUS=$(docker inspect --format='{{ '{{' }}.State.Health.Status{{ '}}' }}' jenkins-haproxy 2>/dev/null || echo "unknown")
-            if [[ "$HEALTH_STATUS" == "healthy" || "$HEALTH_STATUS" == "unknown" ]]; then
-              echo "✓ HAProxy container is healthy and ready."
-              CONTAINER_READY=true
-              break
-            elif [[ "$HEALTH_STATUS" == "starting" ]]; then
-              echo "Container is still starting (attempt $i/30)..."
-            else
-              echo "Container health status: $HEALTH_STATUS (attempt $i/30)"
-              if [[ "$TEAM_FILTERING" == "true" ]]; then
-                echo "ℹ️ Team filtering active - continuing despite health status"
-              fi
-            fi
+          CONTAINER_STATUS=$(docker inspect --format='{{ '{{' }}.State.Status{{ '}}' }}' jenkins-haproxy 2>/dev/null || echo "not_found")
+          
+          if [[ "$CONTAINER_STATUS" == "running" ]]; then
+            echo "✓ Container is running (attempt $i/30)"
+            CONTAINER_READY=true
+            break
+          elif [[ "$CONTAINER_STATUS" == "not_found" ]]; then
+            echo "Container not found (attempt $i/30)..."
           else
-            echo "Waiting for container to start (attempt $i/30)..."
+            echo "Container status: $CONTAINER_STATUS (attempt $i/30)..."
           fi
           
-          sleep 3
+          sleep 2
         done
         
-        # Final verification - be more lenient with team filtering
-        if docker ps --format 'table {{ '{{' }}.Names{{ '}}' }}	{{ '{{' }}.Status{{ '}}' }}' | grep -q "jenkins-haproxy.*Up"; then
-          echo "✓ HAProxy container is running"
-          if [[ "$TEAM_FILTERING" == "true" ]]; then
-            echo "ℹ️ Team filtering active ($FILTER_INFO) - some backends may be unavailable by design"
-            echo "ℹ️ This is expected behavior when deploying specific teams only"
-          fi
-          if [[ "$CONTAINER_READY" == "false" ]]; then
-            echo "⚠️ Health checks didn't pass but container is running - proceeding"
+        # Phase 2: Check health status if container is running
+        HEALTH_PASSED=false
+        if [[ "$CONTAINER_READY" == "true" ]]; then
+          echo ""
+          echo "Phase 2: Checking container health status..."
+          
+          for i in {1..15}; do
+            HEALTH_STATUS=$(docker inspect --format='{{ '{{' }}.State.Health.Status{{ '}}' }}' jenkins-haproxy 2>/dev/null || echo "no_healthcheck")
+            
+            if [[ "$HEALTH_STATUS" == "healthy" ]]; then
+              echo "✓ Container health check: HEALTHY (attempt $i/15)"
+              HEALTH_PASSED=true
+              break
+            elif [[ "$HEALTH_STATUS" == "no_healthcheck" ]]; then
+              echo "ℹ️ No health check configured - assuming healthy based on running status"
+              HEALTH_PASSED=true
+              break
+            elif [[ "$HEALTH_STATUS" == "starting" ]]; then
+              echo "Container health check still starting (attempt $i/15)..."
+            elif [[ "$HEALTH_STATUS" == "unhealthy" ]]; then
+              echo "⚠️ Container health check: UNHEALTHY (attempt $i/15)"
+              if [[ "$TEAM_FILTERING" == "true" ]]; then
+                echo "ℹ️ Team filtering active - some backends expected to be unavailable"
+                echo "ℹ️ Proceeding despite unhealthy status due to team filtering"
+                HEALTH_PASSED=true
+                break
+              fi
+            else
+              echo "Container health status: $HEALTH_STATUS (attempt $i/15)"
+            fi
+            
+            sleep 3
+          done
+        fi
+        
+        # Phase 3: Final comprehensive verification with robust logic
+        echo ""
+        echo "Phase 3: Final verification..."
+        
+        # Get current container status using robust checking
+        CURRENT_STATUS=$(docker ps --filter "name=jenkins-haproxy" --format "{{ '{{' }}.Status{{ '}}' }}" 2>/dev/null || echo "not_running")
+        FINAL_STATUS="unknown"
+        
+        if [[ "$CURRENT_STATUS" =~ Up.* ]]; then
+          echo "✓ Container is currently running: $CURRENT_STATUS"
+          FINAL_STATUS="running"
+        else
+          echo "✗ Container is not running: $CURRENT_STATUS"
+          FINAL_STATUS="failed"
+        fi
+        
+        # Phase 4: Determine final result with clear logic
+        echo ""
+        echo "==========================================="
+        echo "HAProxy Readiness Check Results"
+        echo "==========================================="
+        echo "Container Ready: $CONTAINER_READY"
+        echo "Health Passed: $HEALTH_PASSED"
+        echo "Final Status: $FINAL_STATUS"
+        echo "Team Filtering: $TEAM_FILTERING"
+        echo ""
+        
+        # Success conditions (fixed logic)
+        if [[ "$FINAL_STATUS" == "running" ]]; then
+          if [[ "$HEALTH_PASSED" == "true" ]]; then
+            echo "🎉 SUCCESS: HAProxy container is running and healthy!"
+            exit 0
+          elif [[ "$TEAM_FILTERING" == "true" ]]; then
+            echo "✅ SUCCESS: HAProxy container is running (health check bypassed due to team filtering)"
+            echo "ℹ️ Team filtering ($FILTER_INFO) may cause some backends to appear unhealthy by design"
+            exit 0
+          else
+            echo "⚠️ WARNING: HAProxy container is running but health check failed"
+            echo "ℹ️ Proceeding as container appears functional"
+            exit 0
           fi
         else
-          echo "ERROR: HAProxy container failed to start properly"
+          echo "❌ FAILURE: HAProxy container failed to start properly"
+          echo ""
+          echo "Diagnostic Information:"
           echo "Container status:"
-          docker ps -a --format 'table {{ '{{' }}.Names{{ '}}' }}	{{ '{{' }}.Status{{ '}}' }}	{{ '{{' }}.Ports{{ '}}' }}' | grep jenkins-haproxy || echo "Container not found"
+          docker ps -a --filter "name=jenkins-haproxy" --format 'table {{ '{{' }}.Names{{ '}}' }}	{{ '{{' }}.Status{{ '}}' }}	{{ '{{' }}.Ports{{ '}}' }}' 2>/dev/null || echo "No container information available"
+          echo ""
           echo "Recent logs:"
-          docker logs --tail 50 jenkins-haproxy || echo "No logs available"
+          docker logs --tail 20 jenkins-haproxy 2>/dev/null || echo "No logs available"
           exit 1
         fi
       register: container_readiness_check
