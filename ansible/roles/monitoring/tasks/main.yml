@@ -274,6 +274,67 @@
       title: "Security Metrics - {{ deployment_mode | default('local') | title }}"
   ignore_errors: yes
 
+- name: Debug dashboard content for API deployment
+  debug:
+    msg: |
+      Dashboard: {{ item.name }}
+      File exists: {{ (dashboard_content.results | selectattr('item.name', 'equalto', item.name) | first).content is defined }}
+      Dashboard title from file: {{ (dashboard_content.results | selectattr('item.name', 'equalto', item.name) | first).content | b64decode | from_json | json_query('dashboard.title') | default('MISSING TITLE') }}
+      Dashboard structure: {{ (dashboard_content.results | selectattr('item.name', 'equalto', item.name) | first).content | b64decode | from_json | json_query('dashboard') | default('MISSING DASHBOARD') | type }}
+  loop:
+    - name: "jenkins-overview"
+      title: "Jenkins Overview - {{ deployment_mode | default('local') | title }}"
+    - name: "jenkins-builds"
+      title: "Jenkins Builds - {{ deployment_mode | default('local') | title }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: false  # Enable for debugging: -e debug_dashboards=true
+  tags: ['debug']
+
+- name: Read dashboard files for API deployment
+  slurp:
+    src: "{{ monitoring_home_dir }}/grafana/dashboards/{{ item.name }}.json"
+  register: dashboard_content
+  loop:
+    - name: "jenkins-overview"
+      title: "Jenkins Overview - {{ deployment_mode | default('local') | title }}"
+    - name: "jenkins-builds"
+      title: "Jenkins Builds - {{ deployment_mode | default('local') | title }}"
+    - name: "jenkins-dynamic-agents"
+      title: "Jenkins Dynamic Agents - {{ deployment_mode | default('local') | title }}"
+    - name: "infrastructure-health"
+      title: "Infrastructure Health - {{ deployment_mode | default('local') | title }}"
+    - name: "security-metrics"
+      title: "Security Metrics - {{ deployment_mode | default('local') | title }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Validate dashboard JSON structure before API deployment
+  assert:
+    that:
+      - dashboard_json is defined
+      - dashboard_json.dashboard is defined
+      - dashboard_json.dashboard.title is defined
+      - dashboard_json.dashboard.title | length > 0
+    fail_msg: "Dashboard {{ item.name }} has invalid JSON structure - missing title or dashboard key"
+    success_msg: "Dashboard {{ item.name }} JSON structure is valid"
+  loop:
+    - name: "jenkins-overview"
+      title: "Jenkins Overview - {{ deployment_mode | default('local') | title }}"
+    - name: "jenkins-builds"
+      title: "Jenkins Builds - {{ deployment_mode | default('local') | title }}"
+    - name: "jenkins-dynamic-agents"
+      title: "Jenkins Dynamic Agents - {{ deployment_mode | default('local') | title }}"
+    - name: "infrastructure-health"
+      title: "Infrastructure Health - {{ deployment_mode | default('local') | title }}"
+    - name: "security-metrics"
+      title: "Security Metrics - {{ deployment_mode | default('local') | title }}"
+  vars:
+    dashboard_json: "{{ (dashboard_content.results | selectattr('item.name', 'equalto', item.name) | first).content | b64decode | from_json }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: ['monitoring', 'dashboards', 'validation']
+
 - name: Deploy/Update Grafana dashboards with overwrite protection
   uri:
     url: "http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}/api/dashboards/db"
@@ -283,12 +344,15 @@
     force_basic_auth: yes
     body_format: json
     body:
-      dashboard: "{{ lookup('template', 'dashboards/' + item.name + '.json.j2') | from_json }}"
+      dashboard: "{{ (dashboard_content.results | selectattr('item.name', 'equalto', item.name) | first).content | b64decode | from_json | json_query('dashboard') }}"
       overwrite: true
       folderId: 0
       message: "Updated by Ansible - {{ deployment_mode | default('local') }} deployment"
     status_code: [200, 412]
   register: dashboard_deploy_result
+  failed_when: >-
+    dashboard_deploy_result.status|default(0) not in [200, 412] or
+    (dashboard_deploy_result.json.message|default('') is search('title cannot be empty'))
   loop:
     - name: "jenkins-overview"
       title: "Jenkins Overview - {{ deployment_mode | default('local') | title }}"
@@ -302,10 +366,13 @@
       title: "Security Metrics - {{ deployment_mode | default('local') | title }}"
   vars:
     existing_dashboard: "{{ dashboard_search_results.results[loop_index0].json | length > 0 }}"
+    dashboard_json: "{{ (dashboard_content.results | selectattr('item.name', 'equalto', item.name) | first).content | b64decode | from_json }}"
   when: >
     dashboard_update_mode | default('always') == 'always' or
     (dashboard_update_mode == 'skip_existing' and not existing_dashboard) or
     (dashboard_update_mode == 'update_only' and existing_dashboard)
+  loop_control:
+    label: "{{ item.name }}"
 
 - name: Display dashboard deployment summary
   debug:
