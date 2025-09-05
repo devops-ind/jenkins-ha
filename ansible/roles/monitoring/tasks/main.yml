@@ -300,7 +300,27 @@
       title: "Infrastructure Health - {{ deployment_mode | default('local') | title }}"
     - name: "security-metrics"
       title: "Security Metrics - {{ deployment_mode | default('local') | title }}"
-  when: item.name in (dashboard_deploy_result.results | default([]) | map(attribute='item.name') | list) or dashboard_search_results is not defined
+  vars:
+    existing_dashboard: "{{ dashboard_search_results.results[loop_index0].json | length > 0 }}"
+  when: >
+    dashboard_update_mode | default('always') == 'always' or
+    (dashboard_update_mode == 'skip_existing' and not existing_dashboard) or
+    (dashboard_update_mode == 'update_only' and existing_dashboard)
+
+- name: Display dashboard deployment summary
+  debug:
+    msg: |
+      📊 Dashboard Deployment Summary:
+      Update Mode: {{ dashboard_update_mode | default('always') }}
+      
+      {% for dashboard in dashboard_search_results.results %}
+      {% set dashboard_item = (dashboard_deploy_result.results[loop.index0] | default({})).item | default({}) %}
+      {% set existed = dashboard.json | length > 0 %}
+      {% set deployed = (dashboard_deploy_result.results[loop.index0] | default({})).status | default(0) == 200 %}
+      • {{ dashboard_item.name | default('unknown') }}: {% if deployed %}✅ {{ 'Updated' if existed else 'Created' }}{% elif existed and dashboard_update_mode == 'skip_existing' %}⏭️ Skipped (exists){% elif not existed and dashboard_update_mode == 'update_only' %}⏭️ Skipped (not found){% else %}❌ Failed{% endif %}
+      {% endfor %}
+  when: dashboard_search_results is defined and dashboard_deploy_result is defined
+  tags: ['monitoring', 'dashboards']
 
 - name: Create monitoring bin directory
   file:

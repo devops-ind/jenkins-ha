@@ -32,6 +32,9 @@ grafana_admin_user: "admin"
 grafana_admin_password: "{{ vault_grafana_admin_password | default('admin123') }}"
 grafana_allow_sign_up: false
 grafana_disable_gravatar: true
+# Dashboard update behavior: always, skip_existing, update_only
+dashboard_update_mode: "always"
+
 grafana_prometheus_datasource:
   name: "Prometheus"
   type: "prometheus"
