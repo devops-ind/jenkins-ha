@@ -13,7 +13,7 @@
     "templating": {
       "list": [
         {
-          "name": "team",
+          "name": "jenkins_team",
           "type": "query",
           "query": "label_values(container_cpu_usage_seconds_total{container_label_com_jenkins_agent=\"true\"}, jenkins_team)",
           "refresh": 1,
@@ -25,13 +25,13 @@
             "value": "$__all"
           },
           "options": [],
-          "label": "Team",
+          "label": "Jenkins Team",
           "sort": 1
         },
         {
           "name": "agent_type",
           "type": "query", 
-          "query": "label_values(container_cpu_usage_seconds_total{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$team\"}, agent_type)",
+          "query": "label_values(container_cpu_usage_seconds_total{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$jenkins_team\"}, agent_type)",
           "refresh": 1,
           "includeAll": true,
           "multi": true,
@@ -70,7 +70,7 @@
         },
         "targets": [
           {
-            "expr": "count(container_last_seen{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$team\", agent_type=~\"$agent_type\"} > (time() - 300))",
+            "expr": "count(container_last_seen{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"} > (time() - 300))",
             "refId": "A",
             "legendFormat": "Active Agents"
           }
@@ -117,9 +117,9 @@
         },
         "targets": [
           {
-            "expr": "count by (jenkins_team) (container_last_seen{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$team\"} > (time() - 300))",
+            "expr": "count by (jenkins_team) (container_last_seen{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$jenkins_team\"} > (time() - 300))",
             "refId": "A",
-            "legendFormat": "{{ jenkins_team }}"
+            "legendFormat": "{{ '{{' }}jenkins_team{{ '}}' }}"
           }
         ],
         "options": {
@@ -151,9 +151,9 @@
         },
         "targets": [
           {
-            "expr": "count by (agent_type) (container_last_seen{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$team\", agent_type=~\"$agent_type\"} > (time() - 300))",
+            "expr": "count by (agent_type) (container_last_seen{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"} > (time() - 300))",
             "refId": "A",
-            "legendFormat": "{{ agent_type }}"
+            "legendFormat": "{{ '{{' }}agent_type{{ '}}' }}"
           }
         ],
         "options": {
@@ -185,7 +185,7 @@
         },
         "targets": [
           {
-            "expr": "sum(jenkins_queue_size_value{jenkins_team=~\"$team\"})",
+            "expr": "sum(jenkins_queue_size_value{jenkins_team=~\"$jenkins_team\"})",
             "refId": "A",
             "legendFormat": "Queue Depth"
           }
@@ -232,9 +232,9 @@
         },
         "targets": [
           {
-            "expr": "rate(jenkins_agent_launches_total{jenkins_team=~\"$team\", agent_type=~\"$agent_type\"}[5m]) * 60",
+            "expr": "rate(jenkins_agent_launches_total{jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"}[5m]) * 60",
             "refId": "A",
-            "legendFormat": "{{ jenkins_team }}-{{ agent_type }}"
+            "legendFormat": "{{ '{{' }}jenkins_team{{ '}}' }}-{{ '{{' }}agent_type{{ '}}' }}"
           }
         ],
         "fieldConfig": {
@@ -294,9 +294,9 @@
         },
         "targets": [
           {
-            "expr": "jenkins_queue_size_value{jenkins_team=~\"$team\"}",
+            "expr": "jenkins_queue_size_value{jenkins_team=~\"$jenkins_team\"}",
             "refId": "A",
-            "legendFormat": "{{ jenkins_team }} Queue"
+            "legendFormat": "{{ '{{' }}jenkins_team{{ '}}' }} Queue"
           }
         ],
         "fieldConfig": {
@@ -356,9 +356,9 @@
         },
         "targets": [
           {
-            "expr": "rate(container_cpu_usage_seconds_total{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$team\", agent_type=~\"$agent_type\"}[5m]) * 100",
+            "expr": "rate(container_cpu_usage_seconds_total{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"}[5m]) * 100",
             "refId": "A",
-            "legendFormat": "{{ jenkins_team }}-{{ agent_type }}-{{ name }}"
+            "legendFormat": "{{ '{{' }}jenkins_team{{ '}}' }}-{{ '{{' }}agent_type{{ '}}' }}-{{ '{{' }}name{{ '}}' }}"
           }
         ],
         "fieldConfig": {
@@ -420,9 +420,9 @@
         },
         "targets": [
           {
-            "expr": "container_memory_usage_bytes{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$team\", agent_type=~\"$agent_type\"} / 1024^3",
+            "expr": "container_memory_usage_bytes{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"} / 1024^3",
             "refId": "A",
-            "legendFormat": "{{ jenkins_team }}-{{ agent_type }}-{{ name }}"
+            "legendFormat": "{{ '{{' }}jenkins_team{{ '}}' }}-{{ '{{' }}agent_type{{ '}}' }}-{{ '{{' }}name{{ '}}' }}"
           }
         ],
         "fieldConfig": {
@@ -483,9 +483,9 @@
         },
         "targets": [
           {
-            "expr": "increase(jenkins_agent_launches_total{jenkins_team=~\"$team\", agent_type=~\"$agent_type\"}[1h])",
+            "expr": "increase(jenkins_agent_launches_total{jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"}[1h])",
             "refId": "A",
-            "legendFormat": "{{ jenkins_team }}-{{ agent_type }}"
+            "legendFormat": "{{ '{{' }}jenkins_team{{ '}}' }}-{{ '{{' }}agent_type{{ '}}' }}"
           }
         ],
         "fieldConfig": {
@@ -532,7 +532,7 @@
         },
         "targets": [
           {
-            "expr": "avg(time() - container_start_time_seconds{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$team\", agent_type=~\"$agent_type\"}) / 60",
+            "expr": "avg(time() - container_start_time_seconds{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"}) / 60",
             "refId": "A",
             "legendFormat": "Avg Uptime"
           }
@@ -579,7 +579,7 @@
         },
         "targets": [
           {
-            "expr": "rate(container_last_seen{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$team\", agent_type=~\"$agent_type\"}[5m]) * 60",
+            "expr": "rate(container_last_seen{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"}[5m]) * 60",
             "refId": "A",
             "legendFormat": "Termination Rate"
           }
@@ -626,7 +626,7 @@
         },
         "targets": [
           {
-            "expr": "((sum(jenkins_agent_launches_total{jenkins_team=~\"$team\", agent_type=~\"$agent_type\"}) - sum(jenkins_agent_failed_launches_total{jenkins_team=~\"$team\", agent_type=~\"$agent_type\"})) / sum(jenkins_agent_launches_total{jenkins_team=~\"$team\", agent_type=~\"$agent_type\"})) * 100",
+            "expr": "((sum(jenkins_agent_launches_total{jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"}) - sum(jenkins_agent_failed_launches_total{jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"})) / sum(jenkins_agent_launches_total{jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"})) * 100",
             "refId": "A",
             "legendFormat": "Success Rate"
           }
@@ -675,9 +675,9 @@
         },
         "targets": [
           {
-            "expr": "container_fs_usage_bytes{container_label_com_jenkins_agent=\"true\", mountpoint=~\".*m2.*\", jenkins_team=~\"$team\", agent_type=\"maven\"} / 1024^3",
+            "expr": "container_fs_usage_bytes{container_label_com_jenkins_agent=\"true\", mountpoint=~\".*m2.*\", jenkins_team=~\"$jenkins_team\", agent_type=\"maven\"} / 1024^3",
             "refId": "A",
-            "legendFormat": "{{ jenkins_team }}-maven-{{ name }}"
+            "legendFormat": "{{ '{{' }}jenkins_team{{ '}}' }}-maven-{{ '{{' }}name{{ '}}' }}"
           }
         ],
         "fieldConfig": {
@@ -738,9 +738,9 @@
         },
         "targets": [
           {
-            "expr": "container_fs_usage_bytes{container_label_com_jenkins_agent=\"true\", mountpoint=~\".*pip.*\", jenkins_team=~\"$team\", agent_type=\"python\"} / 1024^3",
+            "expr": "container_fs_usage_bytes{container_label_com_jenkins_agent=\"true\", mountpoint=~\".*pip.*\", jenkins_team=~\"$jenkins_team\", agent_type=\"python\"} / 1024^3",
             "refId": "A",
-            "legendFormat": "{{ jenkins_team }}-python-{{ name }}"
+            "legendFormat": "{{ '{{' }}jenkins_team{{ '}}' }}-python-{{ '{{' }}name{{ '}}' }}"
           }
         ],
         "fieldConfig": {
@@ -801,9 +801,9 @@
         },
         "targets": [
           {
-            "expr": "container_fs_usage_bytes{container_label_com_jenkins_agent=\"true\", mountpoint=~\".*npm.*\", jenkins_team=~\"$team\", agent_type=\"nodejs\"} / 1024^3",
+            "expr": "container_fs_usage_bytes{container_label_com_jenkins_agent=\"true\", mountpoint=~\".*npm.*\", jenkins_team=~\"$jenkins_team\", agent_type=\"nodejs\"} / 1024^3",
             "refId": "A",
-            "legendFormat": "{{ jenkins_team }}-nodejs-{{ name }}"
+            "legendFormat": "{{ '{{' }}jenkins_team{{ '}}' }}-nodejs-{{ '{{' }}name{{ '}}' }}"
           }
         ],
         "fieldConfig": {
@@ -864,14 +864,14 @@
         },
         "targets": [
           {
-            "expr": "rate(container_network_receive_bytes_total{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$team\", agent_type=~\"$agent_type\"}[5m])",
+            "expr": "rate(container_network_receive_bytes_total{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"}[5m])",
             "refId": "A",
-            "legendFormat": "RX {{ jenkins_team }}-{{ agent_type }}-{{ name }}"
+            "legendFormat": "RX {{ '{{' }}jenkins_team{{ '}}' }}-{{ '{{' }}agent_type{{ '}}' }}-{{ '{{' }}name{{ '}}' }}"
           },
           {
-            "expr": "rate(container_network_transmit_bytes_total{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$team\", agent_type=~\"$agent_type\"}[5m])",
+            "expr": "rate(container_network_transmit_bytes_total{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"}[5m])",
             "refId": "B",
-            "legendFormat": "TX {{ jenkins_team }}-{{ agent_type }}-{{ name }}"
+            "legendFormat": "TX {{ '{{' }}jenkins_team{{ '}}' }}-{{ '{{' }}agent_type{{ '}}' }}-{{ '{{' }}name{{ '}}' }}"
           }
         ],
         "fieldConfig": {
@@ -931,14 +931,14 @@
         },
         "targets": [
           {
-            "expr": "rate(container_fs_reads_bytes_total{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$team\", agent_type=~\"$agent_type\"}[5m])",
+            "expr": "rate(container_fs_reads_bytes_total{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"}[5m])",
             "refId": "A",
-            "legendFormat": "Read {{ jenkins_team }}-{{ agent_type }}-{{ name }}"
+            "legendFormat": "Read {{ '{{' }}jenkins_team{{ '}}' }}-{{ '{{' }}agent_type{{ '}}' }}-{{ '{{' }}name{{ '}}' }}"
           },
           {
-            "expr": "rate(container_fs_writes_bytes_total{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$team\", agent_type=~\"$agent_type\"}[5m])",
+            "expr": "rate(container_fs_writes_bytes_total{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"}[5m])",
             "refId": "B",
-            "legendFormat": "Write {{ jenkins_team }}-{{ agent_type }}-{{ name }}"
+            "legendFormat": "Write {{ '{{' }}jenkins_team{{ '}}' }}-{{ '{{' }}agent_type{{ '}}' }}-{{ '{{' }}name{{ '}}' }}"
           }
         ],
         "fieldConfig": {
@@ -998,7 +998,7 @@
         },
         "targets": [
           {
-            "expr": "jenkins_agent_failed_launches_total{jenkins_team=~\"$team\", agent_type=~\"$agent_type\"}",
+            "expr": "jenkins_agent_failed_launches_total{jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"}",
             "refId": "A",
             "format": "table",
             "instant": true
@@ -1072,14 +1072,14 @@
         },
         "targets": [
           {
-            "expr": "(container_memory_usage_bytes{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$team\", agent_type=~\"$agent_type\"} / container_spec_memory_limit_bytes{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$team\", agent_type=~\"$agent_type\"}) * 100",
+            "expr": "(container_memory_usage_bytes{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"} / container_spec_memory_limit_bytes{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"}) * 100",
             "refId": "A",
-            "legendFormat": "Memory {{ jenkins_team }}-{{ agent_type }}-{{ name }}"
+            "legendFormat": "Memory {{ '{{' }}jenkins_team{{ '}}' }}-{{ '{{' }}agent_type{{ '}}' }}-{{ '{{' }}name{{ '}}' }}"
           },
           {
-            "expr": "(rate(container_cpu_usage_seconds_total{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$team\", agent_type=~\"$agent_type\"}[5m]) / container_spec_cpu_quota{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$team\", agent_type=~\"$agent_type\"}) * 100",
+            "expr": "(rate(container_cpu_usage_seconds_total{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"}[5m]) / container_spec_cpu_quota{container_label_com_jenkins_agent=\"true\", jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"}) * 100",
             "refId": "B",
-            "legendFormat": "CPU {{ jenkins_team }}-{{ agent_type }}-{{ name }}"
+            "legendFormat": "CPU {{ '{{' }}jenkins_team{{ '}}' }}-{{ '{{' }}agent_type{{ '}}' }}-{{ '{{' }}name{{ '}}' }}"
           }
         ],
         "fieldConfig": {
@@ -1137,9 +1137,9 @@
         },
         "targets": [
           {
-            "expr": "increase(jenkins_agent_retry_attempts_total{jenkins_team=~\"$team\", agent_type=~\"$agent_type\"}[10m])",
+            "expr": "increase(jenkins_agent_retry_attempts_total{jenkins_team=~\"$jenkins_team\", agent_type=~\"$agent_type\"}[10m])",
             "refId": "A",
-            "legendFormat": "{{ jenkins_team }}-{{ agent_type }}"
+            "legendFormat": "{{ '{{' }}jenkins_team{{ '}}' }}-{{ '{{' }}agent_type{{ '}}' }}"
           }
         ],
         "fieldConfig": {

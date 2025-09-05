@@ -22,6 +22,7 @@
   loop:
     - jenkins-overview.json
     - jenkins-builds.json
+    - jenkins-dynamic-agents.json
     - infrastructure-health.json
     - security-metrics.json
   notify: restart grafana
