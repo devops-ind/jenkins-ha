@@ -253,7 +253,28 @@
     body: "{{ grafana_prometheus_datasource }}"
     status_code: [200, 409]  # 409 if datasource already exists
 
-- name: Import Grafana dashboards
+- name: Check for existing dashboards to prevent duplication
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}/api/search?query={{ item.title | urlencode }}"
+    method: GET
+    user: "{{ grafana_admin_user }}"
+    password: "{{ grafana_admin_password }}"
+    force_basic_auth: yes
+  register: dashboard_search_results
+  loop:
+    - name: "jenkins-overview"
+      title: "Jenkins Overview - {{ deployment_mode | default('local') | title }}"
+    - name: "jenkins-builds"
+      title: "Jenkins Builds - {{ deployment_mode | default('local') | title }}"
+    - name: "jenkins-dynamic-agents"
+      title: "Jenkins Dynamic Agents - {{ deployment_mode | default('local') | title }}"
+    - name: "infrastructure-health"
+      title: "Infrastructure Health - {{ deployment_mode | default('local') | title }}"
+    - name: "security-metrics"
+      title: "Security Metrics - {{ deployment_mode | default('local') | title }}"
+  ignore_errors: yes
+
+- name: Deploy/Update Grafana dashboards with overwrite protection
   uri:
     url: "http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}/api/dashboards/db"
     method: POST
@@ -261,13 +282,25 @@
     password: "{{ grafana_admin_password }}"
     force_basic_auth: yes
     body_format: json
-    body: "{{ lookup('file', playbook_dir + '/../' + item) | from_json }}"
-    status_code: [200, 412]  # 412 if dashboard already exists
+    body:
+      dashboard: "{{ lookup('template', 'dashboards/' + item.name + '.json.j2') | from_json }}"
+      overwrite: true
+      folderId: 0
+      message: "Updated by Ansible - {{ deployment_mode | default('local') }} deployment"
+    status_code: [200, 412]
+  register: dashboard_deploy_result
   loop:
-    - "monitoring/grafana/dashboards/jenkins-overview.json"
-    - "monitoring/grafana/dashboards/jenkins-comprehensive.json"
-    - "monitoring/grafana/dashboards/jenkins-blue-green.json"
-  ignore_errors: yes  # Don't fail deployment if dashboard import fails
+    - name: "jenkins-overview"
+      title: "Jenkins Overview - {{ deployment_mode | default('local') | title }}"
+    - name: "jenkins-builds"
+      title: "Jenkins Builds - {{ deployment_mode | default('local') | title }}"
+    - name: "jenkins-dynamic-agents"
+      title: "Jenkins Dynamic Agents - {{ deployment_mode | default('local') | title }}"
+    - name: "infrastructure-health"
+      title: "Infrastructure Health - {{ deployment_mode | default('local') | title }}"
+    - name: "security-metrics"
+      title: "Security Metrics - {{ deployment_mode | default('local') | title }}"
+  when: item.name in (dashboard_deploy_result.results | default([]) | map(attribute='item.name') | list) or dashboard_search_results is not defined
 
 - name: Create monitoring bin directory
   file:

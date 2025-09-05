@@ -85,17 +85,6 @@ jenkins:
                 - "type=volume,source=jenkins-{{ team_config.team_name }}-shared,destination={{ jenkins_master_shared_path }}"
                 - "type=volume,source=jenkins-{{ team_config.team_name }}-pip-cache,destination=/home/jenkins/.cache/pip"
                 - "type=volume,source=jenkins-{{ team_config.team_name }}-cache,destination=/home/jenkins/.cache"
-              extraDockerLabels:
-                - key: "com.jenkins.agent"
-                  value: "true"
-                - key: "team"
-                  value: "{{ team_config.team_name }}"
-                - key: "agent_type"
-                  value: "python"
-                - key: "deployment_mode"
-                  value: "{{ deployment_mode | default('local') }}"
-                - key: "jenkins_environment"
-                  value: "{{ current_env }}"
             remoteFs: "{{ jenkins_master_shared_path }}"
             connector:
               attach:
@@ -120,17 +109,6 @@ jenkins:
                 - "type=volume,source=jenkins-{{ team_config.team_name }}-shared,destination={{ jenkins_master_shared_path }}"
                 - "type=volume,source=jenkins-{{ team_config.team_name }}-npm-cache,destination=/home/jenkins/.npm"
                 - "type=volume,source=jenkins-{{ team_config.team_name }}-cache,destination=/home/jenkins/.cache"
-              extraDockerLabels:
-                - key: "com.jenkins.agent"
-                  value: "true"
-                - key: "team"
-                  value: "{{ team_config.team_name }}"
-                - key: "agent_type"
-                  value: "nodejs"
-                - key: "deployment_mode"
-                  value: "{{ deployment_mode | default('local') }}"
-                - key: "jenkins_environment"
-                  value: "{{ current_env }}"
             remoteFs: "{{ jenkins_master_shared_path }}"
             connector:
               attach:
@@ -156,17 +134,6 @@ jenkins:
                 - "type=volume,source=jenkins-{{ team_config.team_name }}-shared,destination={{ jenkins_master_shared_path }}"
                 - "type=volume,source=jenkins-{{ team_config.team_name }}-docker-cache,destination=/var/lib/docker"
                 - "type=volume,source=jenkins-{{ team_config.team_name }}-cache,destination=/home/jenkins/.cache"
-              extraDockerLabels:
-                - key: "com.jenkins.agent"
-                  value: "true"
-                - key: "team"
-                  value: "{{ team_config.team_name }}"
-                - key: "agent_type"
-                  value: "dind"
-                - key: "deployment_mode"
-                  value: "{{ deployment_mode | default('local') }}"
-                - key: "jenkins_environment"
-                  value: "{{ current_env }}"
             remoteFs: "{{ jenkins_master_shared_path }}"
             connector:
               attach:

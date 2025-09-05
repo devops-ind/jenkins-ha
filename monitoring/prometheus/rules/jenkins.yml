@@ -42,10 +42,20 @@ groups:
       - record: jenkins:response_time_p95
         expr: histogram_quantile(0.95, rate(jenkins_http_request_duration_seconds_bucket[5m])) * 1000
         
-      # Service Availability SLI
+      # Service Availability SLI - Updated for team-aware monitoring
       - record: jenkins:service_availability
         expr: |
-          avg(up{job=~"jenkins-master|jenkins-loadbalancer"})
+          avg(up{job=~"jenkins-.*|jenkins|jenkins-default"})
+          
+      # Team-specific Service Availability SLI
+      - record: jenkins:service_availability_by_team
+        expr: |
+          avg(up{job=~"jenkins-.*|jenkins|jenkins-default"}) by (jenkins_team)
+          
+      # Environment-specific Service Availability SLI
+      - record: jenkins:service_availability_by_environment
+        expr: |
+          avg(up{job=~"jenkins-.*|jenkins|jenkins-default"}) by (jenkins_environment)
 
   - name: jenkins.blue_green.recording
     interval: 30s
@@ -82,9 +92,9 @@ groups:
 
   - name: jenkins.infrastructure
     rules:
-      # Jenkins Master Availability
+      # Jenkins Master Availability - Updated for dynamic team targets
       - alert: JenkinsMasterDown
-        expr: up{job="jenkins-master"} == 0
+        expr: up{job=~"jenkins-.*|jenkins|jenkins-default"} == 0
         for: 2m
         labels:
           severity: critical
@@ -96,7 +106,7 @@ groups:
           runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/master-down"
 
       - alert: JenkinsAllMastersDown
-        expr: count(up{job="jenkins-master"} == 1) == 0
+        expr: count(up{job=~"jenkins-.*|jenkins|jenkins-default"} == 1) == 0
         for: 1m
         labels:
           severity: critical
@@ -108,7 +118,7 @@ groups:
           runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/all-masters-down"
 
       - alert: JenkinsHADegraded
-        expr: count(up{job="jenkins-master"} == 1) == 1
+        expr: count(up{job=~"jenkins-.*|jenkins|jenkins-default"} == 1) == 1
         for: 5m
         labels:
           severity: warning
@@ -119,9 +129,9 @@ groups:
           description: "Only one Jenkins Master is available. HA redundancy is lost."
           runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/ha-degraded"
 
-      # Jenkins Agent Availability
+      # Jenkins Agent Availability - Updated for dynamic agent monitoring
       - alert: JenkinsAgentDown
-        expr: up{job="jenkins-agent"} == 0
+        expr: up{job="jenkins-dynamic-agents"} == 0
         for: 5m
         labels:
           severity: warning
@@ -133,7 +143,7 @@ groups:
           runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/agent-down"
 
       - alert: JenkinsAgentCapacityLow
-        expr: (count(up{job="jenkins-agent"} == 1) / count(up{job="jenkins-agent"})) < 0.5
+        expr: (count(up{job="jenkins-dynamic-agents"} == 1) / count(up{job="jenkins-dynamic-agents"})) < 0.5
         for: 10m
         labels:
           severity: warning

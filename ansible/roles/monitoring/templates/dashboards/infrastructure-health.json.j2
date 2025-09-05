@@ -1,8 +1,8 @@
 {
   "dashboard": {
     "id": null,
-    "title": "Infrastructure Health - {{ deployment_environment | default('local') | title }}",
-    "tags": ["infrastructure", "health"],
+    "title": "Infrastructure Health - {{ deployment_mode | default('local') | title }}",
+    "tags": ["infrastructure", "health", "{{ deployment_mode | default('local') }}"],
     "style": "dark",
     "timezone": "browser",
     "refresh": "30s",
