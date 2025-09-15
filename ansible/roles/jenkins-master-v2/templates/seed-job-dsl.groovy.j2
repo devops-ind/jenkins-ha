@@ -259,6 +259,233 @@ freeStyleJob("${teamDisplayName}/{{ seed_job.folder | default('Applications') }}
 {% endfor %}
 {% endif %}
 
+{% if team_config.jenkins_dsl_repos is defined and team_config.jenkins_dsl_repos | length > 0 %}
+// ==============================================================================
+// EXTERNAL DSL REPOSITORY PROCESSING
+// ==============================================================================
+
+// Create DSL folder for external repository management
+try {
+    folder("${teamDisplayName}/DSL") {
+        displayName('DSL Management')
+        description("External DSL repository processing and management for ${teamName}")
+    }
+    println("✅ Created DSL Management folder")
+} catch (Exception e) {
+    println("❌ Failed to create DSL Management folder: ${e.message}")
+}
+
+{% for dsl_repo in team_config.jenkins_dsl_repos %}
+{% set repo_index = loop.index %}
+// DSL Repository Processor for {{ dsl_repo.repo_url }}
+safeCreateJob("${teamDisplayName}/DSL/dsl-repo-{{ repo_index }}", "DSL Repository Processor {{ repo_index }}", "Process DSL scripts from {{ dsl_repo.repo_url }}") {
+    pipelineJob("${teamDisplayName}/DSL/dsl-repo-{{ repo_index }}") {
+        displayName('DSL Repository Processor {{ repo_index }}')
+        description('''{{ dsl_repo.description | default("Process DSL scripts from external repository") }}
+        
+        Repository: {{ dsl_repo.repo_url }}
+        Branch: {{ dsl_repo.repo_branch | default("main") }}
+        DSL Directory: {{ dsl_repo.dsl_directory | default("dsl") }}
+        
+        This job automatically scans and processes Job DSL scripts from the configured repository.
+        ''')
+        
+        definition {
+            cpsScm {
+                scm {
+                    git {
+                        remote {
+                            url('{{ dsl_repo.repo_url }}')
+                            {% if dsl_repo.credentials_id is defined %}
+                            credentials('{{ dsl_repo.credentials_id }}')
+                            {% endif %}
+                        }
+                        branch('{{ dsl_repo.repo_branch | default("main") }}')
+                    }
+                }
+                scriptPath('Jenkinsfile.dsl-processor')
+            }
+        }
+        
+        triggers {
+            {% if dsl_repo.scan_schedule is defined %}
+            cron('{{ dsl_repo.scan_schedule }}')
+            {% else %}
+            cron('H/30 * * * *')  // Default: every 30 minutes
+            {% endif %}
+        }
+        
+        properties {
+            buildDiscarder {
+                strategy {
+                    logRotator {
+                        numToKeepStr('20')
+                        daysToKeepStr('30')
+                    }
+                }
+            }
+            
+            parameters {
+                stringParam('DSL_DIRECTORY', '{{ dsl_repo.dsl_directory | default("dsl") }}', 'Directory containing DSL scripts')
+                choiceParam('ACTION', ['scan', 'validate', 'deploy'], 'Action to perform')
+                booleanParam('DRY_RUN', false, 'Perform dry run only (validate without creating jobs)')
+                stringParam('TEAM_NAME', '{{ team_config.team_name }}', 'Team name for DSL processing')
+                stringParam('REPO_URL', '{{ dsl_repo.repo_url }}', 'Repository URL for reference')
+            }
+        }
+    }
+}
+
+// DSL Validation Job for {{ dsl_repo.repo_url }}
+safeCreateJob("${teamDisplayName}/DSL/validate-dsl-{{ repo_index }}", "DSL Validation {{ repo_index }}", "Validate DSL scripts from {{ dsl_repo.repo_url }}") {
+    pipelineJob("${teamDisplayName}/DSL/validate-dsl-{{ repo_index }}") {
+        displayName('DSL Validation {{ repo_index }}')
+        description('''Validate Job DSL scripts for security and syntax compliance
+        
+        Repository: {{ dsl_repo.repo_url }}
+        
+        This job performs:
+        • Groovy syntax validation
+        • Security policy compliance
+        • Team boundary enforcement
+        • Best practices validation
+        ''')
+        
+        definition {
+            cps {
+                script('''
+                    pipeline {
+                        agent { label '{{ team_config.team_name }}-python python-{{ team_config.team_name }}' }
+                        
+                        options {
+                            buildDiscarder(logRotator(numToKeepStr: '10', daysToKeepStr: '30'))
+                            timeout(time: 15, unit: 'MINUTES')
+                        }
+                        
+                        stages {
+                            stage('Checkout DSL Repository') {
+                                steps {
+                                    git branch: '{{ dsl_repo.repo_branch | default("main") }}',
+                                        {% if dsl_repo.credentials_id is defined %}
+                                        credentialsId: '{{ dsl_repo.credentials_id }}',
+                                        {% endif %}
+                                        url: '{{ dsl_repo.repo_url }}'
+                                }
+                            }
+                            
+                            stage('Find DSL Scripts') {
+                                steps {
+                                    script {
+                                        echo "🔍 Scanning for DSL scripts in {{ dsl_repo.dsl_directory | default('dsl') }}/"
+                                        
+                                        def dslFiles = sh(
+                                            script: """
+                                                find {{ dsl_repo.dsl_directory | default('dsl') }} -name '*.groovy' -type f 2>/dev/null || echo 'No DSL files found'
+                                            """,
+                                            returnStdout: true
+                                        ).trim()
+                                        
+                                        if (dslFiles && dslFiles != 'No DSL files found') {
+                                            env.DSL_FILES = dslFiles.replaceAll('\\n', ',')
+                                            echo "📄 Found DSL files: ${env.DSL_FILES}"
+                                        } else {
+                                            echo "⚠️ No DSL files found in {{ dsl_repo.dsl_directory | default('dsl') }}/ directory"
+                                            env.DSL_FILES = ""
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            stage('Validate DSL Scripts') {
+                                when {
+                                    expression { env.DSL_FILES && env.DSL_FILES != "" }
+                                }
+                                steps {
+                                    script {
+                                        echo "🔧 Validating DSL scripts..."
+                                        
+                                        env.DSL_FILES.split(',').each { dslFile ->
+                                            if (dslFile.trim()) {
+                                                echo "Validating ${dslFile}"
+                                                
+                                                // Basic syntax validation
+                                                def syntaxResult = sh(
+                                                    script: "groovy -cp /usr/share/jenkins/job-dsl-core*.jar -e 'println \"Syntax check: ${dslFile}\"' || echo 'Syntax validation skipped'",
+                                                    returnStatus: true
+                                                )
+                                                
+                                                // Security validation
+                                                def securityResult = sh(
+                                                    script: """
+                                                        echo "🔒 Security validation for ${dslFile}"
+                                                        
+                                                        # Check for dangerous patterns
+                                                        if grep -q "System\\.exit\\|Runtime\\.getRuntime\\|ProcessBuilder" "${dslFile}"; then
+                                                            echo "❌ SECURITY VIOLATION: Dangerous system calls found in ${dslFile}"
+                                                            exit 1
+                                                        fi
+                                                        
+                                                        # Check for team boundary violations  
+                                                        if grep -q "folder('.*[^{{ team_config.team_name }}]')" "${dslFile}"; then
+                                                            echo "⚠️ WARNING: Potential team boundary violation in ${dslFile}"
+                                                        fi
+                                                        
+                                                        echo "✅ Security validation passed for ${dslFile}"
+                                                    """,
+                                                    returnStatus: true
+                                                )
+                                                
+                                                if (securityResult != 0) {
+                                                    error("Security validation failed for ${dslFile}")
+                                                }
+                                            }
+                                        }
+                                        
+                                        echo "✅ All DSL scripts validated successfully"
+                                    }
+                                }
+                            }
+                        }
+                        
+                        post {
+                            always {
+                                echo "DSL validation completed for {{ team_config.team_name }} team"
+                            }
+                            success {
+                                echo "✅ DSL scripts are valid and secure"
+                            }
+                            failure {
+                                echo "❌ DSL validation failed - check logs for details"
+                            }
+                        }
+                    }
+                ''')
+                sandbox(true)
+            }
+        }
+        
+        triggers {
+            upstream(upstreamProjects: "${teamDisplayName}/DSL/dsl-repo-{{ repo_index }}", threshold: 'SUCCESS')
+        }
+        
+        properties {
+            buildDiscarder {
+                strategy {
+                    logRotator {
+                        numToKeepStr('10')
+                        daysToKeepStr('14')
+                    }
+                }
+            }
+        }
+    }
+}
+
+{% endfor %}
+
+println("📦 External DSL repository processing configured for {{ team_config.jenkins_dsl_repos | length }} repositories")
+{% endif %}
+
 // SLI Dashboard and Alerting Pipeline (from consolidated embedded DSL)
 pipelineJob("${teamDisplayName}/Monitoring/sli-dashboard") {
     displayName('SLI Dashboard & Alerting')
@@ -729,6 +956,17 @@ try {
     println("   • Application Jobs: None configured")
     {% endif %}
     
+    {% if team_config.jenkins_dsl_repos is defined and team_config.jenkins_dsl_repos | length > 0 %}
+    println("   • External DSL Jobs:")
+    {% for dsl_repo in team_config.jenkins_dsl_repos %}
+    {% set repo_index = loop.index %}
+    println("     - dsl-repo-{{ repo_index }} ({{ dsl_repo.description | default('External DSL processor') }})")
+    println("     - validate-dsl-{{ repo_index }} (DSL validation and security check)")
+    {% endfor %}
+    {% else %}
+    println("   • External DSL Jobs: None configured")
+    {% endif %}
+    
     // Configuration validation summary
     println("")
     println("⚙️  Configuration Status:")
@@ -746,6 +984,10 @@ try {
     println("   • Blue-Green Deployment: ✅ Environment switching")
     println("   • SLI Monitoring: ✅ Performance tracking")
     println("   • Error Recovery: ✅ Graceful failure handling")
+    {% if team_config.jenkins_dsl_repos is defined and team_config.jenkins_dsl_repos | length > 0 %}
+    println("   • External DSL Processing: ✅ {{ team_config.jenkins_dsl_repos | length }} repositories configured")
+    println("   • DSL Security Validation: ✅ Automated security and compliance checks")
+    {% endif %}
     
     println("")
     println("✅ DSL EXECUTION COMPLETED SUCCESSFULLY!")

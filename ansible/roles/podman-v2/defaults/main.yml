@@ -1,0 +1,203 @@
+---
+# Default variables for podman-v2 role
+
+# Podman installation
+podman_enabled: true
+podman_version: "latest"  # Podman doesn't use version pinning like Docker
+
+# Podman runtime configuration
+podman_runtime: "crun"  # Default container runtime (crun or runc)
+podman_network_backend: "netavark"  # Modern network backend (netavark or cni)
+podman_log_driver: "k8s-file"  # Kubernetes-compatible logging
+podman_storage_driver: "overlay"
+
+# Rootless vs Rootful configuration
+podman_enable_rootless: true
+podman_rootless_only: false  # Set to true to disable rootful containers entirely
+podman_system_service_enabled: true
+podman_socket_enabled: true
+
+# User configuration
+podman_users:
+  - "vscode"
+  - "jenkins"
+
+podman_user_groups:
+  - "wheel"
+
+# User namespace configuration for rootless containers
+podman_subuid_start: 100000
+podman_subuid_size: 65536
+podman_subgid_start: 100000
+podman_subgid_size: 65536
+
+# Podman daemon configuration
+podman_daemon_options:
+  log_driver: "k8s-file"
+  log_opts:
+    max_size: "10m"
+    max_file: "3"
+  events_logger: "journald"
+  cgroup_manager: "systemd"
+  runtime: "{{ podman_runtime }}"
+  conmon_path: "/usr/bin/conmon"
+  network_backend: "{{ podman_network_backend }}"
+  # Security options
+  seccomp_profile: "/usr/share/containers/seccomp.json"
+  apparmor_profile: "containers-default-0.53.0"
+
+# Registry configuration
+podman_registry_mirrors: []
+podman_insecure_registries: []
+podman_blocked_registries: []
+podman_default_registry: "docker.io"
+
+# Unqualified image search registries (in order of preference)
+podman_unqualified_search_registries:
+  - "registry.fedoraproject.org"
+  - "registry.access.redhat.com"
+  - "docker.io"
+  - "quay.io"
+
+# Registry authentication (use vault for sensitive data)
+podman_registries_auth: {}
+  # Example:
+  # docker.io:
+  #   username: "{{ vault_docker_username }}"
+  #   password: "{{ vault_docker_password }}"
+
+# Networks configuration (similar to Docker networks but more flexible)
+podman_networks:
+  - name: jenkins-network
+    driver: bridge
+    subnet: "172.20.0.0/16"
+    gateway: "172.20.0.1"
+    internal: false
+    disable_dns: false
+
+# Volumes configuration
+podman_volumes:
+  - name: jenkins_home
+    driver: local
+  - name: jenkins_shared
+    driver: local
+  - name: prometheus_data
+    driver: local
+  - name: grafana_data
+    driver: local
+
+# Pod configuration (Podman-specific feature)
+podman_pods_enabled: true
+podman_default_pod_network: "jenkins-network"
+
+# Cleanup configuration
+podman_cleanup_enabled: true
+podman_cleanup_cron:
+  minute: "0"
+  hour: "2"
+  day: "*"
+  month: "*"
+  weekday: "0"  # Sunday
+
+# Systemd integration
+podman_systemd_integration: true
+podman_systemd_units_dir: "/etc/systemd/system"
+podman_create_example_service: false
+
+# Auto-update configuration
+podman_auto_update_enabled: true
+podman_auto_update_schedule: "daily"
+
+# Docker compatibility
+podman_docker_compatibility: true  # Creates docker symlink to podman
+podman_compose_enabled: true  # Installs podman-compose
+
+# Security configuration
+podman_enable_selinux: "{{ ansible_selinux.status == 'enabled' if ansible_selinux is defined else false }}"
+podman_enable_apparmor: "{{ ansible_apparmor.status == 'enabled' if ansible_apparmor is defined else false }}"
+
+# Resource limits (systemd integration)
+podman_default_limits:
+  memory: "2G"
+  cpu_quota: "100%"
+  pids_limit: 1024
+
+# Image configuration
+podman_image_pull_policy: "missing"  # missing, always, never
+podman_image_signature_policy: "/etc/containers/policy.json"
+
+# Machine configuration (for macOS/Windows)
+podman_machine_enabled: false
+podman_machine_name: "podman-machine-default"
+podman_machine_memory: "2048"
+podman_machine_cpus: 2
+podman_machine_disk_size: "10"
+
+# Quadlet support (systemd container management)
+podman_quadlet_enabled: true
+podman_quadlet_dir: "/etc/containers/systemd"
+
+# Podman-specific features
+podman_enable_secrets: true  # Enable Podman secrets management
+podman_enable_kube_play: true  # Enable Kubernetes YAML support
+
+# Development/debugging options
+podman_debug_logging: false
+podman_enable_remote: false  # Enable remote Podman API
+
+# Monitoring and metrics
+podman_metrics_enabled: false
+podman_metrics_port: 9091
+
+# Backup and migration
+podman_backup_enabled: false
+podman_export_location: "/backup/podman"
+
+# Performance tuning
+podman_tune_network: true
+podman_tune_storage: true
+
+# Integration with existing infrastructure
+podman_jenkins_integration: true
+podman_monitoring_integration: true
+
+# Container health checks
+podman_health_check_enabled: true
+podman_health_check_interval: "30s"
+podman_health_check_timeout: "30s"
+podman_health_check_retries: 3
+
+# Pod security context
+podman_pod_security_context:
+  run_as_user: 1000
+  run_as_group: 1000
+  fs_group: 1000
+  supplemental_groups: []
+
+# Image building configuration
+podman_build_enabled: true
+podman_buildah_enabled: true  # Enable Buildah for advanced builds
+podman_build_isolation: "chroot"  # chroot, rootless, or oci
+
+# CNI plugins (if using CNI backend instead of netavark)
+podman_cni_plugins:
+  - bridge
+  - host-local
+  - firewall
+  - tuning
+  - portmap
+
+# Logging configuration
+podman_log_max_size: "10m"
+podman_log_max_files: 3
+podman_syslog_enabled: false
+
+# Podman API configuration
+podman_api_enabled: false
+podman_api_port: 8080
+podman_api_cors_headers: "*"
+
+# Compatibility layers
+podman_kubernetes_compatible: true
+podman_docker_compose_compatible: true
+podman_swarm_compatible: false  # Podman doesn't support Docker Swarm

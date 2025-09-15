@@ -134,6 +134,14 @@ jenkins_teams:
       tier: "production"
       environment: "local"
       role: "default"
+    # Jenkins DSL repositories for local development (using local test repositories)
+    jenkins_dsl_repos:
+      - repo_url: "https://github.com/devops-team/jenkins-dsl.git"
+        repo_branch: "develop"  # Use develop branch for local testing
+        dsl_directory: "dsl"
+        credentials_id: "local-git-credentials"
+        scan_schedule: "H/10 * * * *"  # More frequent scanning for local dev
+        description: "DevOps team DSL for local development"
   - team_name: "ma"
     blue_green_enabled: true
     active_environment: "blue"
@@ -148,6 +156,14 @@ jenkins_teams:
       tier: "production"
       environment: "local"
       role: "marketing-analytics"
+    # Simplified DSL config for local development
+    jenkins_dsl_repos:
+      - repo_url: "https://github.com/ma-team/jenkins-dsl.git"
+        repo_branch: "develop"
+        dsl_directory: "dsl"
+        credentials_id: "local-git-credentials"
+        scan_schedule: "H/15 * * * *"
+        description: "MA team DSL for local development"
   - team_name: "ba"
     blue_green_enabled: true
     active_environment: "blue"
@@ -162,6 +178,14 @@ jenkins_teams:
       tier: "production"
       environment: "local"
       role: "business-analytics"
+    # Minimal DSL setup for local testing
+    jenkins_dsl_repos:
+      - repo_url: "https://github.com/ba-team/jenkins-dsl.git"
+        repo_branch: "develop"
+        dsl_directory: "dsl"
+        credentials_id: "local-git-credentials"
+        scan_schedule: "H/20 * * * *"
+        description: "BA team DSL for local development"
   - team_name: "tw"
     blue_green_enabled: true
     active_environment: "blue"
@@ -176,6 +200,14 @@ jenkins_teams:
       tier: "production"
       environment: "local"
       role: "test-qa"
+    # Test team DSL configuration for local development
+    jenkins_dsl_repos:
+      - repo_url: "https://github.com/tw-team/jenkins-dsl.git"
+        repo_branch: "develop"
+        dsl_directory: "dsl"
+        credentials_id: "local-git-credentials"
+        scan_schedule: "H/25 * * * *"
+        description: "TW team DSL for local development"
 
 # HAProxy configuration for local development (corrected structure)
 jenkins_domain: "devops.local"
