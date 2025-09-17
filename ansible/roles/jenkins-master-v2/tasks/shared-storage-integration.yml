@@ -96,17 +96,17 @@
       become: yes
 
 
-    - name: Create unified data management scripts for teams
+    - name: Create backup daemon scripts for teams
       template:
-        src: unified-data-manager.sh.j2
-        dest: "/var/jenkins/scripts/unified-{{ item.team_name }}-manager.sh"
+        src: jenkins-backup-daemon.sh.j2
+        dest: "/var/jenkins/scripts/backup-{{ item.team_name }}-daemon.sh"
         owner: "{{ jenkins_user }}"
         group: "{{ jenkins_group }}"
         mode: '0755'
       loop: "{{ jenkins_teams_config }}"
       loop_control:
         label: "{{ item.team_name }}"
-      tags: ['unified-scripts']
+      tags: ['backup-scripts']
 
     - name: Determine optimal sync source for each team (blue-green vs shared storage)
       block:
@@ -156,73 +156,79 @@
       tags: ['sync-detection']
       when: sync_enabled | default(true)
 
-    - name: Perform initial data synchronization using unified script
+    - name: Perform initial data synchronization using Ansible-native tasks
       block:
-        - name: Execute initial data synchronization for each team
-          command: >-
-            /var/jenkins/scripts/unified-{{ item.team_name }}-manager.sh --sync-only
-            {% if team_sync_sources[item.team_name].sync_from != 'shared' %}--target {{ team_sync_sources[item.team_name].sync_from }}{% endif %}
-          loop: "{{ jenkins_teams_config }}"
+        - name: Execute blue-green data synchronization for teams with previous environments
+          include_tasks: sync-bluegreen-data.yml
+          loop: "{{ jenkins_teams_config | selectattr('team_name', 'in', (team_sync_sources | dict2items | selectattr('value.sync_from', 'ne', 'shared') | map(attribute='key') | list)) | list }}"
           loop_control:
-            label: "{{ item.team_name }}-{{ item.active_environment | default('blue') }}-{{ team_sync_sources[item.team_name].sync_from }}"
-          register: initial_sync_results
-          become: yes
+            label: "{{ item.team_name }}-{{ team_sync_sources[item.team_name].sync_from }}"
+          vars:
+            sync_team: "{{ item }}"
+            sync_source_env: "{{ team_sync_sources[item.team_name].sync_from }}"
+            sync_target_env: "{{ item.active_environment }}"
           when: sync_enabled | default(true)
-          failed_when: false  # Don't fail deployment if sync fails
+          
+        - name: Execute shared storage data synchronization for teams without previous environments
+          include_tasks: sync-shared-data.yml
+          loop: "{{ jenkins_teams_config | selectattr('team_name', 'in', (team_sync_sources | dict2items | selectattr('value.sync_from', 'eq', 'shared') | map(attribute='key') | list)) | list }}"
+          loop_control:
+            label: "{{ item.team_name }}-shared"
+          vars:
+            sync_team: "{{ item }}"
+          when: sync_enabled | default(true)
 
         - name: Display initial synchronization results
           debug:
             msg: |
               ====================================
-              Initial Data Synchronization Results (Unified Script)
+              Initial Data Synchronization Results (Ansible-Native)
               ====================================
-              {% for result in initial_sync_results.results %}
-              {{ result.item.team_name }}: {{ 'Completed' if result.rc == 0 else 'Failed (non-blocking)' }} 
-                └─ Sync Target: {{ team_sync_sources[result.item.team_name].sync_from }}
-                {% if team_sync_sources[result.item.team_name].sync_from != 'shared' %}└─ From Environment: {{ team_sync_sources[result.item.team_name].previous_env }}{% endif %}
+              Blue-green syncs: {{ jenkins_teams_config | selectattr('team_name', 'in', (team_sync_sources | dict2items | selectattr('value.sync_from', 'ne', 'shared') | map(attribute='key') | list)) | list | length }}
+              Shared storage syncs: {{ jenkins_teams_config | selectattr('team_name', 'in', (team_sync_sources | dict2items | selectattr('value.sync_from', 'eq', 'shared') | map(attribute='key') | list)) | list | length }}
+              
+              Teams with blue-green sync:
+              {% for team_name, strategy in team_sync_sources.items() %}
+              {% if strategy.sync_from != 'shared' %}
+              • {{ team_name }}: {{ strategy.sync_from }} → {{ strategy.active_env }}
+              {% endif %}
               {% endfor %}
-              ====================================
-              Summary:
-              - Blue-green syncs: {{ initial_sync_results.results | selectattr('item.team_name', 'in', (team_sync_sources | dict2items | selectattr('value.sync_from', 'ne', 'shared') | map(attribute='key') | list)) | list | length }}
-              - Shared storage syncs: {{ initial_sync_results.results | selectattr('item.team_name', 'in', (team_sync_sources | dict2items | selectattr('value.sync_from', 'eq', 'shared') | map(attribute='key') | list)) | list | length }}
-              Note: Using unified data management script for improved reliability
+              
+              Teams with shared storage sync:
+              {% for team_name, strategy in team_sync_sources.items() %}
+              {% if strategy.sync_from == 'shared' %}
+              • {{ team_name }}: shared → {{ strategy.active_env }}
+              {% endif %}
+              {% endfor %}
+              
+              Note: Using Ansible-native tasks for improved reliability and control
           tags: ['sync-status']
-          when: initial_sync_results is defined
 
-    - name: Setup unified data management (cron-based)
+    - name: Remove old unified data management cron jobs
       cron:
         name: "Jenkins {{ item.team_name }} unified data management"
-        minute: "{{ unified_cron_minute | default('*/5') }}"
-        hour: "{{ unified_cron_hour | default('*') }}"
-        day: "{{ unified_cron_day | default('*') }}"
-        month: "{{ unified_cron_month | default('*') }}"
-        weekday: "{{ unified_cron_weekday | default('*') }}"
-        job: "/var/jenkins/scripts/unified-{{ item.team_name }}-manager.sh --{{ default_operation_mode | default('sync-only') }}"
         user: "{{ jenkins_user }}"
-        state: present
+        state: absent
       loop: "{{ jenkins_teams_config }}"
       loop_control:
         label: "{{ item.team_name }}"
-      when: sync_enabled | default(true)
-      tags: ['unified-cron']
+      tags: ['cleanup-cron']
 
-    - name: Setup backup-only operations (cron-based)
+    - name: Setup backup daemon operations (cron-based)
       cron:
-        name: "Jenkins {{ item.team_name }} backup"
+        name: "Jenkins {{ item.team_name }} backup daemon"
         minute: "{{ backup_cron_minute | default('0') }}"
         hour: "{{ backup_cron_hour | default('2') }}"
         day: "{{ backup_cron_day | default('*') }}"
         month: "{{ backup_cron_month | default('*') }}"
         weekday: "{{ backup_cron_weekday | default('*') }}"
-        job: "/var/jenkins/scripts/unified-{{ item.team_name }}-manager.sh --backup-only --retention {{ backup_daily_retention | default(7) }}"
+        job: "/var/jenkins/scripts/backup-{{ item.team_name }}-daemon.sh --daemon --interval {{ backup_daemon_interval | default(3600) }}"
         user: "{{ jenkins_user }}"
         state: present
       loop: "{{ jenkins_teams_config }}"
       loop_control:
         label: "{{ item.team_name }}"
-      when: 
-        - backup_enabled | default(false)
-        - default_operation_mode | default('sync-only') in ['sync-only', 'sync-then-backup', 'sync-and-backup']
+      when: backup_enabled | default(false)
       tags: ['backup-cron']
 
     - name: Create shared storage health monitor script
@@ -278,12 +284,13 @@
           Sync Interval: {{ sync_interval | default('*/5') }} minutes
           Health Monitoring: {{ storage_monitoring_enabled | default(true) }}
           
-          Unified Data Management:
-          • Operation Mode: {{ default_operation_mode | default('sync-only') }}
+          Separated Data Operations:
+          • Sync Method: Ansible-native tasks (on-demand during deployments)
+          • Backup Method: Dedicated daemon scripts
           • Backup Enabled: {{ backup_enabled | default(false) }}
-          • Unified Schedule: {{ unified_cron_minute | default('*/5') }} {{ unified_cron_hour | default('*') }} {{ unified_cron_day | default('*') }} {{ unified_cron_month | default('*') }} {{ unified_cron_weekday | default('*') }}
           {% if backup_enabled | default(false) %}
           • Backup Schedule: {{ backup_cron_minute | default('0') }} {{ backup_cron_hour | default('2') }} {{ backup_cron_day | default('*') }} {{ backup_cron_month | default('*') }} {{ backup_cron_weekday | default('*') }}
+          • Backup Daemon Interval: {{ backup_daemon_interval | default(3600) }} seconds
           • Backup Retention: {{ backup_daily_retention | default(7) }} days
           {% endif %}
           
@@ -315,8 +322,13 @@
           Available Scripts per Team:
           {% for team in jenkins_teams_config %}
           • {{ team.team_name }}:
-            - /var/jenkins/scripts/unified-{{ team.team_name }}-manager.sh (unified operations)
+            - /var/jenkins/scripts/backup-{{ team.team_name }}-daemon.sh (dedicated backup daemon)
           {% endfor %}
+          
+          Sync Operations:
+          • Blue-green sync: Ansible-native tasks during deployments
+          • Shared storage sync: Ansible-native tasks during deployments
+          • Real-time: Sync operations run when needed (deployments/switches)
           ====================================================
       tags: ['integration-status']
 

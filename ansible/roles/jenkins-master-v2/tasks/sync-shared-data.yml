@@ -1,0 +1,160 @@
+---
+# Shared Storage Data Synchronization Tasks
+# Synchronizes data from shared storage to active environment for new deployments
+# Called from shared-storage-integration.yml for teams without previous environments
+
+- name: "Shared storage sync: {{ sync_team.team_name }} (shared → {{ sync_team.active_environment }})"
+  block:
+    - name: Verify active container is running
+      command: docker ps --filter "name=jenkins-{{ sync_team.team_name }}-{{ sync_team.active_environment }}" --format "{{ '{{' }}.Names{{ '}}' }}"
+      register: active_container_check
+      failed_when: false
+      changed_when: false
+
+    - name: Skip sync if container not running
+      debug:
+        msg: "Container jenkins-{{ sync_team.team_name }}-{{ sync_team.active_environment }} not running, skipping shared storage sync"
+      when: active_container_check.stdout == ""
+
+    - name: Perform shared storage synchronization
+      block:
+        - name: Ensure team directories exist in shared storage
+          file:
+            path: "{{ storage_path }}/{{ sync_team.team_name }}/{{ item }}"
+            state: directory
+            owner: "{{ jenkins_user }}"
+            group: "{{ jenkins_group }}"
+            mode: '0755'
+          loop:
+            - jobs
+            - workspace
+            - builds
+            - userContent
+            - secrets
+          become: yes
+
+        - name: Check if data exists in shared storage
+          stat:
+            path: "{{ storage_path }}/{{ sync_team.team_name }}/{{ item }}"
+          loop:
+            - jobs
+            - workspace
+            - builds
+            - userContent
+            - secrets
+          register: shared_data_check
+
+        - name: Sync jobs from shared storage to container
+          command: >
+            docker cp "{{ storage_path }}/{{ sync_team.team_name }}/jobs/."
+            "jenkins-{{ sync_team.team_name }}-{{ sync_team.active_environment }}:/var/jenkins_home/jobs/"
+          when: 
+            - shared_data_check.results[0].stat.exists
+            - shared_data_check.results[0].stat.isdir
+          failed_when: false
+          register: jobs_shared_sync
+
+        - name: Sync workspace from shared storage to container
+          command: >
+            docker cp "{{ storage_path }}/{{ sync_team.team_name }}/workspace/."
+            "jenkins-{{ sync_team.team_name }}-{{ sync_team.active_environment }}:/var/jenkins_home/workspace/"
+          when: 
+            - shared_data_check.results[1].stat.exists
+            - shared_data_check.results[1].stat.isdir
+          failed_when: false
+          register: workspace_shared_sync
+
+        - name: Sync builds from shared storage to container
+          command: >
+            docker cp "{{ storage_path }}/{{ sync_team.team_name }}/builds/."
+            "jenkins-{{ sync_team.team_name }}-{{ sync_team.active_environment }}:/var/jenkins_home/builds/"
+          when: 
+            - shared_data_check.results[2].stat.exists
+            - shared_data_check.results[2].stat.isdir
+          failed_when: false
+          register: builds_shared_sync
+
+        - name: Sync userContent from shared storage to container
+          command: >
+            docker cp "{{ storage_path }}/{{ sync_team.team_name }}/userContent/."
+            "jenkins-{{ sync_team.team_name }}-{{ sync_team.active_environment }}:/var/jenkins_home/userContent/"
+          when: 
+            - shared_data_check.results[3].stat.exists
+            - shared_data_check.results[3].stat.isdir
+          failed_when: false
+          register: userContent_shared_sync
+
+        - name: Sync secrets from shared storage to container
+          command: >
+            docker cp "{{ storage_path }}/{{ sync_team.team_name }}/secrets/."
+            "jenkins-{{ sync_team.team_name }}-{{ sync_team.active_environment }}:/var/jenkins_home/secrets/"
+          when: 
+            - shared_data_check.results[4].stat.exists
+            - shared_data_check.results[4].stat.isdir
+          failed_when: false
+          register: secrets_shared_sync
+
+        - name: Fix ownership in container after sync
+          command: >
+            docker exec "jenkins-{{ sync_team.team_name }}-{{ sync_team.active_environment }}"
+            chown -R jenkins:jenkins /var/jenkins_home/{{ item }}
+          loop:
+            - jobs
+            - workspace
+            - builds
+            - userContent
+            - secrets
+          failed_when: false
+
+        - name: Create shared sync completion marker
+          command: >
+            docker exec "jenkins-{{ sync_team.team_name }}-{{ sync_team.active_environment }}"
+            sh -c "echo 'Synced from shared storage on {{ ansible_date_time.iso8601 }}' > /var/jenkins_home/.shared_sync_marker"
+          failed_when: false
+
+      when: active_container_check.stdout != ""
+
+    - name: Verify shared storage sync success
+      block:
+        - name: Check if shared sync marker exists
+          command: >
+            docker exec "jenkins-{{ sync_team.team_name }}-{{ sync_team.active_environment }}"
+            test -f /var/jenkins_home/.shared_sync_marker
+          register: shared_sync_verification
+          failed_when: false
+          when: active_container_check.stdout != ""
+
+        - name: Count synced files in container
+          command: >
+            docker exec "jenkins-{{ sync_team.team_name }}-{{ sync_team.active_environment }}"
+            find /var/jenkins_home/jobs /var/jenkins_home/workspace /var/jenkins_home/builds /var/jenkins_home/userContent /var/jenkins_home/secrets -type f 2>/dev/null | wc -l
+          register: container_file_count
+          failed_when: false
+          when: active_container_check.stdout != ""
+
+        - name: Display shared storage sync results
+          debug:
+            msg: |
+              Shared storage sync results for {{ sync_team.team_name }}:
+              • Source: {{ storage_path }}/{{ sync_team.team_name }}
+              • Target: {{ sync_team.active_environment }} environment container
+              • Container running: {{ 'Yes' if active_container_check.stdout != '' else 'No' }}
+              {% if active_container_check.stdout != '' %}
+              • Sync marker: {{ 'Present' if shared_sync_verification.rc == 0 else 'Missing' }}
+              • Files in container: {{ container_file_count.stdout | default('Unknown') }}
+              • Status: {{ 'Success' if shared_sync_verification.rc == 0 else 'Verification Failed' }}
+              {% else %}
+              • Status: Skipped (container not running)
+              {% endif %}
+
+  rescue:
+    - name: Handle shared storage sync failure
+      debug:
+        msg: |
+          Shared storage sync failed for {{ sync_team.team_name }}:
+          • Source: {{ storage_path }}/{{ sync_team.team_name }}
+          • Target: {{ sync_team.active_environment }} environment
+          • Error: {{ ansible_failed_result.msg | default('Unknown error') }}
+          • This is non-blocking for deployment
+
+  tags: ['shared-sync']

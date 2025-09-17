@@ -208,7 +208,7 @@ scripts/disaster-recovery.sh production --validate
 10. **Post-Deployment Verification**: Multi-layer health checks, security validation, and comprehensive deployment summary
 
 ### Key Ansible Roles
-- `jenkins-master-v2`: **OPTIMIZED** Unified Jenkins deployment with single configuration per team, **resource-optimized blue-green deployment** (active-only containers), production-safe DSL architecture, 55% code reduction (4 files vs 13 files), and **INTEGRATED BACKUP** via unified-data-manager.sh with 5-mode operations
+- `jenkins-master-v2`: **OPTIMIZED** Unified Jenkins deployment with single configuration per team, **resource-optimized blue-green deployment** (active-only containers), production-safe DSL architecture, 55% code reduction (4 files vs 13 files), and **SEPARATED DATA OPERATIONS** with dedicated backup daemons and Ansible-native sync
 - `high-availability-v2`: **ENHANCED** Advanced HA configuration with perfect jenkins-master-v2 compatibility, dynamic team discovery, resource-optimized blue-green deployment, and **NEW** dynamic SSL certificate generation based on `jenkins_teams`
 - `monitoring`: Enhanced Prometheus/Grafana stack with 26-panel dashboards, DORA metrics, SLI tracking, and automated alerting
 - `security`: **REFACTORED** System hardening and compliance validation (SSL generation moved to high-availability-v2 for better separation of concerns)

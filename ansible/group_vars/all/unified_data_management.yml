@@ -1,20 +1,19 @@
 ---
-# Unified Data Management Configuration
-# Enhanced backup and sync operations for Jenkins HA infrastructure
+# Separated Data Operations Configuration
+# Dedicated backup daemons and Ansible-native sync for Jenkins HA infrastructure
 
-# Unified operation configuration (always enabled)
-default_operation_mode: "sync-only"  # Options: sync-only, backup-only, sync-and-backup, backup-then-sync, sync-then-backup
-backup_before_sync: false
-sync_verification_enabled: true
+# Backup daemon configuration (dedicated background processes)
+backup_daemon_enabled: true
+backup_daemon_interval: 3600  # 1 hour interval for daemon checks
 backup_verification_enabled: true
 
-# Enhanced scheduling configuration
-# Unified data management schedule (every 5 minutes by default)
-unified_cron_minute: "*/5"
-unified_cron_hour: "*"
-unified_cron_day: "*"
-unified_cron_month: "*"
-unified_cron_weekday: "*"
+# Backup daemon scheduling configuration
+# Backup daemon startup schedule (daemon manages its own intervals)
+backup_daemon_startup_minute: "0"
+backup_daemon_startup_hour: "2"
+backup_daemon_startup_day: "*"
+backup_daemon_startup_month: "*"
+backup_daemon_startup_weekday: "*"
 
 # Backup schedule (daily at 2 AM by default)
 backup_cron_minute: "0"
@@ -23,22 +22,22 @@ backup_cron_day: "*"
 backup_cron_month: "*"
 backup_cron_weekday: "*"
 
-# Legacy variables for backward compatibility
-unified_cron_schedule: "*/5 * * * *"  # Deprecated: use unified_cron_* variables instead
-backup_cron_schedule: "0 2 * * *"     # Deprecated: use backup_cron_* variables instead
+# Legacy variables for backward compatibility (deprecated)
+# unified_cron_schedule: removed - sync now handled by Ansible tasks
+# backup_cron_schedule: replaced by backup daemon scheduling
 
-# Operation mode preferences per team (optional override)
-team_operation_modes: {}
-  # Example team-specific overrides:
-  # devops: "sync-and-backup"
-  # developer: "sync-only"
-  # qa: "backup-then-sync"
+# Team-specific backup daemon configuration (optional override)
+team_backup_daemon_intervals: {}
+  # Example team-specific daemon intervals (in seconds):
+  # devops: 1800   # 30 minutes
+  # developer: 3600  # 1 hour
+  # qa: 7200     # 2 hours
 
-# Advanced sync configuration
-sync_method: "rsync"  # Options: rsync, cp
-sync_parallel_enabled: true
-sync_compression_enabled: false
-sync_bandwidth_limit: ""  # e.g., "1000k" for 1MB/s limit
+# Ansible-native sync configuration
+# Sync operations are now handled directly by Ansible tasks
+sync_method: "ansible"  # Ansible-native using docker cp and container operations
+sync_parallel_enabled: true  # Ansible can run sync tasks in parallel
+sync_verification_enabled: true  # Verify sync operations with markers
 
 # Advanced backup configuration  
 backup_method: "tar"  # Options: tar, borg
@@ -72,11 +71,12 @@ operation_metrics_enabled: false
 operation_prometheus_integration: false
 
 # Error handling and recovery
-operation_retry_enabled: true
-operation_retry_count: 2
-operation_retry_delay: 60  # seconds
-operation_failure_notification: false
-operation_recovery_mode: "graceful"  # Options: graceful, aggressive, none
+backup_retry_enabled: true
+backup_retry_count: 2
+backup_retry_delay: 60  # seconds
+backup_failure_notification: false
+backup_recovery_mode: "graceful"  # Options: graceful, aggressive, none
+sync_failure_mode: "continue"  # Sync failures are non-blocking for deployments
 
 # Storage backend configuration
 backup_storage_backends:
@@ -133,13 +133,16 @@ test_mode_enabled: false
 development_mode: false
 debug_mode_enabled: false
 
-# Simplified configuration (legacy scripts removed)
-backward_compatibility_warnings: false
+# Architecture separation (unified scripts removed)
+legacy_unified_script_cleanup: true
+backward_compatibility_warnings: true
 
 # Feature flags
 experimental_features_enabled: false
 beta_features_enabled: false
 feature_flags:
+  ansible_native_sync: true
+  dedicated_backup_daemons: true
   parallel_verification: false
   advanced_metrics: false
   cloud_storage_integration: false

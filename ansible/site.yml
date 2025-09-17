@@ -272,8 +272,8 @@
       tags: ['monitoring', 'prometheus', 'grafana']
       when: monitoring_enabled | default(true)
 
-# Backup functionality is now integrated into jenkins-master-v2 role via unified-data-manager.sh
-# This provides team-specific backup, sync, and blue-green data management capabilities
+# Backup functionality is now integrated into jenkins-master-v2 role via dedicated backup daemon scripts
+# Sync operations are handled by Ansible-native tasks for improved reliability and control
 
 - name: Post-Deployment Verification
   hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'jenkins_masters:monitoring') }}"

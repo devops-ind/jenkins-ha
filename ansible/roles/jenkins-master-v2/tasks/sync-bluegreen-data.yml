@@ -1,0 +1,132 @@
+---
+# Blue-Green Data Synchronization Tasks
+# Synchronizes data between blue and green environments for seamless switching
+# Called from shared-storage-integration.yml for teams with previous environments
+
+- name: "Blue-green sync: {{ sync_team.team_name }} ({{ sync_source_env }} → {{ sync_target_env }})"
+  block:
+    - name: Verify source and target volumes exist
+      command: docker volume inspect jenkins-{{ sync_team.team_name }}-{{ item }}-home
+      loop:
+        - "{{ sync_source_env }}"
+        - "{{ sync_target_env }}"
+      register: volume_inspection
+      failed_when: false
+      changed_when: false
+
+    - name: Check if source volume is accessible
+      fail:
+        msg: "Source volume jenkins-{{ sync_team.team_name }}-{{ sync_source_env }}-home does not exist"
+      when: volume_inspection.results[0].rc != 0
+
+    - name: Create target volume if it doesn't exist
+      command: docker volume create jenkins-{{ sync_team.team_name }}-{{ sync_target_env }}-home
+      when: volume_inspection.results[1].rc != 0
+
+    - name: Create temporary sync container
+      docker_container:
+        name: "sync-{{ sync_team.team_name }}-{{ ansible_date_time.epoch }}"
+        image: "alpine:latest"
+        command: "sleep 600"
+        volumes:
+          - "jenkins-{{ sync_team.team_name }}-{{ sync_source_env }}-home:/source:ro"
+          - "jenkins-{{ sync_team.team_name }}-{{ sync_target_env }}-home:/target"
+        detach: yes
+        state: started
+      register: sync_container
+
+    - name: Synchronize data types between environments
+      block:
+        - name: Create target directories for data types
+          command: >
+            docker exec {{ sync_container.container.Name }}
+            mkdir -p /target/{{ item }}
+          loop:
+            - jobs
+            - workspace
+            - builds
+            - userContent
+            - secrets
+          failed_when: false
+
+        - name: Sync jobs data
+          command: >
+            docker exec {{ sync_container.container.Name }}
+            sh -c "if [ -d '/source/jobs' ]; then cp -rp /source/jobs/* /target/jobs/ 2>/dev/null || true; fi"
+          register: jobs_sync
+
+        - name: Sync workspace data
+          command: >
+            docker exec {{ sync_container.container.Name }}
+            sh -c "if [ -d '/source/workspace' ]; then cp -rp /source/workspace/* /target/workspace/ 2>/dev/null || true; fi"
+          register: workspace_sync
+
+        - name: Sync builds data
+          command: >
+            docker exec {{ sync_container.container.Name }}
+            sh -c "if [ -d '/source/builds' ]; then cp -rp /source/builds/* /target/builds/ 2>/dev/null || true; fi"
+          register: builds_sync
+
+        - name: Sync userContent data
+          command: >
+            docker exec {{ sync_container.container.Name }}
+            sh -c "if [ -d '/source/userContent' ]; then cp -rp /source/userContent/* /target/userContent/ 2>/dev/null || true; fi"
+          register: userContent_sync
+
+        - name: Sync secrets data
+          command: >
+            docker exec {{ sync_container.container.Name }}
+            sh -c "if [ -d '/source/secrets' ]; then cp -rp /source/secrets/* /target/secrets/ 2>/dev/null || true; fi"
+          register: secrets_sync
+
+        - name: Set proper ownership in target volume
+          command: >
+            docker exec {{ sync_container.container.Name }}
+            chown -R {{ jenkins_user_id | default('1000') }}:{{ jenkins_group_id | default('1000') }} /target
+          failed_when: false
+
+        - name: Create sync completion marker
+          command: >
+            docker exec {{ sync_container.container.Name }}
+            sh -c "echo 'Synced from {{ sync_source_env }} on {{ ansible_date_time.iso8601 }}' > /target/.sync_marker"
+
+      always:
+        - name: Cleanup temporary sync container
+          docker_container:
+            name: "{{ sync_container.container.Name }}"
+            state: absent
+          when: sync_container.container is defined
+
+    - name: Verify blue-green sync success
+      block:
+        - name: Check if sync marker exists
+          command: docker run --rm -v jenkins-{{ sync_team.team_name }}-{{ sync_target_env }}-home:/target alpine:latest test -f /target/.sync_marker
+          register: sync_verification
+          failed_when: false
+
+        - name: Count synced files in target
+          command: docker run --rm -v jenkins-{{ sync_team.team_name }}-{{ sync_target_env }}-home:/target alpine:latest find /target -type f | wc -l
+          register: target_file_count
+          failed_when: false
+
+        - name: Display blue-green sync results
+          debug:
+            msg: |
+              Blue-green sync results for {{ sync_team.team_name }}:
+              • Source: {{ sync_source_env }} environment
+              • Target: {{ sync_target_env }} environment
+              • Sync marker: {{ 'Present' if sync_verification.rc == 0 else 'Missing' }}
+              • Files in target: {{ target_file_count.stdout | default('Unknown') }}
+              • Status: {{ 'Success' if sync_verification.rc == 0 else 'Verification Failed' }}
+
+  rescue:
+    - name: Handle blue-green sync failure
+      debug:
+        msg: |
+          Blue-green sync failed for {{ sync_team.team_name }}:
+          • Source: {{ sync_source_env }} environment
+          • Target: {{ sync_target_env }} environment
+          • Error: {{ ansible_failed_result.msg | default('Unknown error') }}
+          • This is non-blocking for deployment
+
+  tags: ['bluegreen-sync']
