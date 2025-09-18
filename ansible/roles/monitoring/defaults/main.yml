@@ -38,23 +38,114 @@ dashboard_update_mode: "always"
 # Enhanced dashboard configuration
 jenkins_enhanced_dashboards_enabled: true
 
-# Dashboard-specific configuration
-jenkins_dashboard_config:
-  performance_health:
+# Centralized dashboard configuration registry
+grafana_dashboards:
+  # Core dashboards - always deployed
+  jenkins-overview:
+    category: core
     enabled: true
+    title: "Jenkins Overview"
+    description: "General Jenkins metrics and health overview"
     refresh_interval: "30s"
-    time_range: "30m"
-    description: "Performance and health monitoring for Jenkins with 26+ panels"
-  build_statistics:
-    enabled: true
-    refresh_interval: "1m"
     time_range: "5m"
-    description: "Build statistics and job tracking dashboard"
-  advanced_overview:
-    enabled: true  # Re-enabled after fixing metric schema
+    priority: 1
+    template_file: "jenkins-overview.json"
+  
+  jenkins-builds:
+    category: core
+    enabled: true
+    title: "Jenkins Builds"
+    description: "Build performance and trends"
+    refresh_interval: "1m"
+    time_range: "1h"
+    priority: 2
+    template_file: "jenkins-builds.json"
+  
+  jenkins-dynamic-agents:
+    category: core
+    enabled: true
+    title: "Jenkins Dynamic Agents"
+    description: "Dynamic agent monitoring and resource usage"
     refresh_interval: "30s"
     time_range: "1h"
+    priority: 3
+    template_file: "jenkins-dynamic-agents.json"
+  
+  infrastructure-health:
+    category: core
+    enabled: true
+    title: "Infrastructure Health"
+    description: "VM and container infrastructure metrics"
+    refresh_interval: "1m"
+    time_range: "1h"
+    priority: 4
+    template_file: "infrastructure-health.json"
+  
+  security-metrics:
+    category: core
+    enabled: true
+    title: "Security Metrics"
+    description: "Security events and compliance monitoring"
+    refresh_interval: "1m"
+    time_range: "4h"
+    priority: 5
+    template_file: "security-metrics.json"
+  
+  # Enhanced dashboards - conditional deployment
+  jenkins-performance-health:
+    category: enhanced
+    enabled: true
+    title: "Jenkins Performance Health"
+    description: "Performance and health monitoring with 26+ panels"
+    refresh_interval: "30s"
+    time_range: "30m"
+    priority: 10
+    template_file: "jenkins-performance-health.json"
+  
+  jenkins-build-statistics:
+    category: enhanced
+    enabled: true
+    title: "Jenkins Build Statistics"
+    description: "Build statistics and job tracking dashboard"
+    refresh_interval: "1m"
+    time_range: "5m"
+    priority: 11
+    template_file: "jenkins-build-statistics.json"
+  
+  jenkins-advanced-overview:
+    category: enhanced
+    enabled: true  # Re-enabled after fixing metric schema
+    title: "Advanced Jenkins Overview"
     description: "Advanced Jenkins overview with comprehensive monitoring"
+    refresh_interval: "30s"
+    time_range: "1h"
+    priority: 12
+    template_file: "jenkins-advanced-overview.json"
+
+# Dashboard deployment controls
+dashboard_deployment:
+  core_enabled: true
+  enhanced_enabled: "{{ jenkins_enhanced_dashboards_enabled | default(true) }}"
+  update_mode: "{{ dashboard_update_mode | default('always') }}"
+  validation_strict: false  # Temporarily disabled during testing
+
+# Legacy configuration (kept for backward compatibility)
+jenkins_dashboard_config:
+  performance_health:
+    enabled: "{{ grafana_dashboards['jenkins-performance-health'].enabled }}"
+    refresh_interval: "{{ grafana_dashboards['jenkins-performance-health'].refresh_interval }}"
+    time_range: "{{ grafana_dashboards['jenkins-performance-health'].time_range }}"
+    description: "{{ grafana_dashboards['jenkins-performance-health'].description }}"
+  build_statistics:
+    enabled: "{{ grafana_dashboards['jenkins-build-statistics'].enabled }}"
+    refresh_interval: "{{ grafana_dashboards['jenkins-build-statistics'].refresh_interval }}"
+    time_range: "{{ grafana_dashboards['jenkins-build-statistics'].time_range }}"
+    description: "{{ grafana_dashboards['jenkins-build-statistics'].description }}"
+  advanced_overview:
+    enabled: "{{ grafana_dashboards['jenkins-advanced-overview'].enabled }}"
+    refresh_interval: "{{ grafana_dashboards['jenkins-advanced-overview'].refresh_interval }}"
+    time_range: "{{ grafana_dashboards['jenkins-advanced-overview'].time_range }}"
+    description: "{{ grafana_dashboards['jenkins-advanced-overview'].description }}"
 
 grafana_prometheus_datasource:
   name: "Prometheus"

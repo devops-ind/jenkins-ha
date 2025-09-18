@@ -12,39 +12,62 @@
     - dashboards/dashboard.yml
   notify: restart grafana
 
-- name: Deploy core Grafana dashboards
-  template:
-    src: "dashboards/{{ item }}.j2"
-    dest: "{{ monitoring_home_dir }}/grafana/dashboards/{{ item }}"
-    owner: "{{ monitoring_user }}"
-    group: "{{ monitoring_group }}"
-    mode: '0644'
-  loop:
-    - jenkins-overview.json
-    - jenkins-builds.json
-    - jenkins-dynamic-agents.json
-    - infrastructure-health.json
-    - security-metrics.json
-  notify: restart grafana
+# Generate dynamic dashboard list for deployment
+- name: Generate enabled dashboard list
+  set_fact:
+    enabled_dashboards: |
+      [
+      {% for dashboard_id, config in grafana_dashboards.items() %}
+      {% if config.enabled and ((config.category == 'core' and dashboard_deployment.core_enabled) or (config.category == 'enhanced' and dashboard_deployment.enhanced_enabled)) %}
+        {
+          "id": "{{ dashboard_id }}",
+          "name": "{{ config.template_file }}",
+          "title": "{{ config.title }} - {{ deployment_mode | default('local') | title }}",
+          "category": "{{ config.category }}",
+          "priority": {{ config.priority }}
+        },
+      {% endif %}
+      {% endfor %}
+      ]
 
-- name: Deploy enhanced Jenkins dashboards
+- name: Parse and sort dashboard list by priority
+  set_fact:
+    sorted_enabled_dashboards: "{{ enabled_dashboards | from_yaml | sort(attribute='priority') }}"
+
+- name: Validate dashboard template files exist
+  stat:
+    path: "{{ role_path }}/templates/dashboards/{{ item.name }}.j2"
+  register: template_file_check
+  loop: "{{ sorted_enabled_dashboards }}"
+  loop_control:
+    label: "{{ item.id }}"
+  failed_when: not template_file_check.stat.exists
+  when: dashboard_deployment.validation_strict | default(true)
+
+- name: Deploy Grafana dashboards from centralized configuration
   template:
     src: "dashboards/{{ item.name }}.j2"
     dest: "{{ monitoring_home_dir }}/grafana/dashboards/{{ item.name }}"
     owner: "{{ monitoring_user }}"
     group: "{{ monitoring_group }}"
     mode: '0644'
-  loop:
-    - name: jenkins-performance-health.json
-      config: "{{ jenkins_dashboard_config.performance_health }}"
-    - name: jenkins-build-statistics.json
-      config: "{{ jenkins_dashboard_config.build_statistics }}"
-    - name: jenkins-advanced-overview.json
-      config: "{{ jenkins_dashboard_config.advanced_overview }}"
-  when: 
-    - jenkins_enhanced_dashboards_enabled | default(true)
-    - item.config.enabled | default(true)
+  loop: "{{ sorted_enabled_dashboards }}"
+  loop_control:
+    label: "{{ item.id }} ({{ item.category }})"
   notify: restart grafana
+
+- name: Display dashboard deployment summary
+  debug:
+    msg: |
+      📊 Dashboard Template Deployment Summary:
+      Total Dashboards: {{ sorted_enabled_dashboards | length }}
+      Core Dashboards: {{ sorted_enabled_dashboards | selectattr('category', 'equalto', 'core') | list | length }}
+      Enhanced Dashboards: {{ sorted_enabled_dashboards | selectattr('category', 'equalto', 'enhanced') | list | length }}
+      
+      Deployed Dashboards:
+      {% for dashboard in sorted_enabled_dashboards %}
+      • {{ dashboard.title }} ({{ dashboard.category }})
+      {% endfor %}
 
 - name: Deploy Grafana container
   community.docker.docker_container:
