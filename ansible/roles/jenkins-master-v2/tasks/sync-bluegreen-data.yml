@@ -6,10 +6,12 @@
 - name: "Blue-green sync: {{ sync_team.team_name }} ({{ sync_source_env }} → {{ sync_target_env }})"
   block:
     - name: Verify source and target volumes exist
-      command: docker volume inspect jenkins-{{ sync_team.team_name }}-{{ item }}-home
+      command: docker volume inspect jenkins-{{ sync_team.team_name }}-{{ volume_env }}-home
       loop:
         - "{{ sync_source_env }}"
         - "{{ sync_target_env }}"
+      loop_control:
+        loop_var: volume_env
       register: volume_inspection
       failed_when: false
       changed_when: false
@@ -40,13 +42,15 @@
         - name: Create target directories for data types
           command: >
             docker exec {{ sync_container.container.Name }}
-            mkdir -p /target/{{ item }}
+            mkdir -p /target/{{ data_type }}
           loop:
             - jobs
             - workspace
             - builds
             - userContent
             - secrets
+          loop_control:
+            loop_var: data_type
           failed_when: false
 
         - name: Sync jobs data

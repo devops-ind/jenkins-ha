@@ -175,7 +175,7 @@
   when: 
     - jenkins_teams_config is defined and jenkins_teams_config | length > 0
     - shared_storage_enabled | default(false)
-  tags: ['shared-storage', 'data-sync', 'integration']
+  tags: ['shared-storage', 'data-sync', 'integration', 'backup']
 
 # Phase 4: Update HAProxy configuration for blue-green environment changes
 - name: Notify HAProxy of team environment changes

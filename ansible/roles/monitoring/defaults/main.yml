@@ -35,6 +35,27 @@ grafana_disable_gravatar: true
 # Dashboard update behavior: always, skip_existing, update_only
 dashboard_update_mode: "always"
 
+# Enhanced dashboard configuration
+jenkins_enhanced_dashboards_enabled: true
+
+# Dashboard-specific configuration
+jenkins_dashboard_config:
+  performance_health:
+    enabled: true
+    refresh_interval: "30s"
+    time_range: "30m"
+    description: "Performance and health monitoring for Jenkins with 26+ panels"
+  build_statistics:
+    enabled: true
+    refresh_interval: "1m"
+    time_range: "5m"
+    description: "Build statistics and job tracking dashboard"
+  advanced_overview:
+    enabled: true  # Re-enabled after fixing metric schema
+    refresh_interval: "30s"
+    time_range: "1h"
+    description: "Advanced Jenkins overview with comprehensive monitoring"
+
 grafana_prometheus_datasource:
   name: "Prometheus"
   type: "prometheus"

@@ -20,7 +20,7 @@
       block:
         - name: Ensure team directories exist in shared storage
           file:
-            path: "{{ storage_path }}/{{ sync_team.team_name }}/{{ item }}"
+            path: "{{ storage_path }}/{{ sync_team.team_name }}/{{ data_type }}"
             state: directory
             owner: "{{ jenkins_user }}"
             group: "{{ jenkins_group }}"
@@ -31,17 +31,21 @@
             - builds
             - userContent
             - secrets
+          loop_control:
+            loop_var: data_type
           become: yes
 
         - name: Check if data exists in shared storage
           stat:
-            path: "{{ storage_path }}/{{ sync_team.team_name }}/{{ item }}"
+            path: "{{ storage_path }}/{{ sync_team.team_name }}/{{ data_type }}"
           loop:
             - jobs
             - workspace
             - builds
             - userContent
             - secrets
+          loop_control:
+            loop_var: data_type
           register: shared_data_check
 
         - name: Sync jobs from shared storage to container
@@ -97,13 +101,15 @@
         - name: Fix ownership in container after sync
           command: >
             docker exec "jenkins-{{ sync_team.team_name }}-{{ sync_team.active_environment }}"
-            chown -R jenkins:jenkins /var/jenkins_home/{{ item }}
+            chown -R jenkins:jenkins /var/jenkins_home/{{ data_type }}
           loop:
             - jobs
             - workspace
             - builds
             - userContent
             - secrets
+          loop_control:
+            loop_var: data_type
           failed_when: false
 
         - name: Create shared sync completion marker
