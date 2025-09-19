@@ -39,26 +39,20 @@ jenkins_master_log_max_size: "10m"
 jenkins_master_log_max_files: "3"
 
 # ====================================
-# STORAGE CONFIGURATION
+# SIMPLIFIED BACKUP CONFIGURATION
 # ====================================
-# Shared storage settings
+# Note: Complex shared storage removed in favor of simplified backup approach
+# Backup operations now handled by:
+# - backup role with backup-active-to-nfs.sh
+# - sync-for-bluegreen-switch.sh for blue-green operations
+# This eliminates 99% of storage complexity
+
+# Legacy storage settings (kept for compatibility)
 shared_storage_enabled: false
-shared_storage_path: "/opt/jenkins-shared"
+backup_storage_enabled: false  # Handled by backup role
 
-# Backup storage settings  
-backup_storage_enabled: true
-backup_storage_path: "/var/data/jenkins-backup"
-
-# Storage preference: shared, backup, auto
-storage_preference: "auto"
-storage_fallback_enabled: true
-storage_validation_timeout: 30
-
-# Sync settings
-sync_enabled: true
-sync_interval: "*/5"  # minutes
-storage_monitoring_enabled: true
-storage_health_check_interval: 3600  # seconds
+# Blue-green sync is now handled by dedicated scripts in the scripts/ directory
+# Note: Storage monitoring is handled by the health-engine and monitoring role
 
 # ====================================
 # ENVIRONMENT VARIABLES
