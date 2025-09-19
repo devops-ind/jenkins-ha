@@ -177,6 +177,11 @@
   include_tasks: prometheus.yml
   tags: ['prometheus']
 
+- name: Include Loki setup tasks
+  include_tasks: loki.yml
+  tags: ['loki', 'logging']
+  when: loki_enabled | default(true)
+
 - name: Include Grafana setup tasks
   include_tasks: grafana.yml
   tags: ['grafana']
@@ -242,7 +247,7 @@
   retries: 30
   delay: 10
 
-- name: Configure Grafana datasources
+- name: Configure Grafana Prometheus datasource
   uri:
     url: "http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}/api/datasources"
     method: POST
@@ -252,6 +257,18 @@
     body_format: json
     body: "{{ grafana_prometheus_datasource }}"
     status_code: [200, 409]  # 409 if datasource already exists
+
+- name: Configure Grafana Loki datasource
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}/api/datasources"
+    method: POST
+    user: "{{ grafana_admin_user }}"
+    password: "{{ grafana_admin_password }}"
+    force_basic_auth: yes
+    body_format: json
+    body: "{{ loki_datasource }}"
+    status_code: [200, 409]  # 409 if datasource already exists
+  when: loki_enabled | default(true)
 
 # Generate dashboard list for API operations (using centralized config)
 - name: Generate API dashboard list from centralized configuration

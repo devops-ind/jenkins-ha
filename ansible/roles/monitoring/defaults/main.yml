@@ -40,37 +40,7 @@ jenkins_enhanced_dashboards_enabled: true
 
 # Centralized dashboard configuration registry
 grafana_dashboards:
-  # Core dashboards - always deployed
-  jenkins-overview:
-    category: core
-    enabled: true
-    title: "Jenkins Overview"
-    description: "General Jenkins metrics and health overview"
-    refresh_interval: "30s"
-    time_range: "5m"
-    priority: 1
-    template_file: "jenkins-overview.json"
-  
-  jenkins-builds:
-    category: core
-    enabled: true
-    title: "Jenkins Builds"
-    description: "Build performance and trends"
-    refresh_interval: "1m"
-    time_range: "1h"
-    priority: 2
-    template_file: "jenkins-builds.json"
-  
-  jenkins-dynamic-agents:
-    category: core
-    enabled: true
-    title: "Jenkins Dynamic Agents"
-    description: "Dynamic agent monitoring and resource usage"
-    refresh_interval: "30s"
-    time_range: "1h"
-    priority: 3
-    template_file: "jenkins-dynamic-agents.json"
-  
+  # Core dashboards - infrastructure-wide
   infrastructure-health:
     category: core
     enabled: true
@@ -80,6 +50,7 @@ grafana_dashboards:
     time_range: "1h"
     priority: 4
     template_file: "infrastructure-health.json"
+    team_specific: false  # Global dashboard - monitors all infrastructure
   
   security-metrics:
     category: core
@@ -90,8 +61,54 @@ grafana_dashboards:
     time_range: "4h"
     priority: 5
     template_file: "security-metrics.json"
+    team_specific: false  # Global dashboard - monitors all security events
   
-  # Enhanced dashboards - conditional deployment
+  node-exporter-full:
+    category: core
+    enabled: true
+    title: "Node Exporter Full"
+    description: "Comprehensive infrastructure monitoring with 138+ panels covering CPU, memory, disk, network, and system health"
+    refresh_interval: "30s"
+    time_range: "1h"
+    priority: 6
+    template_file: "node-exporter-full.json"
+    team_specific: false  # Global infrastructure dashboard
+  
+  # Team-specific Jenkins dashboards
+  jenkins-overview:
+    category: core
+    enabled: true
+    title: "Jenkins Overview"
+    description: "General Jenkins metrics and health overview"
+    refresh_interval: "30s"
+    time_range: "5m"
+    priority: 1
+    template_file: "jenkins-overview.json"
+    team_specific: true  # Generate per-team versions
+  
+  jenkins-builds:
+    category: core
+    enabled: true
+    title: "Jenkins Builds"
+    description: "Build performance and trends"
+    refresh_interval: "1m"
+    time_range: "1h"
+    priority: 2
+    template_file: "jenkins-builds.json"
+    team_specific: true  # Generate per-team versions
+  
+  jenkins-dynamic-agents:
+    category: core
+    enabled: true
+    title: "Jenkins Dynamic Agents"
+    description: "Dynamic agent monitoring and resource usage"
+    refresh_interval: "30s"
+    time_range: "1h"
+    priority: 3
+    template_file: "jenkins-dynamic-agents.json"
+    team_specific: true  # Generate per-team versions
+  
+  # Enhanced team-specific dashboards
   jenkins-performance-health:
     category: enhanced
     enabled: true
@@ -101,6 +118,7 @@ grafana_dashboards:
     time_range: "30m"
     priority: 10
     template_file: "jenkins-performance-health.json"
+    team_specific: true  # Generate per-team versions
   
   jenkins-build-statistics:
     category: enhanced
@@ -111,6 +129,7 @@ grafana_dashboards:
     time_range: "5m"
     priority: 11
     template_file: "jenkins-build-statistics.json"
+    team_specific: true  # Generate per-team versions
   
   jenkins-advanced-overview:
     category: enhanced
@@ -121,6 +140,7 @@ grafana_dashboards:
     time_range: "1h"
     priority: 12
     template_file: "jenkins-advanced-overview.json"
+    team_specific: true  # Generate per-team versions
 
 # Dashboard deployment controls
 dashboard_deployment:
@@ -128,6 +148,16 @@ dashboard_deployment:
   enhanced_enabled: "{{ jenkins_enhanced_dashboards_enabled | default(true) }}"
   update_mode: "{{ dashboard_update_mode | default('always') }}"
   validation_strict: false  # Temporarily disabled during testing
+  
+  # Team-specific dashboard generation
+  generate_team_specific: true
+  team_specific_suffix: " - {{ team_name | title }} Team"
+  keep_global_dashboards: true  # Option to keep original multi-team dashboards
+  team_folder_organization: true  # Organize by team folders in Grafana
+  
+  # Team dashboard naming convention
+  team_dashboard_prefix: ""  # Optional prefix for team dashboards
+  team_dashboard_separator: "-"  # Separator between dashboard name and team
 
 # Legacy configuration (kept for backward compatibility)
 jenkins_dashboard_config:
@@ -205,3 +235,59 @@ monitoring_directories:
   - "{{ monitoring_home_dir }}/exporters"
   - "{{ monitoring_home_dir }}/bin"
   - "{{ monitoring_home_dir }}/logs"
+  - "{{ monitoring_home_dir }}/loki"
+  - "{{ monitoring_home_dir }}/loki/data"
+  - "{{ monitoring_home_dir }}/loki/config"
+  - "{{ monitoring_home_dir }}/promtail"
+  - "{{ monitoring_home_dir }}/promtail/config"
+  - "{{ monitoring_home_dir }}/promtail/data"
+
+# Loki configuration
+loki_enabled: true
+loki_port: 9400
+loki_version: "latest"
+loki_retention: "30d"
+loki_max_chunk_age: "1h"
+loki_chunk_idle_period: "30m"
+loki_compactor_retention_enabled: true
+
+# Promtail configuration  
+promtail_enabled: true
+promtail_port: 9401
+promtail_version: "latest"
+promtail_positions_file: "{{ monitoring_home_dir }}/promtail/data/positions.yaml"
+
+# Log sources configuration
+log_sources:
+  jenkins_containers:
+    enabled: true
+    path: "/var/lib/docker/containers/*/*-json.log"
+    labels:
+      job: "jenkins"
+      source: "container"
+  haproxy_logs:
+    enabled: true
+    path: "/var/log/haproxy/*.log"
+    labels:
+      job: "haproxy"
+      source: "haproxy"
+  system_logs:
+    enabled: true
+    path: "/var/log/messages"
+    labels:
+      job: "system"
+      source: "syslog"
+  auth_logs:
+    enabled: true
+    path: "/var/log/secure"
+    labels:
+      job: "auth"
+      source: "security"
+
+# Loki data source for Grafana
+loki_datasource:
+  name: "Loki"
+  type: "loki"
+  access: "proxy"
+  url: "http://localhost:{{ loki_port }}"
+  isDefault: false

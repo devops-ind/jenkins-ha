@@ -1,0 +1,129 @@
+---
+# NFS Backup Tasks
+# Core backup operations using simplified NFS approach
+
+- name: Create team-specific backup directories in NFS
+  file:
+    path: "{{ backup_nfs_path }}/{{ item.team_name }}"
+    state: directory
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  loop: "{{ jenkins_teams }}"
+  tags:
+    - nfs
+    - directories
+    - teams
+
+- name: Verify active containers for each team
+  shell: |
+    active_env="{{ item.active_environment | default('blue') }}"
+    container_name="jenkins-{{ item.team_name }}-${active_env}"
+    if docker container inspect "$container_name" >/dev/null 2>&1; then
+      echo "$container_name"
+    else
+      echo "missing"
+    fi
+  loop: "{{ jenkins_teams }}"
+  register: active_containers_check
+  changed_when: false
+  tags:
+    - nfs
+    - validation
+    - containers
+
+- name: Display active container status
+  debug:
+    msg: "Team {{ item.0.team_name }}: Container {{ item.1.stdout }}"
+  loop: "{{ jenkins_teams | zip(active_containers_check.results) | list }}"
+  tags:
+    - nfs
+    - debug
+
+- name: Execute simplified backup for teams with active containers
+  shell: |
+    # Source backup configuration
+    source {{ backup_home_dir }}/backup-config.env
+    
+    # Execute backup for specific team
+    {{ backup_script_path }} \
+      --teams "{{ item.0.team_name }}" \
+      --backup-dir "{{ backup_nfs_path }}" \
+      --retention {{ backup_retention_days }} \
+      --log-file "/var/log/jenkins-backup/{{ item.0.team_name }}-backup.log"
+  loop: "{{ jenkins_teams | zip(active_containers_check.results) | list }}"
+  when: item.1.stdout != 'missing'
+  become_user: "{{ backup_user }}"
+  register: backup_results
+  tags:
+    - nfs
+    - backup
+    - execution
+
+- name: Report backup results
+  debug:
+    msg: |
+      Team: {{ item.0.0.team_name }}
+      Status: {% if item.1 is skipped %}SKIPPED (no active container){% elif item.1.rc == 0 %}SUCCESS{% else %}FAILED{% endif %}
+      {% if item.1.rc is defined and item.1.rc != 0 %}Error: {{ item.1.stderr | default('Unknown error') }}{% endif %}
+  loop: "{{ jenkins_teams | zip(active_containers_check.results) | zip(backup_results.results) | list }}"
+  tags:
+    - nfs
+    - results
+
+- name: Generate backup summary report
+  template:
+    src: backup-summary.json.j2
+    dest: "{{ backup_nfs_path }}/backup-summary-{{ ansible_date_time.epoch }}.json"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0644'
+  vars:
+    backup_timestamp: "{{ ansible_date_time.iso8601 }}"
+    backup_results_data: "{{ backup_results.results }}"
+    container_status_data: "{{ active_containers_check.results }}"
+  tags:
+    - nfs
+    - summary
+    - reporting
+
+- name: Create backup completion marker
+  file:
+    path: "{{ backup_nfs_path }}/.backup-completed-{{ ansible_date_time.epoch }}"
+    state: touch
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0644'
+  tags:
+    - nfs
+    - marker
+
+- name: Calculate total backup size
+  shell: |
+    total_size=0
+    for team_dir in {{ backup_nfs_path }}/*/; do
+      if [ -d "$team_dir" ]; then
+        team_size=$(du -s "$team_dir" 2>/dev/null | cut -f1 || echo 0)
+        total_size=$((total_size + team_size))
+      fi
+    done
+    echo $((total_size / 1024))  # Convert to MB
+  register: total_backup_size
+  changed_when: false
+  tags:
+    - nfs
+    - size
+    - metrics
+
+- name: Log backup statistics
+  lineinfile:
+    path: "/var/log/jenkins-backup/backup-statistics.log"
+    line: "{{ ansible_date_time.iso8601 }},{{ jenkins_teams | length }},{{ backup_results.results | selectattr('rc', 'defined') | selectattr('rc', 'equalto', 0) | list | length }},{{ total_backup_size.stdout }}MB"
+    create: yes
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0644'
+  tags:
+    - nfs
+    - statistics
+    - logging

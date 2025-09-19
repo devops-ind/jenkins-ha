@@ -1,0 +1,68 @@
+---
+# Backup Scheduling Tasks
+# Setup automated backup scheduling with cron
+
+- name: Create daily backup cron job
+  cron:
+    name: "Jenkins Critical Data Backup"
+    job: "{{ backup_home_dir }}/scripts/backup-wrapper.sh daily >> /var/log/jenkins-backup/cron-backup.log 2>&1"
+    minute: "{{ backup_daily_minute | default('0') }}"
+    hour: "{{ backup_daily_hour | default('2') }}"
+    user: "{{ backup_user }}"
+    state: "{{ 'present' if backup_enabled else 'absent' }}"
+  tags:
+    - scheduling
+    - cron
+    - daily
+
+- name: Create weekly cleanup cron job
+  cron:
+    name: "Jenkins Backup Cleanup"
+    job: "{{ backup_home_dir }}/scripts/backup-wrapper.sh cleanup >> /var/log/jenkins-backup/cron-cleanup.log 2>&1"
+    minute: "{{ backup_cleanup_minute | default('30') }}"
+    hour: "{{ backup_cleanup_hour | default('3') }}"
+    day: "{{ backup_cleanup_day | default('0') }}"
+    user: "{{ backup_user }}"
+    state: "{{ 'present' if backup_enabled else 'absent' }}"
+  tags:
+    - scheduling
+    - cron
+    - cleanup
+
+- name: Create backup verification cron job
+  cron:
+    name: "Jenkins Backup Verification"
+    job: "{{ backup_home_dir }}/scripts/backup-wrapper.sh verify >> /var/log/jenkins-backup/cron-verify.log 2>&1"
+    minute: "{{ backup_verify_minute | default('0') }}"
+    hour: "{{ backup_verify_hour | default('4') }}"
+    day: "{{ backup_verify_day | default('1') }}"
+    user: "{{ backup_user }}"
+    state: "{{ 'present' if backup_enabled and backup_verify_enabled else 'absent' }}"
+  tags:
+    - scheduling
+    - cron
+    - verify
+
+- name: Create backup monitoring cron job
+  cron:
+    name: "Jenkins Backup Monitoring"
+    job: "{{ backup_home_dir }}/scripts/backup-wrapper.sh monitor >> /var/log/jenkins-backup/cron-monitor.log 2>&1"
+    minute: "{{ backup_monitor_minute | default('*/15') }}"
+    user: "{{ backup_user }}"
+    state: "{{ 'present' if backup_enabled and backup_monitoring_enabled else 'absent' }}"
+  tags:
+    - scheduling
+    - cron
+    - monitoring
+
+- name: Display scheduled backup jobs
+  debug:
+    msg: |
+      Backup Scheduling Status:
+      - Daily Backup: {{ 'ENABLED' if backup_enabled else 'DISABLED' }} ({{ backup_daily_hour | default('2') }}:{{ backup_daily_minute | default('0') }})
+      - Weekly Cleanup: {{ 'ENABLED' if backup_enabled else 'DISABLED' }} (Sunday {{ backup_cleanup_hour | default('3') }}:{{ backup_cleanup_minute | default('30') }})
+      - Verification: {{ 'ENABLED' if (backup_enabled and backup_verify_enabled) else 'DISABLED' }} (Monday {{ backup_verify_hour | default('4') }}:{{ backup_verify_minute | default('0') }})
+      - Monitoring: {{ 'ENABLED' if (backup_enabled and backup_monitoring_enabled) else 'DISABLED' }} (Every 15 minutes)
+  tags:
+    - scheduling
+    - status

@@ -1,0 +1,44 @@
+---
+# Simplified Backup Role - Critical Data Only
+# Integrates with backup-active-to-nfs.sh for streamlined backup approach
+# Eliminates shared storage complexity and focuses on essential data
+
+- name: Include backup validation tasks
+  include_tasks: validation.yml
+  tags:
+    - backup
+    - validation
+
+- name: Include backup configuration tasks
+  include_tasks: configuration.yml
+  tags:
+    - backup
+    - configuration
+
+- name: Include NFS backup tasks
+  include_tasks: nfs-backup.yml
+  tags:
+    - backup
+    - nfs
+    - critical-data
+
+- name: Include backup scheduling tasks
+  include_tasks: scheduling.yml
+  tags:
+    - backup
+    - cron
+    - scheduling
+
+- name: Include backup monitoring integration
+  include_tasks: monitoring.yml
+  when: monitoring_enabled | default(true)
+  tags:
+    - backup
+    - monitoring
+
+- name: Include backup cleanup tasks
+  include_tasks: cleanup.yml
+  tags:
+    - backup
+    - cleanup
+    - maintenance

@@ -1,0 +1,46 @@
+/var/log/jenkins-backup/*.log {
+    daily
+    rotate {{ backup_retention_days }}
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 {{ backup_user }} {{ backup_group }}
+    postrotate
+        # Signal backup processes to reopen log files if needed
+        /bin/kill -HUP $(cat /var/run/jenkins-backup-*.pid 2>/dev/null) 2>/dev/null || true
+    endscript
+}
+
+# Backup wrapper logs
+/var/log/jenkins-backup/wrapper.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 {{ backup_user }} {{ backup_group }}
+}
+
+# Cron job logs
+/var/log/jenkins-backup/cron-*.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 {{ backup_user }} {{ backup_group }}
+}
+
+# Backup statistics logs
+/var/log/jenkins-backup/backup-statistics.log {
+    weekly
+    rotate 52
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 {{ backup_user }} {{ backup_group }}
+}

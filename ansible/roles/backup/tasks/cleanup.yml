@@ -1,0 +1,100 @@
+---
+# Backup Cleanup Tasks
+# Automated cleanup of old backups and maintenance
+
+- name: Remove old backup completion markers
+  shell: |
+    find {{ backup_nfs_path }} -name ".backup-completed-*" -type f -mtime +7 -delete
+  become_user: "{{ backup_user }}"
+  tags:
+    - cleanup
+    - markers
+
+- name: Clean up old backup summary reports
+  shell: |
+    find {{ backup_nfs_path }} -name "backup-summary-*.json" -type f -mtime +{{ backup_retention_days }} -delete
+  become_user: "{{ backup_user }}"
+  tags:
+    - cleanup
+    - reports
+
+- name: Remove empty team backup directories
+  shell: |
+    for team_dir in {{ backup_nfs_path }}/*/; do
+      if [ -d "$team_dir" ] && [ -z "$(ls -A "$team_dir" 2>/dev/null)" ]; then
+        rmdir "$team_dir" 2>/dev/null || true
+      fi
+    done
+  become_user: "{{ backup_user }}"
+  tags:
+    - cleanup
+    - directories
+
+- name: Rotate backup log files
+  shell: |
+    # Compress logs older than 7 days
+    find /var/log/jenkins-backup -name "*.log" -type f -mtime +7 ! -name "*.gz" -exec gzip {} \;
+    # Remove compressed logs older than retention period
+    find /var/log/jenkins-backup -name "*.log.gz" -type f -mtime +{{ backup_retention_days }} -delete
+  tags:
+    - cleanup
+    - logs
+
+- name: Clean up failed backup temporary files
+  shell: |
+    find /tmp -name "jenkins-backup-*" -type f -mtime +1 -delete 2>/dev/null || true
+    find /tmp -name "backup_script_*" -type f -mtime +1 -delete 2>/dev/null || true
+  tags:
+    - cleanup
+    - temp
+
+- name: Generate cleanup report
+  shell: |
+    echo "Backup Cleanup Report - $(date)" > {{ backup_nfs_path }}/cleanup-report-$(date +%Y%m%d).txt
+    echo "============================" >> {{ backup_nfs_path }}/cleanup-report-$(date +%Y%m%d).txt
+    echo "" >> {{ backup_nfs_path }}/cleanup-report-$(date +%Y%m%d).txt
+    echo "Team Directories:" >> {{ backup_nfs_path }}/cleanup-report-$(date +%Y%m%d).txt
+    for team_dir in {{ backup_nfs_path }}/*/; do
+      if [ -d "$team_dir" ]; then
+        team_name=$(basename "$team_dir")
+        backup_count=$(find "$team_dir" -name "critical-data-*.tar.gz" | wc -l)
+        total_size=$(du -sh "$team_dir" 2>/dev/null | cut -f1 || echo "0")
+        echo "  $team_name: $backup_count backups, $total_size" >> {{ backup_nfs_path }}/cleanup-report-$(date +%Y%m%d).txt
+      fi
+    done
+    echo "" >> {{ backup_nfs_path }}/cleanup-report-$(date +%Y%m%d).txt
+    echo "Total Storage Used: $(du -sh {{ backup_nfs_path }} | cut -f1)" >> {{ backup_nfs_path }}/cleanup-report-$(date +%Y%m%d).txt
+  become_user: "{{ backup_user }}"
+  tags:
+    - cleanup
+    - report
+
+- name: Remove old cleanup reports
+  shell: |
+    find {{ backup_nfs_path }} -name "cleanup-report-*.txt" -type f -mtime +30 -delete
+  become_user: "{{ backup_user }}"
+  tags:
+    - cleanup
+    - reports
+
+- name: Display cleanup summary
+  shell: |
+    echo "=== Backup Cleanup Summary ==="
+    echo "Retention Period: {{ backup_retention_days }} days"
+    echo "Backup Location: {{ backup_nfs_path }}"
+    echo "Active Teams: $(find {{ backup_nfs_path }} -maxdepth 1 -type d | grep -v "^{{ backup_nfs_path }}$" | wc -l)"
+    echo "Total Backups: $(find {{ backup_nfs_path }} -name "critical-data-*.tar.gz" | wc -l)"
+    echo "Storage Used: $(du -sh {{ backup_nfs_path }} | cut -f1)"
+    echo "============================="
+  register: cleanup_summary
+  changed_when: false
+  tags:
+    - cleanup
+    - summary
+
+- name: Log cleanup summary
+  debug:
+    msg: "{{ cleanup_summary.stdout_lines }}"
+  tags:
+    - cleanup
+    - summary
