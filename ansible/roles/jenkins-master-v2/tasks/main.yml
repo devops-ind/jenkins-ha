@@ -136,7 +136,7 @@
       Container Runtime: {{ jenkins_master_container_runtime }}
   tags: ['always']
 
-# Phase 0: Intelligent cleanup of orphaned team resources
+# Phase 0: Intelligent cleanup of orphaned team resources (runs after team filtering)
 - name: Cleanup orphaned team resources phase
   import_tasks: cleanup-orphaned-resources.yml
   when: jenkins_cleanup_enabled | default(true)
