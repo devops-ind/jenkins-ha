@@ -1,0 +1,117 @@
+---
+# GlusterFS Trusted Storage Pool (Cluster) Setup Tasks
+
+- name: Identify cluster nodes (exclude self)
+  set_fact:
+    glusterfs_peer_nodes: "{{ (glusterfs_cluster_nodes | default(groups['glusterfs_servers'] | default([]))) | difference([inventory_hostname, ansible_hostname, ansible_fqdn]) }}"
+  tags: ['glusterfs', 'cluster', 'peers']
+
+- name: Display cluster information
+  debug:
+    msg: |
+      GlusterFS Cluster Configuration:
+      Primary Node: {{ glusterfs_primary_node }}
+      Current Node: {{ inventory_hostname }}
+      Is Primary: {{ 'Yes' if inventory_hostname == glusterfs_primary_node else 'No' }}
+      Peer Nodes: {{ glusterfs_peer_nodes | join(', ') if glusterfs_peer_nodes | length > 0 else 'None' }}
+      Total Cluster Nodes: {{ ([inventory_hostname] + glusterfs_peer_nodes) | length }}
+  tags: ['glusterfs', 'cluster', 'info']
+
+- name: Probe peer nodes to create trusted storage pool (primary node only)
+  block:
+    - name: Ensure all peer nodes are accessible
+      wait_for:
+        host: "{{ item }}"
+        port: 24007
+        timeout: 30
+        state: started
+      loop: "{{ glusterfs_peer_nodes }}"
+      when: glusterfs_peer_nodes | length > 0
+
+    - name: Probe each peer node
+      command: "gluster peer probe {{ item }}"
+      loop: "{{ glusterfs_peer_nodes }}"
+      register: peer_probe_result
+      until: peer_probe_result.rc == 0 or 'already in peer list' in peer_probe_result.stdout or 'success' in peer_probe_result.stdout
+      retries: "{{ glusterfs_peer_probe_retries }}"
+      delay: "{{ glusterfs_peer_probe_delay }}"
+      changed_when: "'success' in peer_probe_result.stdout and 'already' not in peer_probe_result.stdout"
+      failed_when:
+        - peer_probe_result.rc != 0
+        - "'already in peer list' not in peer_probe_result.stdout"
+        - "'success' not in peer_probe_result.stdout"
+      when: glusterfs_peer_nodes | length > 0
+
+    - name: Wait for peers to sync
+      pause:
+        seconds: 5
+      when: glusterfs_peer_nodes | length > 0
+
+    - name: Display peer probe results
+      debug:
+        msg: |
+          Peer Probe Results:
+          {% for result in peer_probe_result.results | default([]) %}
+          - {{ result.item }}: {{ result.stdout | default('Unknown') }}
+          {% endfor %}
+      when:
+        - peer_probe_result is defined
+        - peer_probe_result.results is defined
+
+  when:
+    - inventory_hostname == glusterfs_primary_node
+    - glusterfs_peer_nodes | length > 0
+  become: yes
+  tags: ['glusterfs', 'cluster', 'probe']
+
+- name: Verify peer status on all nodes
+  block:
+    - name: Get peer status
+      command: gluster peer status
+      register: peer_status_output
+      changed_when: false
+
+    - name: Parse peer status
+      set_fact:
+        peer_count: "{{ peer_status_output.stdout | regex_search('Number of Peers: (\\d+)', '\\1') | default(['0'], true) | first }}"
+
+    - name: Display peer status
+      debug:
+        msg: |
+          Peer Status on {{ inventory_hostname }}:
+          Number of Peers: {{ peer_count }}
+          Status:
+          {{ peer_status_output.stdout }}
+      when: peer_status_output is defined
+
+    - name: Validate cluster formation
+      assert:
+        that:
+          - peer_count | int >= 1 or glusterfs_peer_nodes | length == 0
+        fail_msg: "Cluster formation failed. Expected at least 1 peer, found {{ peer_count }}"
+        success_msg: "Cluster formation successful. Connected peers: {{ peer_count }}"
+      when: glusterfs_peer_nodes | length > 0
+
+  become: yes
+  tags: ['glusterfs', 'cluster', 'validation']
+
+- name: Display trusted storage pool summary
+  debug:
+    msg: |
+      ====================================================
+      GlusterFS Trusted Storage Pool Created Successfully
+      ====================================================
+      Cluster Name: jenkins-ha-cluster
+      Total Nodes: {{ ([inventory_hostname] + glusterfs_peer_nodes) | length }}
+      Replication Factor: {{ glusterfs_replica_count }}
+
+      Cluster Nodes:
+      {% for node in ([inventory_hostname] + glusterfs_peer_nodes) %}
+      {{ loop.index }}. {{ node }} {{ '(Primary)' if node == glusterfs_primary_node else '(Secondary)' }}
+      {% endfor %}
+
+      Status: {{ 'Active' if peer_count | default(0) | int > 0 or glusterfs_peer_nodes | length == 0 else 'Pending' }}
+      ====================================================
+  run_once: true
+  when: inventory_hostname == glusterfs_primary_node
+  tags: ['glusterfs', 'cluster', 'summary']

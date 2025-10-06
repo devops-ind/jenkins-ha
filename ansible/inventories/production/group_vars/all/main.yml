@@ -72,10 +72,13 @@ monitoring_network_name: "monitoring-net"
 
 # Shared storage settings
 shared_storage_enabled: true
-shared_storage_type: "local"
+shared_storage_type: "local"  # Options: local, nfs, glusterfs
 shared_storage_path: "/opt/jenkins-shared"
 shared_storage_owner: "jenkins"
 shared_storage_group: "jenkins"
+
+# GlusterFS backup servers (for client failover when using GlusterFS)
+glusterfs_backup_servers: ""  # Will be auto-populated in multi-node setup
 
 # Production-specific user/group mappings to avoid conflicts
 jenkins_uid: 1001

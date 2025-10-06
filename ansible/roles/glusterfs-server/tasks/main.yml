@@ -1,0 +1,101 @@
+---
+# GlusterFS Server Role - Main Tasks
+# Automates GlusterFS server installation and replicated volume configuration
+# For Jenkins HA with real-time data synchronization (RPO < 5s, RTO < 30s)
+
+- name: Display GlusterFS server role information
+  debug:
+    msg: |
+      ====================================================
+      GlusterFS Server Setup - Jenkins HA Infrastructure
+      ====================================================
+      Node: {{ inventory_hostname }}
+      Role: {{ 'Primary' if inventory_hostname == glusterfs_primary_node else 'Secondary' }}
+      Replica Count: {{ glusterfs_replica_count }}
+      Storage Path: {{ glusterfs_brick_base_path }}
+      Team Volumes: {{ 'Enabled' if glusterfs_create_team_volumes else 'Disabled' }}
+      Monitoring: {{ 'Enabled' if glusterfs_monitoring_enabled else 'Disabled' }}
+      ====================================================
+  tags: ['glusterfs', 'info']
+
+- name: Include installation tasks
+  include_tasks: install.yml
+  tags: ['glusterfs', 'install']
+
+- name: Include firewall configuration tasks
+  include_tasks: firewall.yml
+  tags: ['glusterfs', 'firewall']
+
+- name: Include brick creation tasks
+  include_tasks: bricks.yml
+  tags: ['glusterfs', 'bricks']
+
+- name: Include cluster setup tasks
+  include_tasks: cluster.yml
+  tags: ['glusterfs', 'cluster']
+
+- name: Include volume creation and configuration tasks
+  include_tasks: volumes.yml
+  tags: ['glusterfs', 'volumes']
+
+- name: Include monitoring setup tasks
+  include_tasks: monitoring.yml
+  when: glusterfs_monitoring_enabled
+  tags: ['glusterfs', 'monitoring']
+
+- name: Final validation and health check
+  block:
+    - name: Run comprehensive health check
+      command: "{{ glusterfs_health_check_script }}"
+      register: final_health_check
+      changed_when: false
+      failed_when: false
+      when: glusterfs_monitoring_enabled
+
+    - name: Display final health check results
+      debug:
+        msg: "{{ final_health_check.stdout_lines }}"
+      when:
+        - glusterfs_monitoring_enabled
+        - final_health_check is defined
+        - final_health_check.stdout_lines is defined
+
+  become: yes
+  tags: ['glusterfs', 'validation', 'health-check']
+
+- name: Display GlusterFS setup completion summary
+  debug:
+    msg: |
+      ====================================================
+      GlusterFS Server Setup Complete
+      ====================================================
+      Status: SUCCESS
+      Node: {{ inventory_hostname }} ({{ 'Primary' if inventory_hostname == glusterfs_primary_node else 'Secondary' }})
+
+      Components Deployed:
+      ✅ GlusterFS Server Installed
+      ✅ Firewall Configured
+      ✅ Brick Directories Created
+      ✅ Trusted Storage Pool Formed
+      ✅ Replicated Volumes Created (Replica={{ glusterfs_replica_count }})
+      ✅ Volume Options Configured
+      {{ '✅ Health Monitoring Enabled' if glusterfs_monitoring_enabled else '❌ Health Monitoring Disabled' }}
+      {{ '✅ Prometheus Metrics Enabled' if glusterfs_metrics_enabled else '❌ Prometheus Metrics Disabled' }}
+
+      Volumes:
+      {% for vol in glusterfs_all_volumes | default([]) %}
+      - {{ vol.volume_name }} ({{ vol.team_name | default('Manual') }})
+      {% endfor %}
+
+      Next Steps:
+      1. Mount volumes on client nodes using shared-storage role
+      2. Validate replication: Write on VM1, read on VM2
+      3. Run failover test to verify HA functionality
+      4. Configure backup procedures
+      5. Monitor health checks: {{ glusterfs_health_log if glusterfs_monitoring_enabled else 'N/A' }}
+
+      Documentation: docs/gluster-fs.md
+      ====================================================
+  run_once: true
+  when: inventory_hostname == glusterfs_primary_node
+  tags: ['glusterfs', 'summary']

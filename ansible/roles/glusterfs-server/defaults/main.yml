@@ -1,0 +1,112 @@
+---
+# GlusterFS Server Role Default Variables
+# Automates GlusterFS server installation and replicated volume configuration
+
+# GlusterFS Version and Repository
+glusterfs_version: "10"  # GlusterFS 10.x (latest stable)
+glusterfs_ppa_enabled: true  # Use PPA for Ubuntu
+
+# GlusterFS Server Configuration
+glusterfs_cluster_nodes: []  # List of all GlusterFS server nodes (hostnames/IPs)
+glusterfs_primary_node: "{{ groups['glusterfs_servers'][0] | default(inventory_hostname) }}"  # Primary node for volume operations
+glusterfs_replica_count: 2  # Number of replicas (2 for HA)
+
+# Brick Storage Configuration
+glusterfs_brick_base_path: "/data/glusterfs"  # Base path for all bricks
+glusterfs_brick_owner: "root"  # Brick directory owner
+glusterfs_brick_group: "root"  # Brick directory group
+glusterfs_brick_mode: "0755"  # Brick directory permissions
+
+# Volume Configuration
+glusterfs_volumes: []  # List of volumes to create
+# Example:
+# glusterfs_volumes:
+#   - name: jenkins-devops-data
+#     brick_name: jenkins-devops-brick
+#     mount_path: /var/jenkins/devops/data
+#   - name: jenkins-dev-data
+#     brick_name: jenkins-dev-brick
+#     mount_path: /var/jenkins/dev/data
+
+# Team-based volume auto-creation
+glusterfs_create_team_volumes: true  # Auto-create volumes from jenkins_teams
+glusterfs_team_volume_prefix: "jenkins"  # Prefix for team volumes
+glusterfs_team_volume_suffix: "data"  # Suffix for team volumes
+
+# Firewall Configuration
+glusterfs_firewall_enabled: true  # Configure firewall rules
+glusterfs_firewall_zone: "public"  # Firewalld zone (RHEL/CentOS)
+
+# Firewall Ports
+glusterfs_daemon_ports:
+  - 24007  # glusterd
+  - 24008  # glusterd management
+
+glusterfs_brick_port_range:
+  start: 49152
+  end: 49251
+
+# Volume Performance Options
+glusterfs_performance_options:
+  performance.cache-size: "256MB"
+  performance.write-behind-window-size: "4MB"
+  performance.io-thread-count: "32"
+  network.ping-timeout: "10"
+  network.remote-dio: "enable"
+  performance.write-behind: "on"
+  performance.read-ahead: "on"
+
+# Volume Reliability Options (Split-brain Prevention)
+glusterfs_reliability_options:
+  cluster.quorum-type: "auto"
+  cluster.server-quorum-ratio: "51%"
+
+# Self-Healing Configuration
+glusterfs_self_heal_options:
+  cluster.self-heal-daemon: "on"
+  cluster.metadata-self-heal: "on"
+  cluster.data-self-heal: "on"
+  cluster.entry-self-heal: "on"
+
+# Other Volume Options
+glusterfs_other_options:
+  nfs.disable: "on"  # Disable NFS (use FUSE/native client)
+  storage.owner-uid: "1000"  # Jenkins user UID
+  storage.owner-gid: "1000"  # Jenkins group GID
+
+# Health Monitoring
+glusterfs_monitoring_enabled: true
+glusterfs_health_check_script: "/usr/local/bin/gluster-health-check.sh"
+glusterfs_health_check_cron: "*/5 * * * *"  # Every 5 minutes
+glusterfs_health_log: "/var/log/gluster-health.log"
+
+# Prometheus Metrics Export
+glusterfs_metrics_enabled: true
+glusterfs_metrics_script: "/usr/local/bin/gluster-metrics-exporter.sh"
+glusterfs_metrics_file: "/var/lib/node_exporter/textfile_collector/gluster.prom"
+glusterfs_metrics_cron: "*/2 * * * *"  # Every 2 minutes
+
+# Logging
+glusterfs_log_level: "INFO"  # Options: ERROR, WARNING, INFO, DEBUG, TRACE
+glusterfs_log_dir: "/var/log/glusterfs"
+
+# Service Management
+glusterfs_service_name: "glusterd"
+glusterfs_service_enabled: true
+glusterfs_service_state: "started"
+
+# Volume Start/Stop
+glusterfs_auto_start_volumes: true  # Automatically start volumes after creation
+
+# Peer Probe Settings
+glusterfs_peer_probe_retries: 5  # Number of retries for peer probing
+glusterfs_peer_probe_delay: 10  # Seconds between retries
+
+# Volume Creation Settings
+glusterfs_volume_force: true  # Use 'force' flag for volume creation
+glusterfs_volume_create_retries: 3
+glusterfs_volume_create_delay: 5
+
+# Validation Settings
+glusterfs_validate_after_creation: true  # Validate volumes after creation
+glusterfs_validation_timeout: 60  # Seconds to wait for validation

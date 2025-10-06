@@ -1,0 +1,101 @@
+---
+# GlusterFS Monitoring and Health Check Tasks
+
+- name: Create health check script from template
+  template:
+    src: gluster-health-check.sh.j2
+    dest: "{{ glusterfs_health_check_script }}"
+    owner: root
+    group: root
+    mode: '0755'
+  become: yes
+  tags: ['glusterfs', 'monitoring', 'health-check']
+
+- name: Create Prometheus metrics exporter script
+  template:
+    src: gluster-metrics-exporter.sh.j2
+    dest: "{{ glusterfs_metrics_script }}"
+    owner: root
+    group: root
+    mode: '0755'
+  when: glusterfs_metrics_enabled
+  become: yes
+  tags: ['glusterfs', 'monitoring', 'metrics']
+
+- name: Ensure Prometheus textfile collector directory exists
+  file:
+    path: "{{ glusterfs_metrics_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: glusterfs_metrics_enabled
+  become: yes
+  tags: ['glusterfs', 'monitoring', 'metrics']
+
+- name: Setup health check cron job
+  cron:
+    name: "GlusterFS Health Check"
+    minute: "{{ glusterfs_health_check_cron.split()[0] }}"
+    hour: "{{ glusterfs_health_check_cron.split()[1] }}"
+    day: "{{ glusterfs_health_check_cron.split()[2] }}"
+    month: "{{ glusterfs_health_check_cron.split()[3] }}"
+    weekday: "{{ glusterfs_health_check_cron.split()[4] }}"
+    job: "{{ glusterfs_health_check_script }} >> {{ glusterfs_health_log }} 2>&1"
+    user: root
+    state: present
+  become: yes
+  tags: ['glusterfs', 'monitoring', 'cron']
+
+- name: Setup Prometheus metrics cron job
+  cron:
+    name: "GlusterFS Prometheus Metrics"
+    minute: "{{ glusterfs_metrics_cron.split()[0] }}"
+    hour: "{{ glusterfs_metrics_cron.split()[1] }}"
+    day: "{{ glusterfs_metrics_cron.split()[2] }}"
+    month: "{{ glusterfs_metrics_cron.split()[3] }}"
+    weekday: "{{ glusterfs_metrics_cron.split()[4] }}"
+    job: "{{ glusterfs_metrics_script }}"
+    user: root
+    state: present
+  when: glusterfs_metrics_enabled
+  become: yes
+  tags: ['glusterfs', 'monitoring', 'cron', 'metrics']
+
+- name: Run initial health check
+  command: "{{ glusterfs_health_check_script }}"
+  register: initial_health_check
+  changed_when: false
+  failed_when: false
+  become: yes
+  tags: ['glusterfs', 'monitoring', 'validation']
+
+- name: Display initial health check results
+  debug:
+    msg: "{{ initial_health_check.stdout_lines }}"
+  when:
+    - initial_health_check is defined
+    - initial_health_check.stdout_lines is defined
+  tags: ['glusterfs', 'monitoring', 'info']
+
+- name: Generate initial Prometheus metrics
+  command: "{{ glusterfs_metrics_script }}"
+  when: glusterfs_metrics_enabled
+  changed_when: false
+  become: yes
+  tags: ['glusterfs', 'monitoring', 'metrics']
+
+- name: Display monitoring configuration
+  debug:
+    msg: |
+      GlusterFS Monitoring Configuration:
+      Health Check Script: {{ glusterfs_health_check_script }}
+      Health Check Schedule: {{ glusterfs_health_check_cron }}
+      Health Log: {{ glusterfs_health_log }}
+      Metrics Enabled: {{ 'Yes' if glusterfs_metrics_enabled else 'No' }}
+      {% if glusterfs_metrics_enabled %}
+      Metrics Script: {{ glusterfs_metrics_script }}
+      Metrics File: {{ glusterfs_metrics_file }}
+      Metrics Schedule: {{ glusterfs_metrics_cron }}
+      {% endif %}
+  tags: ['glusterfs', 'monitoring', 'info']

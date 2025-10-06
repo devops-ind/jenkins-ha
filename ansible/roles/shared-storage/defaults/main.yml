@@ -18,8 +18,12 @@ nfs_mount_options: "rw,hard,intr,bg,tcp"
 
 # GlusterFS Configuration (when shared_storage_type == "glusterfs")
 glusterfs_servers: []  # List of GlusterFS server hostnames/IPs
-glusterfs_volume: "jenkins-shared"  # GlusterFS volume name
+glusterfs_volume: "jenkins-shared"  # GlusterFS volume name (legacy - prefer team volumes)
 glusterfs_mount_options: "defaults,_netdev,backup-volfile-servers={{ glusterfs_servers[1:] | join(':') if glusterfs_servers | length > 1 else '' }}"
+glusterfs_backup_servers: ""  # Comma-separated backup volfile servers for failover
+glusterfs_create_team_volumes: true  # Auto-create team-specific volume mounts
+glusterfs_team_volume_prefix: "jenkins"  # Prefix for team volumes (e.g., jenkins-devops-data)
+glusterfs_team_volume_suffix: "data"  # Suffix for team volumes
 
 # Jenkins-specific shared data configuration
 jenkins_user: "jenkins"

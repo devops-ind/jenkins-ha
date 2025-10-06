@@ -148,6 +148,22 @@
       when: validation_mode != 'skip'
       tags: ['validation', 'pre-deployment']
 
+- name: Setup GlusterFS Replicated Storage (if enabled)
+  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'glusterfs_servers') }}"
+  become: yes
+  gather_facts: yes
+  serial: "100%"  # Deploy to all GlusterFS servers in parallel
+  vars:
+    deployment_environment: "{{ lookup('env', 'DEPLOYMENT_ENV') | default('local') }}"
+  roles:
+    - role: glusterfs-server
+      tags: ['glusterfs', 'storage', 'bootstrap']
+      when:
+        - shared_storage_type is defined
+        - shared_storage_type == "glusterfs"
+        - groups['glusterfs_servers'] is defined
+        - groups['glusterfs_servers'] | length > 0
+
 - name: Bootstrap Infrastructure
   hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'all') }}"
   become: "{{ deployment_mode | default('local') != 'production' }}"

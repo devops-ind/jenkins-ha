@@ -24,6 +24,7 @@ This is a production-grade Jenkins infrastructure with **Blue-Green Deployment**
 - **🔒 HAProxy SSL Container Fix**: Resolved persistent SSL certificate mounting issues with container-safe approach, comprehensive troubleshooting system, and automated recovery
 - **🪝 Comprehensive Pre-commit Hooks**: Advanced Groovy/Jenkinsfile validation with security scanning, syntax checking, and best practices enforcement
 - **🔍 Enhanced Code Quality**: Multi-layer validation for 22 Groovy files and 7 Jenkinsfiles with automated CI/CD integration
+- **📦 GlusterFS Replicated Storage**: Complete Ansible automation for GlusterFS 10.x with real-time replication (RPO < 5s, RTO < 30s), team-based volumes, automated health monitoring, and zero-downtime failover
 
 ## Key Commands
 
@@ -84,6 +85,10 @@ ansible-playbook ansible/site.yml --tags ssl,wildcard --limit local
 
 # HAProxy SSL troubleshooting and recovery (NEW)
 ansible-playbook ansible/inventories/local/hosts.yml troubleshoot-haproxy-ssl.yml --extra-vars "troubleshoot_mode=fix"
+
+# GlusterFS deployment and testing (NEW)
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml --tags glusterfs
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/test-glusterfs.yml
 ```
 
 ### Pre-commit Hooks and Code Quality (NEW)
@@ -119,6 +124,54 @@ make pre-commit-clean        # Clean pre-commit cache
 pre-commit run groovy-syntax --all-files
 pre-commit run jenkinsfile-validation --all-files  
 pre-commit run jenkins-security-scan --all-files
+```
+
+### GlusterFS Replicated Storage Commands (NEW)
+```bash
+# Deploy GlusterFS server cluster
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags glusterfs
+
+# Mount GlusterFS volumes on clients
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags storage
+
+# Run comprehensive GlusterFS tests
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/playbooks/test-glusterfs.yml
+
+# Run specific test categories
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/playbooks/test-glusterfs.yml --tags service,peers,volumes,replication
+
+# Manual health check
+sudo /usr/local/bin/gluster-health-check.sh
+
+# View health logs
+sudo tail -f /var/log/gluster-health.log
+
+# Generate Prometheus metrics
+sudo /usr/local/bin/gluster-metrics-exporter.sh
+
+# View Prometheus metrics
+cat /var/lib/node_exporter/textfile_collector/gluster.prom
+
+# Migrate from local/NFS to GlusterFS (with backup and rollback)
+sudo ./scripts/migrate-to-glusterfs.sh --dry-run     # Preview migration
+sudo ./scripts/migrate-to-glusterfs.sh                # Full migration
+sudo ./scripts/migrate-to-glusterfs.sh --team devops  # Migrate specific team
+
+# Manual GlusterFS operations
+sudo gluster peer status                              # Check cluster peers
+sudo gluster volume list                              # List all volumes
+sudo gluster volume status                            # Check volume status
+sudo gluster volume info jenkins-devops-data          # Volume details
+sudo gluster volume heal jenkins-devops-data info     # Check self-heal status
+sudo gluster volume heal jenkins-devops-data info split-brain  # Check split-brain
+
+# Check mounts
+df -h | grep glusterfs
+mount | grep glusterfs
 ```
 
 ### Smart Data Sharing Commands (Blue-Green Enhancement)
@@ -193,12 +246,14 @@ scripts/disaster-recovery.sh production --validate
 - **📊 Comprehensive Monitoring Stack**: Prometheus metrics, enhanced Grafana dashboards with 26 panels, DORA metrics, and SLI tracking
 - **💾 Enterprise Backup & DR**: Automated backup with RTO/RPO compliance and automated disaster recovery procedures
 - **📁 Smart Shared Storage**: NFS/GlusterFS with selective data sharing - jobs/builds/workspace shared between blue-green, plugins isolated for safe upgrades
+- **📦 GlusterFS Replicated Storage**: Real-time replicated storage with automatic failover (RPO < 5s, RTO < 30s). **NEW**: Complete Ansible automation for GlusterFS 10.x with team-based volumes, automated health monitoring, Prometheus metrics, split-brain detection, and self-healing
 - **🛡️ Security Infrastructure**: Container security monitoring, vulnerability scanning, compliance validation, and audit logging
 - **🪝 Pre-commit Validation Framework**: Comprehensive code quality enforcement with Groovy/Jenkinsfile validation, security scanning, and automated CI/CD integration
 
 ### Deployment Flow (ansible/site.yml)
 1. **Pre-deployment Validation**: Comprehensive system validation framework with connectivity, security, and resource checks
-2. **Bootstrap Infrastructure**: Common setup, Docker, shared storage, security hardening with container security constraints
+2. **GlusterFS Setup** (if enabled): GlusterFS server installation, cluster formation, replicated volume creation with performance tuning
+3. **Bootstrap Infrastructure**: Common setup, Docker, shared storage mounting, security hardening with container security constraints
 4. **Secure Jenkins Image Building**: Custom Jenkins images with vulnerability scanning and security validation
 5. **Blue-Green Jenkins Deployment**: Deploy blue/green environments with enhanced pre-switch validation and automated rollback triggers
 6. **HAProxy Load Balancer Setup**: Configure traffic routing, health checks, and SLI monitoring integration
@@ -208,6 +263,8 @@ scripts/disaster-recovery.sh production --validate
 10. **Post-Deployment Verification**: Multi-layer health checks, security validation, and comprehensive deployment summary
 
 ### Key Ansible Roles
+- `glusterfs-server`: **NEW** Complete GlusterFS 10.x automation with server installation, trusted storage pool formation, replicated volume creation (replica=2), performance tuning, health monitoring, and Prometheus metrics export
+- `shared-storage`: **ENHANCED** Multi-backend storage (local/NFS/GlusterFS) with team-based volume mounting, automatic failover configuration, and smart data sharing integration
 - `jenkins-master-v2`: **OPTIMIZED** Unified Jenkins deployment with single configuration per team, **resource-optimized blue-green deployment** (active-only containers), production-safe DSL architecture, 55% code reduction (4 files vs 13 files), and **SEPARATED DATA OPERATIONS** with dedicated backup daemons and Ansible-native sync
 - `high-availability-v2`: **ENHANCED** Advanced HA configuration with perfect jenkins-master-v2 compatibility, dynamic team discovery, resource-optimized blue-green deployment, and **NEW** dynamic SSL certificate generation based on `jenkins_teams`
 - `monitoring`: Enhanced Prometheus/Grafana stack with 26-panel dashboards, DORA metrics, SLI tracking, and automated alerting

@@ -27,11 +27,29 @@
   become: yes
   tags: ['shared-storage', 'nfs']
 
-- name: Install GlusterFS client
+- name: Install GlusterFS client (RHEL/CentOS)
   package:
-    name: glusterfs-client
+    name:
+      - glusterfs-client
+      - glusterfs-fuse
+      - attr
     state: present
-  when: shared_storage_type == "glusterfs"
+  when:
+    - shared_storage_type == "glusterfs"
+    - ansible_os_family == "RedHat"
+  become: yes
+  tags: ['shared-storage', 'glusterfs']
+
+- name: Install GlusterFS client (Debian/Ubuntu)
+  package:
+    name:
+      - glusterfs-client
+      - glusterfs-fuse
+      - attr
+    state: present
+  when:
+    - shared_storage_type == "glusterfs"
+    - ansible_os_family == "Debian"
   become: yes
   tags: ['shared-storage', 'glusterfs']
 
@@ -122,16 +140,60 @@
   become: yes
   tags: ['shared-storage', 'nfs', 'mount']
 
-- name: Mount GlusterFS shared storage
-  mount:
-    path: "{{ shared_storage_path }}"
-    src: "{{ glusterfs_servers | join(',') }}:{{ glusterfs_volume }}"
-    fstype: glusterfs
-    opts: "{{ glusterfs_mount_options }}"
-    state: mounted
-  when: shared_storage_type == "glusterfs"
+- name: Build team-based GlusterFS mount list
+  set_fact:
+    glusterfs_team_mounts: "{{ glusterfs_team_mounts | default([]) + [item] }}"
+  loop: "{{ jenkins_teams | default([]) | map('combine', {'volume_name': glusterfs_team_volume_prefix + '-' + item.team_name + '-' + glusterfs_team_volume_suffix, 'mount_path': '/var/jenkins/' + item.team_name + '/data'}) | list }}"
+  when:
+    - shared_storage_type == "glusterfs"
+    - glusterfs_create_team_volumes | default(true)
+    - jenkins_teams is defined
+    - jenkins_teams | length > 0
+  tags: ['shared-storage', 'glusterfs', 'mount']
+
+- name: Create mount point directories for each team
+  file:
+    path: "{{ item.mount_path }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+  loop: "{{ glusterfs_team_mounts | default([]) }}"
+  when:
+    - shared_storage_type == "glusterfs"
+    - glusterfs_team_mounts is defined
+    - glusterfs_team_mounts | length > 0
   become: yes
   tags: ['shared-storage', 'glusterfs', 'mount']
+
+- name: Mount team-specific GlusterFS volumes
+  mount:
+    path: "{{ item.mount_path }}"
+    src: "localhost:/{{ item.volume_name }}"
+    fstype: glusterfs
+    opts: "defaults,_netdev,backup-volfile-servers={{ glusterfs_backup_servers | default('') }}"
+    state: mounted
+  loop: "{{ glusterfs_team_mounts | default([]) }}"
+  when:
+    - shared_storage_type == "glusterfs"
+    - glusterfs_team_mounts is defined
+    - glusterfs_team_mounts | length > 0
+  become: yes
+  tags: ['shared-storage', 'glusterfs', 'mount']
+
+- name: Set ownership for GlusterFS mounts
+  file:
+    path: "{{ item.mount_path }}"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    recurse: no
+  loop: "{{ glusterfs_team_mounts | default([]) }}"
+  when:
+    - shared_storage_type == "glusterfs"
+    - glusterfs_team_mounts is defined
+    - glusterfs_team_mounts | length > 0
+  become: yes
+  tags: ['shared-storage', 'glusterfs', 'permissions']
 
 - name: Create team-specific shared directories (selective sharing)
   file:

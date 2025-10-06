@@ -1,0 +1,36 @@
+---
+# GlusterFS Server Handlers
+
+- name: restart glusterd
+  systemd:
+    name: "{{ glusterfs_service_name }}"
+    state: restarted
+    enabled: "{{ glusterfs_service_enabled }}"
+  become: yes
+  tags: ['glusterfs', 'service']
+
+- name: reload glusterd
+  systemd:
+    name: "{{ glusterfs_service_name }}"
+    state: reloaded
+  become: yes
+  tags: ['glusterfs', 'service']
+
+- name: reload firewalld
+  systemd:
+    name: firewalld
+    state: reloaded
+  when:
+    - ansible_os_family == "RedHat"
+    - glusterfs_firewall_enabled
+  become: yes
+  tags: ['glusterfs', 'firewall']
+
+- name: reload ufw
+  ufw:
+    state: reloaded
+  when:
+    - ansible_os_family == "Debian"
+    - glusterfs_firewall_enabled
+  become: yes
+  tags: ['glusterfs', 'firewall']

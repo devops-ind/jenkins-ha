@@ -1,0 +1,86 @@
+---
+# GlusterFS Firewall Configuration Tasks
+
+- name: Check if firewalld is installed and running (RHEL/CentOS)
+  systemd:
+    name: firewalld
+  register: firewalld_status
+  when: ansible_os_family == "RedHat"
+  ignore_errors: yes
+  become: yes
+  tags: ['glusterfs', 'firewall']
+
+- name: Configure firewalld for GlusterFS (RHEL/CentOS)
+  block:
+    - name: Add GlusterFS service to firewalld
+      firewalld:
+        service: glusterfs
+        permanent: yes
+        state: enabled
+        zone: "{{ glusterfs_firewall_zone }}"
+      notify: reload firewalld
+
+    - name: Open GlusterFS daemon ports
+      firewalld:
+        port: "{{ item }}/tcp"
+        permanent: yes
+        state: enabled
+        zone: "{{ glusterfs_firewall_zone }}"
+      loop: "{{ glusterfs_daemon_ports }}"
+      notify: reload firewalld
+
+    - name: Open GlusterFS brick port range
+      firewalld:
+        port: "{{ glusterfs_brick_port_range.start }}-{{ glusterfs_brick_port_range.end }}/tcp"
+        permanent: yes
+        state: enabled
+        zone: "{{ glusterfs_firewall_zone }}"
+      notify: reload firewalld
+
+  when:
+    - ansible_os_family == "RedHat"
+    - glusterfs_firewall_enabled
+    - firewalld_status is defined
+    - firewalld_status.status.ActiveState == "active"
+  become: yes
+  tags: ['glusterfs', 'firewall', 'firewalld']
+
+- name: Check if ufw is installed (Ubuntu)
+  command: which ufw
+  register: ufw_installed
+  when: ansible_os_family == "Debian"
+  ignore_errors: yes
+  changed_when: false
+  tags: ['glusterfs', 'firewall']
+
+- name: Configure UFW for GlusterFS (Ubuntu)
+  block:
+    - name: Open GlusterFS daemon ports (UFW)
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop: "{{ glusterfs_daemon_ports | map('string') | list }}"
+
+    - name: Open GlusterFS brick port range (UFW)
+      ufw:
+        rule: allow
+        port: "{{ glusterfs_brick_port_range.start }}:{{ glusterfs_brick_port_range.end }}"
+        proto: tcp
+
+  when:
+    - ansible_os_family == "Debian"
+    - glusterfs_firewall_enabled
+    - ufw_installed.rc == 0
+  become: yes
+  notify: reload ufw
+  tags: ['glusterfs', 'firewall', 'ufw']
+
+- name: Display firewall configuration status
+  debug:
+    msg: |
+      GlusterFS Firewall Configuration:
+      - Daemon Ports: {{ glusterfs_daemon_ports | join(', ') }}
+      - Brick Port Range: {{ glusterfs_brick_port_range.start }}-{{ glusterfs_brick_port_range.end }}
+      - Status: {{ 'Configured' if glusterfs_firewall_enabled else 'Disabled' }}
+  tags: ['glusterfs', 'firewall', 'info']
