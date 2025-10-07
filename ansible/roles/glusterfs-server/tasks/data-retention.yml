@@ -1,0 +1,183 @@
+---
+# Workspace Data Retention for Jenkins GlusterFS Volumes
+# Implements automatic cleanup of workspaces older than configured retention period
+# Default: 7-10 days (configurable per team)
+
+- name: Display workspace retention configuration
+  debug:
+    msg: |
+      ====================================================
+      Workspace Data Retention Configuration
+      ====================================================
+      Retention policy: {{ glusterfs_workspace_retention_days }} days
+      Cleanup schedule: {{ glusterfs_workspace_cleanup_schedule }}
+      Teams configured: {{ jenkins_teams | length if jenkins_teams is defined else 0 }}
+      ====================================================
+  tags: ['glusterfs', 'retention', 'workspace']
+
+- name: Create workspace cleanup script directory
+  file:
+    path: /usr/local/bin
+    state: directory
+    mode: '0755'
+  become: yes
+  tags: ['glusterfs', 'retention']
+
+- name: Deploy workspace cleanup script template
+  template:
+    src: workspace-cleanup.sh.j2
+    dest: /usr/local/bin/glusterfs-workspace-cleanup.sh
+    owner: root
+    group: root
+    mode: '0755'
+  become: yes
+  tags: ['glusterfs', 'retention', 'script']
+
+- name: Create workspace cleanup log directory
+  file:
+    path: /var/log/glusterfs-retention
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  become: yes
+  tags: ['glusterfs', 'retention']
+
+- name: Schedule workspace cleanup cron job
+  cron:
+    name: "GlusterFS workspace cleanup for {{ item.team_name }}"
+    minute: "{{ glusterfs_workspace_cleanup_schedule.split()[0] }}"
+    hour: "{{ glusterfs_workspace_cleanup_schedule.split()[1] }}"
+    day: "{{ glusterfs_workspace_cleanup_schedule.split()[2] }}"
+    month: "{{ glusterfs_workspace_cleanup_schedule.split()[3] }}"
+    weekday: "{{ glusterfs_workspace_cleanup_schedule.split()[4] }}"
+    job: "/usr/local/bin/glusterfs-workspace-cleanup.sh {{ item.team_name }} {{ item.workspace_retention_days | default(glusterfs_workspace_retention_days) }} >> /var/log/glusterfs-retention/{{ item.team_name }}-cleanup.log 2>&1"
+    user: root
+    state: present
+  loop: "{{ jenkins_teams if jenkins_teams is defined else [] }}"
+  when:
+    - glusterfs_workspace_retention_enabled | default(true)
+    - jenkins_teams is defined
+    - jenkins_teams | length > 0
+  become: yes
+  tags: ['glusterfs', 'retention', 'cron']
+
+- name: Create workspace cleanup monitoring script
+  template:
+    src: workspace-cleanup-monitor.sh.j2
+    dest: /usr/local/bin/glusterfs-workspace-monitor.sh
+    owner: root
+    group: root
+    mode: '0755'
+  become: yes
+  tags: ['glusterfs', 'retention', 'monitoring']
+
+- name: Test workspace cleanup script (dry-run)
+  command: "/usr/local/bin/glusterfs-workspace-cleanup.sh {{ jenkins_teams[0].team_name }} {{ jenkins_teams[0].workspace_retention_days | default(glusterfs_workspace_retention_days) }} --dry-run"
+  register: cleanup_test
+  changed_when: false
+  failed_when: false
+  when:
+    - jenkins_teams is defined
+    - jenkins_teams | length > 0
+  become: yes
+  tags: ['glusterfs', 'retention', 'test']
+
+- name: Display workspace cleanup test results
+  debug:
+    msg: |
+      ====================================================
+      Workspace Cleanup Test Results (Dry-Run)
+      ====================================================
+      Team: {{ jenkins_teams[0].team_name }}
+      Retention: {{ jenkins_teams[0].workspace_retention_days | default(glusterfs_workspace_retention_days) }} days
+
+      {{ cleanup_test.stdout_lines | default(['No output']) | join('\n') }}
+      ====================================================
+  when:
+    - jenkins_teams is defined
+    - jenkins_teams | length > 0
+    - cleanup_test is defined
+  tags: ['glusterfs', 'retention', 'test']
+
+- name: Create workspace retention report script
+  copy:
+    dest: /usr/local/bin/glusterfs-workspace-report.sh
+    content: |
+      #!/bin/bash
+      # Workspace Retention Report Generator
+      # Provides summary of workspace disk usage and cleanup candidates
+
+      set -euo pipefail
+
+      echo "======================================================"
+      echo "GlusterFS Workspace Retention Report"
+      echo "======================================================"
+      echo "Generated: $(date)"
+      echo ""
+
+      {% for team in jenkins_teams if jenkins_teams is defined %}
+      TEAM="{{ team.team_name }}"
+      WORKSPACE_PATH="/var/jenkins/${TEAM}/data/workspace"
+      RETENTION_DAYS="{{ team.workspace_retention_days | default(glusterfs_workspace_retention_days) }}"
+
+      if [ -d "$WORKSPACE_PATH" ]; then
+        echo "Team: $TEAM"
+        echo "Path: $WORKSPACE_PATH"
+        echo "Retention: $RETENTION_DAYS days"
+        echo "Total disk usage: $(du -sh $WORKSPACE_PATH 2>/dev/null | cut -f1)"
+        echo "Total workspaces: $(find $WORKSPACE_PATH -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
+
+        OLD_WORKSPACES=$(find $WORKSPACE_PATH -mindepth 1 -maxdepth 1 -type d -mtime +$RETENTION_DAYS 2>/dev/null | wc -l)
+        if [ "$OLD_WORKSPACES" -gt 0 ]; then
+          OLD_SIZE=$(find $WORKSPACE_PATH -mindepth 1 -maxdepth 1 -type d -mtime +$RETENTION_DAYS -exec du -ch {} + 2>/dev/null | tail -1 | cut -f1)
+          echo "Cleanup candidates (>$RETENTION_DAYS days): $OLD_WORKSPACES workspaces ($OLD_SIZE)"
+        else
+          echo "Cleanup candidates: None"
+        fi
+        echo ""
+      else
+        echo "Team: $TEAM - Workspace path not found"
+        echo ""
+      fi
+      {% endfor %}
+
+      echo "======================================================"
+    mode: '0755'
+    owner: root
+    group: root
+  become: yes
+  tags: ['glusterfs', 'retention', 'report']
+
+- name: Display workspace retention deployment summary
+  debug:
+    msg: |
+      ====================================================
+      Workspace Data Retention Deployment Complete
+      ====================================================
+      Status: SUCCESS
+
+      Configuration:
+      - Default retention: {{ glusterfs_workspace_retention_days }} days
+      - Cleanup schedule: {{ glusterfs_workspace_cleanup_schedule }}
+      - Teams configured: {{ jenkins_teams | length if jenkins_teams is defined else 0 }}
+
+      Scripts deployed:
+      - /usr/local/bin/glusterfs-workspace-cleanup.sh
+      - /usr/local/bin/glusterfs-workspace-monitor.sh
+      - /usr/local/bin/glusterfs-workspace-report.sh
+
+      Logs location:
+      - /var/log/glusterfs-retention/
+
+      Usage:
+      # Manual cleanup (dry-run)
+      /usr/local/bin/glusterfs-workspace-cleanup.sh <team> <retention_days> --dry-run
+
+      # Generate retention report
+      /usr/local/bin/glusterfs-workspace-report.sh
+
+      # Monitor cleanup execution
+      /usr/local/bin/glusterfs-workspace-monitor.sh
+      ====================================================
+  tags: ['glusterfs', 'retention', 'summary']

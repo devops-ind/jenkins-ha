@@ -102,6 +102,10 @@ jenkins_verification_host: >-
 # ====================================
 jenkins_master_blue_green_enabled: true
 
+# Blue-Green Data Sync Configuration
+jenkins_workspace_retention_days: 10  # Only sync workspaces modified within last N days
+jenkins_blue_green_sync_enabled: true  # Enable blue-green data sync scripts
+
 # ====================================
 # CLEANUP CONFIGURATION
 # ====================================

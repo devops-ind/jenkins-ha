@@ -114,21 +114,39 @@ backend jenkins_backend_{{ team_name }}
     balance {{ backend_balance_method | default('roundrobin') }}
     option httpchk GET /login
     http-check expect status 200
-    
-    # Optimized Blue-Green deployment - ONLY active environment for {{ team_name }} team
+
+    # Cross-VM Failover Strategy: {{ haproxy_backend_failover_strategy | default('active-passive') }}
     {% if groups['jenkins_masters'] is defined and groups['jenkins_masters'] | length > 0 %}
+    {% set failover_strategy = haproxy_backend_failover_strategy | default('active-passive') %}
+    {% set primary_host = groups['jenkins_masters'][0] %}
+    {% set is_current_primary = (inventory_hostname == primary_host) %}
+
     {% for host in groups['jenkins_masters'] %}
+    {% set is_primary = (host == primary_host) %}
+    {% set host_ip = hostvars[host]['ansible_default_ipv4']['address'] %}
+    {% set host_name = hostvars[host]['inventory_hostname'] %}
+
     {% if team_bg_enabled %}
     {% if team_active_env == 'blue' %}
-    # Blue environment active (green environment not running - resource optimization)
-    server {{ team_name }}-{{ hostvars[host]['inventory_hostname'] }}-active {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team_web_port }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}
+    {% set port = team_web_port %}
     {% else %}
-    # Green environment active (blue environment not running - resource optimization)
-    server {{ team_name }}-{{ hostvars[host]['inventory_hostname'] }}-active {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team_web_port | int + 100 }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}
+    {% set port = team_web_port | int + 100 %}
     {% endif %}
     {% else %}
-    # Blue-green disabled, single environment
-    server {{ team_name }}-{{ hostvars[host]['inventory_hostname'] }} {{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team_web_port }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}
+    {% set port = team_web_port %}
+    {% endif %}
+
+    {% if failover_strategy == 'active-passive' %}
+    # Active-Passive: {{ host_name }} is {{ 'PRIMARY' if is_primary else 'BACKUP' }}
+    server {{ team_name }}-{{ host_name }} {{ host_ip }}:{{ port }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}{{ ' backup' if not is_primary else '' }}
+    {% elif failover_strategy == 'active-active' %}
+    # Active-Active: Both VMs load balanced
+    server {{ team_name }}-{{ host_name }} {{ host_ip }}:{{ port }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }} weight 100
+    {% elif failover_strategy == 'local-only' %}
+    {% if host == inventory_hostname %}
+    # Local-Only: Only route to Jenkins on same VM
+    server {{ team_name }}-{{ host_name }} {{ host_ip }}:{{ port }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}
+    {% endif %}
     {% endif %}
     {% endfor %}
     {% else %}

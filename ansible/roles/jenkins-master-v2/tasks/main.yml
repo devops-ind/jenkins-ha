@@ -169,12 +169,14 @@
   when: jenkins_teams_config is defined and jenkins_teams_config | length > 0
   tags: ['health-fix', 'health', 'verify', 'fix']
 
-# Phase 3.7: Simplified backup integration (replaced shared storage)
-# Note: Shared storage integration removed in favor of simplified backup approach
-# Backup operations now handled by dedicated backup role and scripts:
-# - backup-active-to-nfs.sh for critical data backup
-# - sync-for-bluegreen-switch.sh for blue-green sync
-# This eliminates 99% of backup complexity while maintaining essential functionality
+# Phase 3.7: Blue-Green Data Synchronization Setup
+- name: Blue-green data sync configuration phase
+  import_tasks: blue-green-data-sync.yml
+  when:
+    - jenkins_blue_green_sync_enabled | default(true)
+    - jenkins_teams_config is defined
+    - jenkins_teams_config | length > 0
+  tags: ['jenkins', 'blue-green', 'sync', 'data']
 
 # Phase 4: Update HAProxy configuration for blue-green environment changes
 - name: Notify HAProxy of team environment changes

@@ -95,6 +95,12 @@ keepalived_priority: 100  # Higher value = master (100-255)
 keepalived_advert_int: 1
 keepalived_auth_pass: "{{ vault_keepalived_auth_pass | default('changeme123') }}"
 
+# Intelligent failover thresholds (prevents cascading failures)
+# These settings prevent a single team's Jenkins failure from triggering full VIP failover
+keepalived_backend_health_threshold: 50  # Percentage of backends that must be UP (50% = majority)
+keepalived_team_quorum: 2  # Minimum number of healthy teams to avoid failover (out of 4 teams)
+keepalived_failover_grace_period: 30  # Seconds to wait before triggering failover (prevents flapping)
+
 # ====================================
 # TEAM ROUTING CONFIGURATION
 # ====================================
@@ -102,6 +108,13 @@ team_routing_enabled: true
 jenkins_domain: "devops.example.com"  # Default domain for multi-team routing
 # jenkins_wildcard_domain: "*.devops.example.com"
 backend_balance_method: "roundrobin"  # Load balancing algorithm
+
+# Cross-VM Backend Failover Strategy
+# Options: 'active-passive' (recommended), 'active-active', 'local-only'
+haproxy_backend_failover_strategy: "active-passive"
+# active-passive: Primary VM handles all traffic, backup VM only used on failure (backup flag)
+# active-active: Both VMs handle traffic simultaneously (load balanced)
+# local-only: Each HAProxy only routes to local Jenkins (current behavior)
 
 # ====================================
 # MONITORING CONFIGURATION

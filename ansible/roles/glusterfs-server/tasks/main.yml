@@ -43,6 +43,13 @@
   when: glusterfs_mount_volumes_on_servers | default(true)
   tags: ['glusterfs', 'mount', 'client']
 
+- name: Include workspace data retention tasks
+  include_tasks: data-retention.yml
+  when:
+    - glusterfs_workspace_retention_enabled | default(true)
+    - glusterfs_mount_volumes_on_servers | default(true)
+  tags: ['glusterfs', 'retention', 'workspace']
+
 - name: Include monitoring setup tasks
   include_tasks: monitoring.yml
   when: glusterfs_monitoring_enabled

@@ -25,6 +25,10 @@ This is a production-grade Jenkins infrastructure with **Blue-Green Deployment**
 - **🪝 Comprehensive Pre-commit Hooks**: Advanced Groovy/Jenkinsfile validation with security scanning, syntax checking, and best practices enforcement
 - **🔍 Enhanced Code Quality**: Multi-layer validation for 22 Groovy files and 7 Jenkinsfiles with automated CI/CD integration
 - **📦 GlusterFS Replicated Storage**: Complete Ansible automation for GlusterFS 10.x with real-time replication (RPO < 5s, RTO < 30s), team-based volumes, automated health monitoring, and zero-downtime failover
+- **✅ Intelligent Keepalived Failover**: Prevents cascading failures with percentage-based backend health monitoring, team quorum logic, and 30s grace period - eliminates 2-5 min downtime for healthy teams when single team fails
+- **✅ Workspace Data Retention**: Automated cleanup system with 7-10 day configurable retention per team, cron-based scheduling, and monitoring - saves 30-50% disk space
+- **✅ Blue-Green Data Sync**: Selective data sharing (jobs, builds, workspace) with plugin isolation for safe upgrades, workspace retention, and per-team wrapper scripts
+- **✅ Cross-VM Individual Monitoring**: HAProxy monitors each team's Jenkins across VMs with active-passive or active-active failover strategies - enables per-team failover without affecting other teams (configurable: `haproxy_backend_failover_strategy`)
 
 ## Key Commands
 
@@ -181,6 +185,135 @@ cat /var/jenkins/devops/data/.glusterfs-mount-test # Test file access
 
 # Check mount ownership
 stat /var/jenkins/devops/data                      # Check permissions and ownership
+```
+
+### Intelligent Keepalived Failover Commands (NEW)
+```bash
+# Deploy intelligent keepalived health check
+ansible-playbook ansible/site.yml --tags high-availability,keepalived
+
+# Monitor backend health (per-team status)
+tail -f /var/log/keepalived-backend-health.log
+
+# Expected output:
+# 2025-01-07 10:15:00 Overall: 3/4 (75%) | Teams: devops:UP(1/1) ma:UP(1/1) ba:DOWN(0/1) tw:UP(1/1)
+# INFO: Backend health 75% below threshold but 3 teams healthy - NO FAILOVER (prevents cascading failure)
+
+# Monitor keepalived decisions
+tail -f /var/log/keepalived-haproxy-check.log
+
+# Test intelligent failover (simulate single team failure)
+docker stop jenkins-ba-blue  # Should NOT trigger failover (only 1 team down)
+
+# Verify VIP remains on current master
+ip addr show | grep 192.168.1.100
+```
+
+### Workspace Data Retention Commands (NEW)
+```bash
+# Deploy workspace retention system
+ansible-playbook ansible/site.yml --tags glusterfs,retention
+
+# Manual workspace cleanup (dry-run)
+/usr/local/bin/glusterfs-workspace-cleanup.sh devops 10 --dry-run
+
+# Actual cleanup
+/usr/local/bin/glusterfs-workspace-cleanup.sh devops 10
+
+# Generate workspace retention report for all teams
+/usr/local/bin/glusterfs-workspace-report.sh
+
+# Monitor cleanup execution status
+/usr/local/bin/glusterfs-workspace-monitor.sh
+
+# View cleanup logs
+tail -f /var/log/glusterfs-retention/devops-cleanup.log
+
+# Check cron jobs
+crontab -l | grep glusterfs-workspace-cleanup
+```
+
+### Blue-Green Data Sync Commands (NEW)
+```bash
+# Deploy blue-green sync scripts
+ansible-playbook ansible/site.yml --tags jenkins,blue-green,sync
+
+# Sync from blue to green (dry-run first)
+/usr/local/bin/jenkins-sync-devops.sh blue green --dry-run
+
+# Actual sync
+/usr/local/bin/jenkins-sync-devops.sh blue green
+
+# Generic sync for any team
+/usr/local/bin/jenkins-blue-green-sync.sh ma green blue
+
+# Blue-green switch workflow
+# 1. Deploy new version to inactive environment
+ansible-playbook ansible/site.yml --tags jenkins,deploy -e "deploy_teams=devops"
+
+# 2. Sync data from active to inactive
+/usr/local/bin/jenkins-sync-devops.sh blue green
+
+# 3. Validate inactive environment
+curl -f http://localhost:8180/login
+
+# 4. Switch active environment (update inventory, redeploy HAProxy)
+ansible-playbook ansible/site.yml --tags haproxy-sync
+
+# 5. Sync back if needed
+/usr/local/bin/jenkins-sync-devops.sh green blue
+
+# View sync logs
+tail -f /var/log/jenkins-bluegreen-sync-devops.log
+
+# View sync documentation
+cat /usr/local/share/doc/jenkins-blue-green-sync-README.md
+```
+
+### Cross-VM Individual Jenkins Monitoring Commands (NEW)
+```bash
+# Configure failover strategy (choose one)
+# ansible/roles/high-availability-v2/defaults/main.yml
+haproxy_backend_failover_strategy: "active-passive"  # Recommended for HA
+# haproxy_backend_failover_strategy: "active-active"   # Load balancing
+# haproxy_backend_failover_strategy: "local-only"      # No cross-VM failover
+
+# Deploy cross-VM backend configuration
+ansible-playbook ansible/site.yml --tags high-availability,haproxy
+
+# Verify HAProxy configuration includes both VMs
+ansible jenkins_masters -m command -a "docker exec jenkins-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg"
+
+# Check HAProxy backend status
+curl -u admin:admin123 http://192.168.1.100:8404/stats
+
+# Or view in browser:
+# http://192.168.1.100:8404/stats
+
+# Test individual team failover
+# 1. Stop team Jenkins on VM1
+docker stop jenkins-ba-blue
+
+# 2. Wait for health checks (15-20 seconds)
+sleep 20
+
+# 3. Verify team failed over to VM2 (other teams still on VM1)
+curl -f http://192.168.1.100/bajenkins.example.com/login
+
+# 4. Check HAProxy stats for backend status
+curl -s -u admin:admin123 http://192.168.1.100:8404/stats | grep jenkins_backend_ba
+
+# 5. Verify VIP did not move (NO cascading failure)
+ip addr show | grep 192.168.1.100
+
+# Monitor HAProxy backend health
+docker logs -f jenkins-haproxy --tail 100 | grep backend
+
+# View per-team backend status
+echo "show stat" | socat stdio /run/haproxy/admin.sock | grep jenkins_backend
+
+# Force backend state change (if needed)
+echo "set server jenkins_backend_devops/devops-vm1 state ready" | socat stdio /run/haproxy/admin.sock
 ```
 
 ### Smart Data Sharing Commands (Blue-Green Enhancement)

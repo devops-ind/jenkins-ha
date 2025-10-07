@@ -1,0 +1,211 @@
+---
+# Blue-Green Data Synchronization Setup
+# Deploys scripts for selective data sharing between blue and green environments
+
+- name: Display blue-green data sync configuration
+  debug:
+    msg: |
+      ====================================================
+      Blue-Green Data Sync Configuration
+      ====================================================
+      Workspace retention: {{ jenkins_workspace_retention_days | default(10) }} days
+      Teams configured: {{ jenkins_teams_config | length }}
+      ====================================================
+  tags: ['jenkins', 'blue-green', 'sync']
+
+- name: Create blue-green sync script directory
+  file:
+    path: /usr/local/bin
+    state: directory
+    mode: '0755'
+  become: yes
+  tags: ['jenkins', 'blue-green', 'sync']
+
+- name: Deploy blue-green data sync script
+  template:
+    src: blue-green-sync.sh.j2
+    dest: /usr/local/bin/jenkins-blue-green-sync.sh
+    owner: root
+    group: root
+    mode: '0755'
+  become: yes
+  tags: ['jenkins', 'blue-green', 'sync']
+
+- name: Create blue-green sync log directory
+  file:
+    path: /var/log/jenkins-bluegreen-sync
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  become: yes
+  tags: ['jenkins', 'blue-green', 'sync']
+
+- name: Create blue-green sync wrapper for each team
+  copy:
+    dest: "/usr/local/bin/jenkins-sync-{{ item.team_name }}.sh"
+    content: |
+      #!/bin/bash
+      # Blue-Green Sync Wrapper for {{ item.team_name }} Team
+      # Usage: jenkins-sync-{{ item.team_name }}.sh <source_env> <target_env> [--dry-run]
+
+      TEAM_NAME="{{ item.team_name }}"
+      SOURCE_ENV="${1:-{{ item.active_environment | default('blue') }}}"
+      TARGET_ENV="${2:-{{ 'green' if item.active_environment | default('blue') == 'blue' else 'blue' }}}"
+      DRY_RUN="${3:-}"
+
+      echo "Syncing {{ item.team_name }} team: $SOURCE_ENV → $TARGET_ENV"
+      /usr/local/bin/jenkins-blue-green-sync.sh "$TEAM_NAME" "$SOURCE_ENV" "$TARGET_ENV" "$DRY_RUN"
+    mode: '0755'
+    owner: root
+    group: root
+  loop: "{{ jenkins_teams_config }}"
+  become: yes
+  tags: ['jenkins', 'blue-green', 'sync', 'team-wrappers']
+
+- name: Test blue-green sync script (dry-run for first team)
+  command: "/usr/local/bin/jenkins-blue-green-sync.sh {{ jenkins_teams_config[0].team_name }} {{ jenkins_teams_config[0].active_environment | default('blue') }} {{ 'green' if jenkins_teams_config[0].active_environment | default('blue') == 'blue' else 'blue' }} --dry-run"
+  register: sync_test
+  changed_when: false
+  failed_when: false
+  become: yes
+  tags: ['jenkins', 'blue-green', 'sync', 'test']
+
+- name: Display blue-green sync test results
+  debug:
+    msg: |
+      ====================================================
+      Blue-Green Sync Test Results (Dry-Run)
+      ====================================================
+      Team: {{ jenkins_teams_config[0].team_name }}
+
+      {{ sync_test.stdout_lines | default(['No output']) | join('\n') }}
+      ====================================================
+  when: sync_test is defined
+  tags: ['jenkins', 'blue-green', 'sync', 'test']
+
+- name: Create blue-green sync documentation
+  copy:
+    dest: /usr/local/share/doc/jenkins-blue-green-sync-README.md
+    content: |
+      # Jenkins Blue-Green Data Synchronization
+
+      ## Overview
+
+      This system implements **selective data sharing** between blue and green Jenkins environments,
+      enabling safe plugin upgrades while maintaining data consistency.
+
+      ## Data Sync Strategy
+
+      ### SHARED DATA (Bidirectional Sync)
+      - **jobs/** - Job configurations
+      - **builds/** - Build history and artifacts
+      - **workspace/** - Build workspaces (with {{ jenkins_workspace_retention_days | default(10) }} day retention)
+
+      ### ISOLATED DATA (Never Synced)
+      - **plugins/** - Plugin isolation for safe upgrades
+      - **logs/** - Environment-specific logs
+      - **.cache/** - Environment-specific cache
+
+      ## Usage
+
+      ### Per-Team Sync Scripts
+      {% for team in jenkins_teams_config %}
+      ```bash
+      # {{ team.team_name }} team sync (dry-run)
+      /usr/local/bin/jenkins-sync-{{ team.team_name }}.sh {{ team.active_environment | default('blue') }} {{ 'green' if team.active_environment | default('blue') == 'blue' else 'blue' }} --dry-run
+
+      # {{ team.team_name }} team sync (actual)
+      /usr/local/bin/jenkins-sync-{{ team.team_name }}.sh {{ team.active_environment | default('blue') }} {{ 'green' if team.active_environment | default('blue') == 'blue' else 'blue' }}
+      ```
+      {% endfor %}
+
+      ### Generic Sync Script
+      ```bash
+      # Sync any team
+      /usr/local/bin/jenkins-blue-green-sync.sh <team_name> <source_env> <target_env> [--dry-run]
+
+      # Examples
+      /usr/local/bin/jenkins-blue-green-sync.sh devops blue green --dry-run
+      /usr/local/bin/jenkins-blue-green-sync.sh ma green blue
+      ```
+
+      ## Blue-Green Switch Workflow
+
+      1. **Test new Jenkins version in inactive environment**
+         ```bash
+         # Deploy new Jenkins version to green (if blue is active)
+         ansible-playbook ansible/site.yml --tags jenkins,deploy -e "deploy_teams=devops" -e "jenkins_override_version=2.440.1"
+         ```
+
+      2. **Sync data from active to inactive**
+         ```bash
+         # Dry-run first to verify
+         /usr/local/bin/jenkins-sync-devops.sh blue green --dry-run
+
+         # Actual sync
+         /usr/local/bin/jenkins-sync-devops.sh blue green
+         ```
+
+      3. **Validate inactive environment**
+         ```bash
+         # Test green environment at port 8180 (if blue at 8080)
+         curl -f http://localhost:8180/login
+         ```
+
+      4. **Switch active environment**
+         ```bash
+         # Update inventory: change active_environment to 'green'
+         # Deploy HAProxy configuration change
+         ansible-playbook ansible/site.yml --tags haproxy-sync
+         ```
+
+      5. **Sync back if needed**
+         ```bash
+         # After testing, sync changes back to original environment
+         /usr/local/bin/jenkins-sync-devops.sh green blue
+         ```
+
+      ## Logs
+      - Sync logs: `/var/log/jenkins-bluegreen-sync/`
+      - Per-team logs: `/var/log/jenkins-bluegreen-sync-<team>.log`
+
+      ## Team Configuration
+
+      Teams configured:
+      {% for team in jenkins_teams_config %}
+      - **{{ team.team_name }}**: Active environment: {{ team.active_environment | default('blue') }}
+      {% endfor %}
+    mode: '0644'
+    owner: root
+    group: root
+  become: yes
+  tags: ['jenkins', 'blue-green', 'sync', 'documentation']
+
+- name: Display blue-green sync deployment summary
+  debug:
+    msg: |
+      ====================================================
+      Blue-Green Data Sync Deployment Complete
+      ====================================================
+      Status: SUCCESS
+
+      Scripts deployed:
+      - /usr/local/bin/jenkins-blue-green-sync.sh (generic sync script)
+      {% for team in jenkins_teams_config %}
+      - /usr/local/bin/jenkins-sync-{{ team.team_name }}.sh ({{ team.team_name }} team wrapper)
+      {% endfor %}
+
+      Documentation:
+      - /usr/local/share/doc/jenkins-blue-green-sync-README.md
+
+      Usage (dry-run recommended first):
+      {% for team in jenkins_teams_config %}
+      /usr/local/bin/jenkins-sync-{{ team.team_name }}.sh {{ team.active_environment | default('blue') }} {{ 'green' if team.active_environment | default('blue') == 'blue' else 'blue' }} --dry-run
+      {% endfor %}
+
+      Data Sync Strategy:
+      - SHARED: jobs, builds, workspace ({{ jenkins_workspace_retention_days | default(10) }} day retention)
+      - ISOLATED: plugins, logs, .cache
+      ====================================================
+  tags: ['jenkins', 'blue-green', 'sync', 'summary']

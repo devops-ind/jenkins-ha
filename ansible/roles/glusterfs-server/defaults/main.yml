@@ -117,3 +117,12 @@ glusterfs_mount_base_path: "/var/jenkins"  # Base path for team volume mounts
 glusterfs_backup_volfile_servers: ""  # Backup volfile servers for mount failover
 jenkins_uid: 1000  # Jenkins user UID for mount ownership
 jenkins_gid: 1000  # Jenkins group GID for mount ownership
+
+# Workspace Data Retention (Automatic Cleanup)
+glusterfs_workspace_retention_enabled: true  # Enable automatic workspace cleanup
+glusterfs_workspace_retention_days: 7  # Default retention period (7-10 days recommended)
+glusterfs_workspace_cleanup_schedule: "0 2 * * *"  # Cron schedule (daily at 2 AM)
+# Per-team retention can be overridden in jenkins_teams configuration:
+# jenkins_teams:
+#   - team_name: devops
+#     workspace_retention_days: 10  # Override default retention for this team
