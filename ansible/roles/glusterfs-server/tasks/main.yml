@@ -38,6 +38,11 @@
   include_tasks: volumes.yml
   tags: ['glusterfs', 'volumes']
 
+- name: Include volume mounting tasks
+  include_tasks: mount.yml
+  when: glusterfs_mount_volumes_on_servers | default(true)
+  tags: ['glusterfs', 'mount', 'client']
+
 - name: Include monitoring setup tasks
   include_tasks: monitoring.yml
   when: glusterfs_monitoring_enabled

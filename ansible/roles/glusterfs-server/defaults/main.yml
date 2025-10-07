@@ -110,3 +110,10 @@ glusterfs_volume_create_delay: 5
 # Validation Settings
 glusterfs_validate_after_creation: true  # Validate volumes after creation
 glusterfs_validation_timeout: 60  # Seconds to wait for validation
+
+# Volume Mounting (Server-Side)
+glusterfs_mount_volumes_on_servers: true  # Mount volumes locally on server nodes for direct access
+glusterfs_mount_base_path: "/var/jenkins"  # Base path for team volume mounts
+glusterfs_backup_volfile_servers: ""  # Backup volfile servers for mount failover
+jenkins_uid: 1000  # Jenkins user UID for mount ownership
+jenkins_gid: 1000  # Jenkins group GID for mount ownership

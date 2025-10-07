@@ -113,40 +113,82 @@
             test_results: "{{ test_results + [{'test': 'Volume Status', 'status': 'FAILED', 'node': inventory_hostname}] }}"
       tags: ['test', 'volumes']
 
-    # Test 4: Mount Points
-    - name: "Test 4: Verify volume mounts"
+    # Test 4: Mount Points (Enhanced with Server-Side Validation)
+    - name: "Test 4: Verify volume mounts (server-side and client-side)"
       block:
         - name: Check GlusterFS mounts
           command: df -t fuse.glusterfs
           register: gluster_mounts
           changed_when: false
 
-        - name: Verify team mounts exist
+        - name: Verify server-side team mounts exist
           stat:
             path: "/var/jenkins/{{ item.team_name }}/data"
           loop: "{{ jenkins_teams | default([]) }}"
-          register: mount_check
+          register: server_mount_check
           when: jenkins_teams is defined and jenkins_teams | length > 0
 
-        - name: Assert mounts are accessible
+        - name: Assert server-side mounts are accessible
           assert:
             that:
               - item.stat.exists
               - item.stat.isdir
-            fail_msg: "❌ Test 4 FAILED: Mount point {{ item.item.team_name }} not accessible"
-            success_msg: "✅ Test 4 PASSED: Mount point {{ item.item.team_name }} accessible"
-          loop: "{{ mount_check.results }}"
-          when: mount_check is defined and mount_check.results is defined
+            fail_msg: "❌ Test 4 FAILED: Server mount point {{ item.item.team_name }} not accessible"
+            success_msg: "✅ Test 4 PASSED: Server mount point {{ item.item.team_name }} accessible"
+          loop: "{{ server_mount_check.results }}"
+          when: server_mount_check is defined and server_mount_check.results is defined
+
+        - name: Verify mount is actually a GlusterFS filesystem
+          command: "findmnt -n -o FSTYPE /var/jenkins/{{ item.team_name }}/data"
+          loop: "{{ jenkins_teams | default([]) }}"
+          register: fstype_check
+          changed_when: false
+          failed_when: false
+          when: jenkins_teams is defined and jenkins_teams | length > 0
+
+        - name: Assert filesystem type is GlusterFS
+          assert:
+            that:
+              - "'fuse.glusterfs' in item.stdout"
+            fail_msg: "❌ Test 4 FAILED: {{ item.item.team_name }} not a GlusterFS mount (found: {{ item.stdout }})"
+            success_msg: "✅ Test 4 PASSED: {{ item.item.team_name }} is GlusterFS mount"
+          loop: "{{ fstype_check.results }}"
+          when:
+            - fstype_check is defined
+            - fstype_check.results is defined
+            - item.rc == 0
+
+        - name: Test write permissions on server mounts
+          copy:
+            content: "Test write - {{ ansible_date_time.iso8601 }}"
+            dest: "/var/jenkins/{{ item.team_name }}/data/.mount-write-test"
+            mode: '0644'
+          loop: "{{ jenkins_teams | default([]) }}"
+          when: jenkins_teams is defined and jenkins_teams | length > 0
+          register: write_test
+
+        - name: Remove test files
+          file:
+            path: "/var/jenkins/{{ item.team_name }}/data/.mount-write-test"
+            state: absent
+          loop: "{{ jenkins_teams | default([]) }}"
+          when: jenkins_teams is defined and jenkins_teams | length > 0
+
+        - name: Display mount information
+          debug:
+            msg: |
+              GlusterFS Mounts on {{ inventory_hostname }}:
+              {{ gluster_mounts.stdout }}
 
         - name: Record test result
           set_fact:
-            test_results: "{{ test_results + [{'test': 'Mount Points', 'status': 'PASSED', 'node': inventory_hostname}] }}"
+            test_results: "{{ test_results + [{'test': 'Mount Points (Enhanced)', 'status': 'PASSED', 'node': inventory_hostname}] }}"
 
       rescue:
         - name: Record test failure
           set_fact:
-            test_results: "{{ test_results + [{'test': 'Mount Points', 'status': 'FAILED', 'node': inventory_hostname}] }}"
-      tags: ['test', 'mounts']
+            test_results: "{{ test_results + [{'test': 'Mount Points (Enhanced)', 'status': 'FAILED', 'node': inventory_hostname}] }}"
+      tags: ['test', 'mounts', 'server-mounts']
 
     # Test 5: Basic Replication (Primary Node)
     - name: "Test 5: Basic file replication test"

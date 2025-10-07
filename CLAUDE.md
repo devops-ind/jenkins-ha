@@ -88,6 +88,7 @@ ansible-playbook ansible/inventories/local/hosts.yml troubleshoot-haproxy-ssl.ym
 
 # GlusterFS deployment and testing (NEW)
 ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml --tags glusterfs
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml --tags glusterfs,mount  # With server-side mounting
 ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/test-glusterfs.yml
 ```
 
@@ -169,9 +170,17 @@ sudo gluster volume info jenkins-devops-data          # Volume details
 sudo gluster volume heal jenkins-devops-data info     # Check self-heal status
 sudo gluster volume heal jenkins-devops-data info split-brain  # Check split-brain
 
-# Check mounts
+# Check mounts (server-side and client-side)
 df -h | grep glusterfs
 mount | grep glusterfs
+findmnt -t fuse.glusterfs                          # Show all GlusterFS mounts
+
+# Verify team-specific mounts
+ls -la /var/jenkins/*/data                         # List team mount points
+cat /var/jenkins/devops/data/.glusterfs-mount-test # Test file access
+
+# Check mount ownership
+stat /var/jenkins/devops/data                      # Check permissions and ownership
 ```
 
 ### Smart Data Sharing Commands (Blue-Green Enhancement)

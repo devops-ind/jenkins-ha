@@ -226,8 +226,8 @@
         _active_volumes:
           # MAIN JENKINS HOME: Environment-specific base with smart sharing via symlinks
           - "jenkins-{{ item.team_name }}-{{ item.active_environment | default('blue') }}-home:{{ jenkins_master_container_home }}"
-          # SHARED STORAGE ACCESS: Mount shared storage to allow data synchronization
-          - "{{ shared_storage_path | default('/opt/jenkins-shared') }}:/shared:rw"
+          # SHARED STORAGE ACCESS: Team-specific GlusterFS volume or generic shared storage
+          - "{% if shared_storage_type | default('local') == 'glusterfs' %}/var/jenkins/{{ item.team_name }}/data{% else %}{{ shared_storage_path | default('/opt/jenkins-shared') }}{% endif %}:/shared:rw"
           # DOCKER SOCKET: Read-only access for Docker-in-Docker agents
           - "{{ jenkins_master_socket_path_docker }}:{{ jenkins_master_socket_path_docker }}:ro"
         _log_options: "{{ {'max-size': jenkins_master_log_max_size, 'max-file': jenkins_master_log_max_files} if jenkins_master_log_driver == 'json-file' else {} }}"
