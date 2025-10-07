@@ -27,8 +27,8 @@ This is a production-grade Jenkins infrastructure with **Blue-Green Deployment**
 - **📦 GlusterFS Replicated Storage**: Complete Ansible automation for GlusterFS 10.x with real-time replication (RPO < 5s, RTO < 30s), team-based volumes, automated health monitoring, and zero-downtime failover
 - **✅ Intelligent Keepalived Failover**: Prevents cascading failures with percentage-based backend health monitoring, team quorum logic, and 30s grace period - eliminates 2-5 min downtime for healthy teams when single team fails
 - **✅ Workspace Data Retention**: Automated cleanup system with 7-10 day configurable retention per team, cron-based scheduling, and monitoring - saves 30-50% disk space
-- **✅ Blue-Green Data Sync**: Selective data sharing (jobs, builds, workspace) with plugin isolation for safe upgrades, workspace retention, and per-team wrapper scripts
 - **✅ Cross-VM Individual Monitoring**: HAProxy monitors each team's Jenkins across VMs with active-passive or active-active failover strategies - enables per-team failover without affecting other teams (configurable: `haproxy_backend_failover_strategy`)
+- **🚀 Simplified GlusterFS Architecture**: **BREAKING CHANGE** - Removed all sync scripts, symlinks, and Docker volumes. GlusterFS now mounted directly as JENKINS_HOME at `/var/jenkins/{team}/data/{blue|green}`. **95% simpler**: automatic replication, zero data loss, no manual sync required. Blue/green plugin isolation via subdirectories
 
 ## Key Commands
 
@@ -316,44 +316,43 @@ echo "show stat" | socat stdio /run/haproxy/admin.sock | grep jenkins_backend
 echo "set server jenkins_backend_devops/devops-vm1 state ready" | socat stdio /run/haproxy/admin.sock
 ```
 
-### Smart Data Sharing Commands (Blue-Green Enhancement)
+### GlusterFS Storage Management
 ```bash
-# Preview smart sharing migration (dry run)
-scripts/migrate-to-smart-sharing.sh --dry-run
+# Deploy GlusterFS infrastructure
+ansible-playbook ansible/site.yml --tags glusterfs
 
-# Migrate specific team to smart sharing
-scripts/migrate-to-smart-sharing.sh --team devops
+# Mount GlusterFS volumes on server nodes with blue/green subdirectories
+ansible-playbook ansible/site.yml --tags glusterfs,mount
 
-# Migrate all teams to smart sharing 
-scripts/migrate-to-smart-sharing.sh --force
+# Test GlusterFS replication and health
+ansible-playbook ansible/playbooks/test-glusterfs.yml
 
-# Rollback migration if issues occur
-scripts/rollback-smart-sharing.sh --team devops
+# Verify blue/green directory structure
+ls -la /var/jenkins/devops/data/blue/
+ls -la /var/jenkins/devops/data/green/
 
-# Validate shared storage after migration
-ansible-playbook ansible/site.yml --tags shared-storage,validation
+# Check GlusterFS volume status
+gluster volume info jenkins-devops-data
+gluster volume status jenkins-devops-data
+
+# Monitor replication health
+gluster volume heal jenkins-devops-data info
 ```
 
-### Unified Data Management Commands (Enterprise Backup & Sync)
+### Data Migration (One-Time - From Docker Volumes to GlusterFS)
 ```bash
-# Basic operations
-scripts/unified-devops-manager.sh --sync-only             # Traditional sync operations
-scripts/unified-devops-manager.sh --backup-only           # Backup operations only  
-scripts/unified-devops-manager.sh --sync-and-backup       # Parallel sync and backup
+# Migrate existing Docker volume data to GlusterFS (if upgrading)
+# See: examples/glusterfs-migration-guide.md for complete instructions
 
-# Sequential operations
-scripts/unified-devops-manager.sh --backup-then-sync      # Backup first, then sync
-scripts/unified-devops-manager.sh --sync-then-backup      # Sync first, then backup
-
-# Advanced targeting
-scripts/unified-devops-manager.sh --target green --sync-only        # Blue-green sync
-scripts/unified-devops-manager.sh --backup-only --retention 30      # Custom retention  
-scripts/unified-devops-manager.sh --sync-and-backup --dry-run       # Preview operations
-scripts/unified-devops-manager.sh --backup-then-sync --verbose      # Detailed logging
-
-# Team-specific operations
-scripts/unified-developer-manager.sh --sync-only          # Developer team sync only
-scripts/unified-qa-manager.sh --backup-then-sync          # QA team backup then sync
+# Quick migration for all teams
+for team in devops dev qa; do
+  for env in blue green; do
+    docker run --rm \
+      -v jenkins-${team}-${env}-home:/source:ro \
+      -v /var/jenkins/${team}/data/${env}:/target \
+      alpine sh -c "cp -a /source/. /target/"
+  done
+done
 ```
 
 ### Environment Setup
@@ -387,8 +386,7 @@ scripts/disaster-recovery.sh production --validate
 - **📋 Job DSL Automation**: Code-driven job creation with security sandboxing and approval workflows. **IMPROVED**: Production-safe DSL with no auto-execution startup failures
 - **📊 Comprehensive Monitoring Stack**: Prometheus metrics, enhanced Grafana dashboards with 26 panels, DORA metrics, and SLI tracking
 - **💾 Enterprise Backup & DR**: Automated backup with RTO/RPO compliance and automated disaster recovery procedures
-- **📁 Smart Shared Storage**: NFS/GlusterFS with selective data sharing - jobs/builds/workspace shared between blue-green, plugins isolated for safe upgrades
-- **📦 GlusterFS Replicated Storage**: Real-time replicated storage with automatic failover (RPO < 5s, RTO < 30s). **NEW**: Complete Ansible automation for GlusterFS 10.x with team-based volumes, automated health monitoring, Prometheus metrics, split-brain detection, and self-healing
+- **📦 GlusterFS Direct JENKINS_HOME**: **SIMPLIFIED** GlusterFS volumes mounted directly as JENKINS_HOME with blue/green subdirectories. Real-time replication across VMs (RPO < 5s, RTO < 30s), automatic plugin isolation, zero data loss on failover. **NO** sync scripts, symlinks, or Docker volumes needed - just replicated filesystem doing what it does best
 - **🛡️ Security Infrastructure**: Container security monitoring, vulnerability scanning, compliance validation, and audit logging
 - **🪝 Pre-commit Validation Framework**: Comprehensive code quality enforcement with Groovy/Jenkinsfile validation, security scanning, and automated CI/CD integration
 

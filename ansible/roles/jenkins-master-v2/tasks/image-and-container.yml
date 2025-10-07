@@ -9,33 +9,22 @@
 
 - name: Create Docker volumes for Jenkins teams
   block:
-    - name: Create Jenkins volumes for blue-green environments
-      community.docker.docker_volume:
-        name: "jenkins-{{ item.0.team_name }}-{{ item.1 }}-home"
-        driver: "local"
-        state: present
-        labels:
-          team: "{{ item.0.team_name }}"
-          environment: "{{ item.1 }}"
-          managed_by: "ansible"
-      with_nested:
-        - "{{ jenkins_teams_config }}"
-        - ['blue', 'green']
-      loop_control:
-        label: "{{ item.0.team_name }}-{{ item.1 }}"
+    # REMOVED: Blue-green home volumes (now using GlusterFS direct mounts)
+    # - name: Create Jenkins volumes for blue-green environments
+    #   community.docker.docker_volume:
+    #     name: "jenkins-{{ item.0.team_name }}-{{ item.1 }}-home"
+    #     driver: "local"
+    #     state: present
+    #   Reason: Simplified architecture uses GlusterFS at /var/jenkins/{team}/data/{blue|green} directly
+    #   Benefits: Automatic replication, zero data loss, no sync scripts needed
 
-    - name: Create Jenkins shared volumes for teams
-      community.docker.docker_volume:
-        name: "jenkins-{{ item.team_name }}-shared"
-        driver: "local"
-        state: present
-        labels:
-          team: "{{ item.team_name }}"
-          type: "shared"
-          managed_by: "ansible"
-      loop: "{{ jenkins_teams_config }}"
-      loop_control:
-        label: "{{ item.team_name }}-shared"
+    # REMOVED: Shared volumes (replaced by GlusterFS direct mount)
+    # - name: Create Jenkins shared volumes for teams
+    #   community.docker.docker_volume:
+    #     name: "jenkins-{{ item.team_name }}-shared"
+    #     driver: "local"
+    #     state: present
+    #   Reason: GlusterFS provides shared storage, no separate Docker volume needed
 
     - name: Create Jenkins cache volumes for dynamic agents
       community.docker.docker_volume:
@@ -224,10 +213,10 @@
           - "{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web }}{% else %}{{ item.ports.web + 100 }}{% endif %}:{{ jenkins_master_port }}"
           - "{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.agent }}{% else %}{{ item.ports.agent + 100 }}{% endif %}:{{ jenkins_jnlp_port }}"
         _active_volumes:
-          # MAIN JENKINS HOME: Environment-specific base with smart sharing via symlinks
-          - "jenkins-{{ item.team_name }}-{{ item.active_environment | default('blue') }}-home:{{ jenkins_master_container_home }}"
-          # SHARED STORAGE ACCESS: Team-specific GlusterFS volume or generic shared storage
-          - "{% if shared_storage_type | default('local') == 'glusterfs' %}/var/jenkins/{{ item.team_name }}/data{% else %}{{ shared_storage_path | default('/opt/jenkins-shared') }}{% endif %}:/shared:rw"
+          # MAIN JENKINS HOME: Direct GlusterFS mount with blue-green subdirectories (replicated across VMs)
+          - "{% if shared_storage_type | default('local') == 'glusterfs' %}/var/jenkins/{{ item.team_name }}/data/{{ item.active_environment | default('blue') }}{% else %}{{ shared_storage_path | default('/opt/jenkins-shared') }}/{{ item.team_name }}/{{ item.active_environment | default('blue') }}{% endif %}:{{ jenkins_master_container_home }}"
+          # CACHE: Local Docker volume for performance (not replicated)
+          - "jenkins-{{ item.team_name }}-cache:{{ jenkins_master_container_home }}/.cache"
           # DOCKER SOCKET: Read-only access for Docker-in-Docker agents
           - "{{ jenkins_master_socket_path_docker }}:{{ jenkins_master_socket_path_docker }}:ro"
         _log_options: "{{ {'max-size': jenkins_master_log_max_size, 'max-file': jenkins_master_log_max_files} if jenkins_master_log_driver == 'json-file' else {} }}"

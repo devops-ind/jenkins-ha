@@ -169,14 +169,12 @@
   when: jenkins_teams_config is defined and jenkins_teams_config | length > 0
   tags: ['health-fix', 'health', 'verify', 'fix']
 
-# Phase 3.7: Blue-Green Data Synchronization Setup
-- name: Blue-green data sync configuration phase
-  import_tasks: blue-green-data-sync.yml
-  when:
-    - jenkins_blue_green_sync_enabled | default(true)
-    - jenkins_teams_config is defined
-    - jenkins_teams_config | length > 0
-  tags: ['jenkins', 'blue-green', 'sync', 'data']
+# Phase 3.7: Blue-Green Data Synchronization (REMOVED - No longer needed)
+# Reason: Simplified architecture uses GlusterFS direct mounts with blue/green subdirectories
+# Both blue and green environments access replicated GlusterFS storage automatically
+# No sync scripts or manual data synchronization required
+# - name: Blue-green data sync configuration phase
+#   import_tasks: blue-green-data-sync.yml
 
 # Phase 4: Update HAProxy configuration for blue-green environment changes
 - name: Notify HAProxy of team environment changes
