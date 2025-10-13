@@ -207,3 +207,21 @@ jenkins_master_custom_image_push: false
 #     resources:
 #       memory: "2g"
 #       cpu: "1.0"
+# ====================================
+# GLUSTERFS SYNC CONFIGURATION (Hybrid Architecture)
+# ====================================
+# Jenkins writes to local Docker volumes for performance
+# Periodic rsync syncs to GlusterFS for VM-to-VM replication
+# No concurrent writes, no mount failures, best of both worlds
+
+jenkins_enable_gluster_sync: true
+jenkins_gluster_sync_frequency_minutes: 5  # RPO = 5 minutes
+jenkins_gluster_sync_alert_threshold_seconds: 600  # Alert if sync lag > 10 minutes
+jenkins_gluster_sync_path: "/var/jenkins/{{ team }}/sync/{{ env }}"
+
+# Recovery settings
+jenkins_auto_recovery_enabled: true
+jenkins_recovery_from_gluster: true
+
+# Architecture mode
+jenkins_hybrid_architecture: true  # Docker volumes + GlusterFS sync layer

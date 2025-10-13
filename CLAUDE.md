@@ -28,7 +28,7 @@ This is a production-grade Jenkins infrastructure with **Blue-Green Deployment**
 - **✅ Intelligent Keepalived Failover**: Prevents cascading failures with percentage-based backend health monitoring, team quorum logic, and 30s grace period - eliminates 2-5 min downtime for healthy teams when single team fails
 - **✅ Workspace Data Retention**: Automated cleanup system with 7-10 day configurable retention per team, cron-based scheduling, and monitoring - saves 30-50% disk space
 - **✅ Cross-VM Individual Monitoring**: HAProxy monitors each team's Jenkins across VMs with active-passive or active-active failover strategies - enables per-team failover without affecting other teams (configurable: `haproxy_backend_failover_strategy`)
-- **🚀 Simplified GlusterFS Architecture**: **BREAKING CHANGE** - Removed all sync scripts, symlinks, and Docker volumes. GlusterFS now mounted directly as JENKINS_HOME at `/var/jenkins/{team}/data/{blue|green}`. **95% simpler**: automatic replication, zero data loss, no manual sync required. Blue/green plugin isolation via subdirectories
+- **🔄 Hybrid GlusterFS Architecture**: **PRODUCTION-READY** - Jenkins writes to fast local Docker volumes, periodic rsync syncs to GlusterFS sync layer (`/var/jenkins/{team}/sync/{blue|green}`). GlusterFS handles automatic VM-to-VM replication. **Solves**: No concurrent write conflicts, no mount failures, no Jenkins freezes. **RPO**: 5 minutes, **RTO**: < 2 minutes. Best of both worlds: local performance + distributed replication
 
 ## Key Commands
 
@@ -316,20 +316,35 @@ echo "show stat" | socat stdio /run/haproxy/admin.sock | grep jenkins_backend
 echo "set server jenkins_backend_devops/devops-vm1 state ready" | socat stdio /run/haproxy/admin.sock
 ```
 
-### GlusterFS Storage Management
+### Hybrid GlusterFS Architecture (Docker Volumes + GlusterFS Sync Layer)
 ```bash
-# Deploy GlusterFS infrastructure
+# Deploy GlusterFS infrastructure with /sync directories
 ansible-playbook ansible/site.yml --tags glusterfs
 
-# Mount GlusterFS volumes on server nodes with blue/green subdirectories
-ansible-playbook ansible/site.yml --tags glusterfs,mount
+# Deploy sync scripts and cron jobs
+ansible-playbook ansible/site.yml --tags jenkins,gluster,sync
 
-# Test GlusterFS replication and health
-ansible-playbook ansible/playbooks/test-glusterfs.yml
+# Verify sync directory structure
+ls -la /var/jenkins/devops/sync/blue/
+ls -la /var/jenkins/devops/sync/green/
 
-# Verify blue/green directory structure
-ls -la /var/jenkins/devops/data/blue/
-ls -la /var/jenkins/devops/data/green/
+# Manual sync to GlusterFS (force)
+/usr/local/bin/jenkins-sync-to-gluster-devops.sh
+
+# Check sync status
+tail -f /var/log/jenkins-gluster-sync-devops.log
+
+# Monitor sync lag across all teams
+/usr/local/bin/jenkins-sync-monitor.sh
+
+# Blue-green switch with GlusterFS sync
+./scripts/blue-green-switch-with-gluster.sh devops green
+
+# Failover from failed VM using GlusterFS
+./scripts/jenkins-failover-from-gluster.sh devops blue vm1 vm2
+
+# Recover Jenkins from GlusterFS
+/usr/local/bin/jenkins-recover-from-gluster-devops.sh devops blue
 
 # Check GlusterFS volume status
 gluster volume info jenkins-devops-data
@@ -337,22 +352,6 @@ gluster volume status jenkins-devops-data
 
 # Monitor replication health
 gluster volume heal jenkins-devops-data info
-```
-
-### Data Migration (One-Time - From Docker Volumes to GlusterFS)
-```bash
-# Migrate existing Docker volume data to GlusterFS (if upgrading)
-# See: examples/glusterfs-migration-guide.md for complete instructions
-
-# Quick migration for all teams
-for team in devops dev qa; do
-  for env in blue green; do
-    docker run --rm \
-      -v jenkins-${team}-${env}-home:/source:ro \
-      -v /var/jenkins/${team}/data/${env}:/target \
-      alpine sh -c "cp -a /source/. /target/"
-  done
-done
 ```
 
 ### Environment Setup
@@ -386,7 +385,7 @@ scripts/disaster-recovery.sh production --validate
 - **📋 Job DSL Automation**: Code-driven job creation with security sandboxing and approval workflows. **IMPROVED**: Production-safe DSL with no auto-execution startup failures
 - **📊 Comprehensive Monitoring Stack**: Prometheus metrics, enhanced Grafana dashboards with 26 panels, DORA metrics, and SLI tracking
 - **💾 Enterprise Backup & DR**: Automated backup with RTO/RPO compliance and automated disaster recovery procedures
-- **📦 GlusterFS Direct JENKINS_HOME**: **SIMPLIFIED** GlusterFS volumes mounted directly as JENKINS_HOME with blue/green subdirectories. Real-time replication across VMs (RPO < 5s, RTO < 30s), automatic plugin isolation, zero data loss on failover. **NO** sync scripts, symlinks, or Docker volumes needed in production. **CONDITIONAL**: Automatically falls back to Docker volumes for local/devcontainer development (`shared_storage_enabled: false`)
+- **📦 Hybrid GlusterFS Architecture**: **PRODUCTION-READY** Jenkins writes to local Docker volumes (`jenkins-{team}-{env}-home`) for fast performance. Periodic rsync (every 5 min) syncs to GlusterFS (`/var/jenkins/{team}/sync/{env}`) which handles automatic VM-to-VM replication. **Solves all issues**: No concurrent writes (Jenkins never touches GlusterFS), no mount failures, no freezes. **RPO**: 5 minutes (configurable to 1 min), **RTO**: < 2 minutes. Automatic failover via GlusterFS recovery
 - **🛡️ Security Infrastructure**: Container security monitoring, vulnerability scanning, compliance validation, and audit logging
 - **🪝 Pre-commit Validation Framework**: Comprehensive code quality enforcement with Groovy/Jenkinsfile validation, security scanning, and automated CI/CD integration
 

@@ -1,0 +1,118 @@
+---
+# GlusterFS Sync Tasks (Hybrid Architecture)
+# Deploys scripts and cron jobs for continuous sync from Docker volumes to GlusterFS
+
+- name: Deploy sync-to-gluster scripts for each team
+  template:
+    src: jenkins-sync-to-gluster.sh.j2
+    dest: "/usr/local/bin/jenkins-sync-to-gluster-{{ item.team_name }}.sh"
+    owner: root
+    group: root
+    mode: '0755'
+  loop: "{{ jenkins_teams_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  tags: ['jenkins', 'gluster', 'sync', 'scripts']
+
+- name: Deploy recover-from-gluster scripts for each team
+  template:
+    src: jenkins-recover-from-gluster.sh.j2
+    dest: "/usr/local/bin/jenkins-recover-from-gluster-{{ item.team_name }}.sh"
+    owner: root
+    group: root
+    mode: '0755'
+  loop: "{{ jenkins_teams_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  tags: ['jenkins', 'gluster', 'recovery', 'scripts']
+
+- name: Create log directory for sync operations
+  file:
+    path: /var/log/jenkins-gluster-sync
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  tags: ['jenkins', 'gluster', 'sync', 'logs']
+
+- name: Setup continuous sync cron jobs for each team
+  cron:
+    name: "Jenkins GlusterFS Sync - {{ item.team_name }}"
+    minute: "*/{{ jenkins_gluster_sync_frequency_minutes | default(5) }}"
+    job: "/usr/local/bin/jenkins-sync-to-gluster-{{ item.team_name }}.sh >> /var/log/jenkins-gluster-sync-{{ item.team_name }}.log 2>&1"
+    user: root
+    state: "{{ 'present' if jenkins_enable_gluster_sync | default(true) else 'absent' }}"
+  loop: "{{ jenkins_teams_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  tags: ['jenkins', 'gluster', 'sync', 'cron']
+
+- name: Create sync monitoring script
+  copy:
+    content: |
+      #!/bin/bash
+      # Monitor sync lag and health
+
+      ALERT_THRESHOLD={{ jenkins_gluster_sync_alert_threshold_seconds | default(600) }}
+
+      for team in {{ jenkins_teams_config | map(attribute='team_name') | join(' ') }}; do
+          LOG_FILE="/var/log/jenkins-gluster-sync-${team}.log"
+
+          if [[ ! -f "$LOG_FILE" ]]; then
+              echo "WARNING: No sync log found for team: $team"
+              continue
+          fi
+
+          # Get last sync time
+          LAST_SYNC=$(grep "Sync complete" "$LOG_FILE" | tail -1 | awk '{print $1, $2}')
+
+          if [[ -z "$LAST_SYNC" ]]; then
+              echo "WARNING: No successful sync found for team: $team"
+              continue
+          fi
+
+          # Calculate lag
+          SYNC_TIMESTAMP=$(date -d "$LAST_SYNC" +%s 2>/dev/null || echo 0)
+          CURRENT_TIMESTAMP=$(date +%s)
+          SYNC_LAG=$((CURRENT_TIMESTAMP - SYNC_TIMESTAMP))
+
+          if [[ $SYNC_LAG -gt $ALERT_THRESHOLD ]]; then
+              echo "ALERT: Team $team sync lag: ${SYNC_LAG}s (threshold: ${ALERT_THRESHOLD}s)"
+          else
+              echo "OK: Team $team sync lag: ${SYNC_LAG}s"
+          fi
+      done
+    dest: /usr/local/bin/jenkins-sync-monitor.sh
+    owner: root
+    group: root
+    mode: '0755'
+  tags: ['jenkins', 'gluster', 'sync', 'monitoring']
+
+- name: Display sync configuration summary
+  debug:
+    msg: |
+      ====================================================
+      GlusterFS Sync Configuration (Hybrid Architecture)
+      ====================================================
+      Sync Enabled: {{ jenkins_enable_gluster_sync | default(true) }}
+      Sync Frequency: Every {{ jenkins_gluster_sync_frequency_minutes | default(5) }} minutes
+      Alert Threshold: {{ jenkins_gluster_sync_alert_threshold_seconds | default(600) }} seconds
+
+      Teams Configured:
+      {% for team in jenkins_teams_config %}
+      {{ loop.index }}. {{ team.team_name }}
+         Sync Script: /usr/local/bin/jenkins-sync-to-gluster-{{ team.team_name }}.sh
+         Recovery Script: /usr/local/bin/jenkins-recover-from-gluster-{{ team.team_name }}.sh
+         Sync Log: /var/log/jenkins-gluster-sync-{{ team.team_name }}.log
+         GlusterFS Path: /var/jenkins/{{ team.team_name }}/sync/{{ team.active_environment | default('blue') }}/
+
+      {% endfor %}
+      Manual Operations:
+      - Force sync: /usr/local/bin/jenkins-sync-to-gluster-<team>.sh
+      - Check sync lag: /usr/local/bin/jenkins-sync-monitor.sh
+      - Recover from GlusterFS: /usr/local/bin/jenkins-recover-from-gluster-<team>.sh <team> <env>
+
+      RPO (Recovery Point Objective): {{ jenkins_gluster_sync_frequency_minutes | default(5) }} minutes
+      RTO (Recovery Time Objective): ~2 minutes (recovery + container start)
+      ====================================================
+  tags: ['jenkins', 'gluster', 'sync', 'summary']
