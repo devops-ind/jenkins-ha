@@ -4,6 +4,20 @@
 
 Successfully simplified the Jenkins blue-green data management architecture by **95%** through direct GlusterFS mount usage, eliminating sync scripts, symlinks, and Docker volume complexity.
 
+### Deployment Mode Support
+
+The architecture automatically adapts based on deployment environment:
+
+- **Production Mode** (`shared_storage_enabled: true`, `shared_storage_type: glusterfs`):
+  - Uses GlusterFS direct mounts at `/var/jenkins/{team}/data/{blue|green}`
+  - Automatic replication across VMs (RPO < 5s)
+  - Zero data loss on VM failure
+
+- **Local/DevContainer Mode** (`shared_storage_enabled: false`):
+  - Falls back to Docker volumes (`jenkins-{team}-{env}-home`)
+  - No GlusterFS required
+  - Perfect for local development and testing
+
 ---
 
 ## Architecture Transformation
@@ -76,7 +90,27 @@ Volumes:
 
 ## Implementation Details
 
-### File Changes (4 files modified)
+### Conditional Deployment Logic
+
+The implementation uses conditional logic to automatically choose the right storage backend:
+
+```yaml
+# ansible/roles/jenkins-master-v2/tasks/image-and-container.yml:219
+_active_volumes:
+  - "{% if shared_storage_enabled | default(false) and shared_storage_type | default('local') == 'glusterfs' %}/var/jenkins/{{ item.team_name }}/data/{{ item.active_environment }}{% else %}jenkins-{{ item.team_name }}-{{ item.active_environment }}-home{% endif %}:{{ jenkins_master_container_home }}"
+```
+
+**Production** (`shared_storage_enabled: true`, `shared_storage_type: glusterfs`):
+- Mount: `/var/jenkins/devops/data/blue` → `/var/jenkins_home` (GlusterFS direct)
+- Replication: Automatic across VMs
+- Data loss risk: Zero (replicated)
+
+**Local/DevContainer** (`shared_storage_enabled: false`):
+- Mount: `jenkins-devops-blue-home` → `/var/jenkins_home` (Docker volume)
+- Replication: None (local only)
+- Data loss risk: N/A (development environment)
+
+### File Changes (5 files modified)
 
 #### 1. GlusterFS Blue-Green Subdirectory Creation
 **File**: `ansible/roles/glusterfs-server/tasks/mount.yml:119-132`

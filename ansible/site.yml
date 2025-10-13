@@ -159,6 +159,7 @@
     - role: glusterfs-server
       tags: ['glusterfs', 'storage', 'bootstrap']
       when:
+        - shared_storage_enabled | default(false)
         - shared_storage_type is defined
         - shared_storage_type == "glusterfs"
         - groups['glusterfs_servers'] is defined

@@ -116,9 +116,9 @@
   become: yes
   tags: ['glusterfs', 'mount', 'permissions']
 
-- name: Create blue-green subdirectories on GlusterFS volumes
+- name: Create sync subdirectories on GlusterFS volumes (hybrid architecture)
   file:
-    path: "/var/jenkins/{{ item.0.team_name }}/data/{{ item.1 }}"
+    path: "/var/jenkins/{{ item.0.team_name }}/sync/{{ item.1 }}"
     state: directory
     owner: "{{ jenkins_uid | default(1000) }}"
     group: "{{ jenkins_gid | default(1000) }}"
@@ -129,7 +129,7 @@
     - glusterfs_all_volumes | length > 0
     - item.0.team_name is defined
   become: yes
-  tags: ['glusterfs', 'mount', 'blue-green', 'directories']
+  tags: ['glusterfs', 'mount', 'sync', 'directories']
 
 - name: Validate GlusterFS mounts are accessible
   stat:

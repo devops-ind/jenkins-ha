@@ -386,7 +386,7 @@ scripts/disaster-recovery.sh production --validate
 - **📋 Job DSL Automation**: Code-driven job creation with security sandboxing and approval workflows. **IMPROVED**: Production-safe DSL with no auto-execution startup failures
 - **📊 Comprehensive Monitoring Stack**: Prometheus metrics, enhanced Grafana dashboards with 26 panels, DORA metrics, and SLI tracking
 - **💾 Enterprise Backup & DR**: Automated backup with RTO/RPO compliance and automated disaster recovery procedures
-- **📦 GlusterFS Direct JENKINS_HOME**: **SIMPLIFIED** GlusterFS volumes mounted directly as JENKINS_HOME with blue/green subdirectories. Real-time replication across VMs (RPO < 5s, RTO < 30s), automatic plugin isolation, zero data loss on failover. **NO** sync scripts, symlinks, or Docker volumes needed - just replicated filesystem doing what it does best
+- **📦 GlusterFS Direct JENKINS_HOME**: **SIMPLIFIED** GlusterFS volumes mounted directly as JENKINS_HOME with blue/green subdirectories. Real-time replication across VMs (RPO < 5s, RTO < 30s), automatic plugin isolation, zero data loss on failover. **NO** sync scripts, symlinks, or Docker volumes needed in production. **CONDITIONAL**: Automatically falls back to Docker volumes for local/devcontainer development (`shared_storage_enabled: false`)
 - **🛡️ Security Infrastructure**: Container security monitoring, vulnerability scanning, compliance validation, and audit logging
 - **🪝 Pre-commit Validation Framework**: Comprehensive code quality enforcement with Groovy/Jenkinsfile validation, security scanning, and automated CI/CD integration
 
