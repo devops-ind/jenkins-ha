@@ -16,6 +16,16 @@ monitoring_home_dir: "{{ '/workspace/monitoring' if deployment_mode | default('l
 monitoring_network_name: "monitoring-net"
 monitoring_network_subnet: "172.26.0.0/16"
 
+# Monitoring server addressing (for separate VM deployment)
+monitoring_server_address: "{{ ansible_default_ipv4.address | default('localhost') }}"
+prometheus_host: "{{ monitoring_server_address }}"
+grafana_host: "{{ monitoring_server_address }}"
+loki_host: "{{ monitoring_server_address }}"
+alertmanager_host: "{{ monitoring_server_address }}"
+
+# Deployment type detection (separate vs colocated)
+monitoring_deployment_type: "{{ 'separate' if (groups['monitoring'] is defined and groups['jenkins_masters'] is defined and groups['monitoring'][0] not in groups['jenkins_masters']) else 'colocated' }}"
+
 # Service configuration
 prometheus_enabled: true
 prometheus_port: 9090
@@ -181,7 +191,7 @@ grafana_prometheus_datasource:
   name: "Prometheus"
   type: "prometheus"
   access: "proxy"
-  url: "http://localhost:9090"
+  url: "http://{{ prometheus_host }}:{{ prometheus_port }}"
   isDefault: true
 
 # Alertmanager configuration
@@ -193,6 +203,12 @@ alertmanager_version: "latest"
 node_exporter_enabled: true
 node_exporter_port: 9100
 node_exporter_version: "latest"
+
+# Agent monitoring configuration
+monitoring_agent_health_check_enabled: true
+monitoring_agent_health_check_interval: "*/5 * * * *"  # Every 5 minutes
+monitoring_agent_health_timeout: 10
+monitoring_agent_health_retries: 3
 
 # Base Prometheus targets configuration
 prometheus_base_targets:
@@ -217,6 +233,8 @@ monitoring_restart_policy: "unless-stopped"
 # Additional exporters
 cadvisor_enabled: true
 cadvisor_port: 9200  # Changed to 9000 range for monitoring consistency
+cadvisor_version: "latest"
+cadvisor_on_jenkins_vms: true  # Deploy cAdvisor on Jenkins VMs for container metrics
 
 # Directories to create
 monitoring_directories:
@@ -289,5 +307,5 @@ loki_datasource:
   name: "Loki"
   type: "loki"
   access: "proxy"
-  url: "http://localhost:{{ loki_port }}"
+  url: "http://{{ loki_host }}:{{ loki_port }}"
   isDefault: false

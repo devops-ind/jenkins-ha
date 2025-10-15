@@ -157,12 +157,6 @@
   import_tasks: deploy-and-monitor.yml
   tags: ['blue-green', 'deploy', 'monitor', 'health', 'verify']
 
-# Phase 3.5: Blue-green deployment synchronization (ensures containers match configuration)
-- name: Blue-green deployment synchronization phase
-  import_tasks: blue-green-sync.yml
-  when: jenkins_teams_config is defined and jenkins_teams_config | length > 0
-  tags: ['blue-green-sync', 'sync', 'containers', 'fix']
-
 # Phase 3.6: Enhanced health checks with blue-green port logic fixes
 - name: Enhanced health checks phase (fixes connection issues)
   import_tasks: fixed-health-checks.yml

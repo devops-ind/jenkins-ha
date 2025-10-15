@@ -29,6 +29,8 @@ This is a production-grade Jenkins infrastructure with **Blue-Green Deployment**
 - **✅ Workspace Data Retention**: Automated cleanup system with 7-10 day configurable retention per team, cron-based scheduling, and monitoring - saves 30-50% disk space
 - **✅ Cross-VM Individual Monitoring**: HAProxy monitors each team's Jenkins across VMs with active-passive or active-active failover strategies - enables per-team failover without affecting other teams (configurable: `haproxy_backend_failover_strategy`)
 - **🔄 Hybrid GlusterFS Architecture**: **PRODUCTION-READY** - Jenkins writes to fast local Docker volumes, periodic rsync syncs to GlusterFS sync layer (`/var/jenkins/{team}/sync/{blue|green}`). GlusterFS handles automatic VM-to-VM replication. **Solves**: No concurrent write conflicts, no mount failures, no Jenkins freezes. **RPO**: 5 minutes, **RTO**: < 2 minutes. Best of both worlds: local performance + distributed replication
+- **📊 Separate VM Monitoring Deployment**: **NEW** - Deploy Prometheus/Grafana/Loki stack to dedicated monitoring VM, separate from Jenkins infrastructure. Auto-detects deployment type from inventory, replaces all localhost references with actual IPs, configures firewall rules automatically, deploys cross-VM exporters (Node Exporter, Promtail) on all VMs. Better resource isolation, independent scaling, centralized monitoring for multiple Jenkins instances
+- **📝 Jenkins Job Logs with Loki**: **NEW** - Complete Jenkins job build log collection via Loki/Promtail. Automatically mounts all Jenkins Docker volumes (`/var/jenkins_home/jobs/*/builds/*/log`), extracts metadata (team, environment, job_name, build_number) from file paths, 30-day retention, Grafana visualization ready. Complements existing container log collection for 100% Jenkins observability
 
 ## Key Commands
 
@@ -233,41 +235,31 @@ tail -f /var/log/glusterfs-retention/devops-cleanup.log
 crontab -l | grep glusterfs-workspace-cleanup
 ```
 
-### Blue-Green Data Sync Commands (NEW)
+### Hybrid GlusterFS Sync Commands (NEW)
 ```bash
-# Deploy blue-green sync scripts
-ansible-playbook ansible/site.yml --tags jenkins,blue-green,sync
+# Deploy GlusterFS sync scripts and cron jobs
+ansible-playbook ansible/site.yml --tags jenkins,gluster,sync
 
-# Sync from blue to green (dry-run first)
-/usr/local/bin/jenkins-sync-devops.sh blue green --dry-run
+# Manual sync to GlusterFS (force sync for specific team)
+/usr/local/bin/jenkins-sync-to-gluster-devops.sh
 
-# Actual sync
-/usr/local/bin/jenkins-sync-devops.sh blue green
+# Blue-green switch with GlusterFS sync integration
+./scripts/blue-green-switch-with-gluster.sh devops green
 
-# Generic sync for any team
-/usr/local/bin/jenkins-blue-green-sync.sh ma green blue
+# Failover from failed VM using GlusterFS
+./scripts/jenkins-failover-from-gluster.sh devops blue vm1 vm2
 
-# Blue-green switch workflow
-# 1. Deploy new version to inactive environment
-ansible-playbook ansible/site.yml --tags jenkins,deploy -e "deploy_teams=devops"
-
-# 2. Sync data from active to inactive
-/usr/local/bin/jenkins-sync-devops.sh blue green
-
-# 3. Validate inactive environment
-curl -f http://localhost:8180/login
-
-# 4. Switch active environment (update inventory, redeploy HAProxy)
-ansible-playbook ansible/site.yml --tags haproxy-sync
-
-# 5. Sync back if needed
-/usr/local/bin/jenkins-sync-devops.sh green blue
+# Recover Jenkins data from GlusterFS
+/usr/local/bin/jenkins-recover-from-gluster-devops.sh devops blue
 
 # View sync logs
-tail -f /var/log/jenkins-bluegreen-sync-devops.log
+tail -f /var/log/jenkins-glusterfs-sync-devops.log
+
+# Check sync cron jobs
+crontab -l | grep jenkins-sync-to-gluster
 
 # View sync documentation
-cat /usr/local/share/doc/jenkins-blue-green-sync-README.md
+cat examples/hybrid-glusterfs-architecture-guide.md
 ```
 
 ### Cross-VM Individual Jenkins Monitoring Commands (NEW)
@@ -352,6 +344,159 @@ gluster volume status jenkins-devops-data
 
 # Monitor replication health
 gluster volume heal jenkins-devops-data info
+```
+
+### Monitoring Stack Deployment Commands (NEW)
+
+#### Separate VM Monitoring Deployment
+```bash
+# Deploy monitoring stack to separate VM (auto-detects deployment type from inventory)
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring --limit monitoring
+
+# Deploy with firewall configuration
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring,firewall --limit monitoring
+
+# Deploy cross-VM exporters to Jenkins VMs
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring,cross-vm --limit jenkins_masters
+
+# Full deployment (monitoring VM + Jenkins VM exporters)
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring
+
+# Verify deployment type detection
+ansible monitoring -m debug -a "var=monitoring_deployment_type"
+```
+
+#### Monitoring Stack Access
+```bash
+# Access Grafana (separate VM)
+http://<monitoring-vm-ip>:9300
+# Default login: admin/admin123
+
+# Access Prometheus
+http://<monitoring-vm-ip>:9090
+
+# Access Loki
+http://<monitoring-vm-ip>:9400
+
+# Check Prometheus targets
+http://<monitoring-vm-ip>:9090/targets
+
+# Check Prometheus metrics
+curl http://<monitoring-vm-ip>:9090/api/v1/targets
+```
+
+#### Jenkins Job Logs with Loki
+```bash
+# Query available log labels
+curl http://<monitoring-vm-ip>:9400/loki/api/v1/labels
+
+# Query Jenkins job logs for specific team
+curl -G http://<monitoring-vm-ip>:9400/loki/api/v1/query_range \
+  --data-urlencode 'query={job="jenkins-job-logs", team="devops"}' \
+  --data-urlencode 'limit=100'
+
+# Query logs for specific job
+curl -G http://<monitoring-vm-ip>:9400/loki/api/v1/query_range \
+  --data-urlencode 'query={job="jenkins-job-logs", job_name="my-pipeline"}' \
+  --data-urlencode 'limit=100'
+
+# Query logs for specific build
+curl -G http://<monitoring-vm-ip>:9400/loki/api/v1/query_range \
+  --data-urlencode 'query={job="jenkins-job-logs", job_name="my-pipeline", build_number="42"}' \
+  --data-urlencode 'limit=1000'
+
+# View in Grafana Explore
+# http://<monitoring-vm-ip>:9300/explore
+# Select Loki datasource and use LogQL:
+# {job="jenkins-job-logs", team="devops"}
+# {job="jenkins-job-logs"} |= "ERROR"
+# {job="jenkins-job-logs"} |~ "(?i)(error|exception|failed)"
+```
+
+#### Monitoring Verification
+```bash
+# Verify Promtail has access to Jenkins volumes
+docker exec promtail-production ls -la /jenkins-logs/
+
+# Check Node Exporter on Jenkins VMs
+curl http://<jenkins-vm-ip>:9100/metrics
+
+# Check Promtail status
+docker logs promtail-production
+curl http://<jenkins-vm-ip>:9401/ready
+
+# Check Loki ingestion
+curl http://<monitoring-vm-ip>:9400/ready
+
+# Verify firewall rules (RHEL/CentOS)
+sudo firewall-cmd --list-all
+
+# Verify firewall rules (Debian/Ubuntu)
+sudo ufw status verbose
+```
+
+#### Monitoring Health Checks
+```bash
+# Run monitoring health check script
+/opt/monitoring/scripts/monitoring-health.sh
+
+# Check Prometheus health
+curl http://<monitoring-vm-ip>:9090/-/healthy
+
+# Check Grafana health
+curl http://<monitoring-vm-ip>:9300/api/health
+
+# Check Loki health
+curl http://<monitoring-vm-ip>:9400/ready
+
+# View monitoring logs
+docker logs prometheus-production
+docker logs grafana-production
+docker logs loki-production
+docker logs promtail-production
+```
+
+#### Monitoring Agent Management (NEW)
+```bash
+# Deploy cAdvisor on Jenkins VMs for container metrics
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring,cross-vm,cadvisor
+
+# Deploy agent health monitoring
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring,cross-vm,agent-health
+
+# Check agent health from Jenkins VMs
+ssh jenkins-vm1 '/usr/local/bin/monitoring/agent-health-check.sh'
+ssh jenkins-vm2 '/usr/local/bin/monitoring/agent-health-check.sh'
+
+# View agent health logs
+ssh jenkins-vm1 'tail -f /var/log/monitoring-agents/health-check.log'
+
+# Check agent health timer status
+ssh jenkins-vm1 'systemctl status monitoring-agent-health.timer'
+ssh jenkins-vm1 'systemctl list-timers | grep monitoring'
+
+# Manually trigger health check
+ssh jenkins-vm1 'systemctl start monitoring-agent-health.service'
+
+# Check cAdvisor metrics from Jenkins VMs
+curl http://jenkins-vm1:9200/metrics
+curl http://jenkins-vm2:9200/metrics
+
+# Query container metrics in Prometheus
+# CPU usage per container
+container_cpu_usage_seconds_total{job="cadvisor"}
+
+# Memory usage per container
+container_memory_usage_bytes{job="cadvisor"}
+
+# Network traffic per container
+container_network_receive_bytes_total{job="cadvisor"}
 ```
 
 ### Environment Setup

@@ -6,7 +6,7 @@ positions:
   filename: {{ promtail_positions_file }}
 
 clients:
-  - url: http://localhost:{{ loki_port }}/loki/api/v1/push
+  - url: http://{{ loki_host }}:{{ loki_port }}/loki/api/v1/push
 
 scrape_configs:
 {% if log_sources.jenkins_containers.enabled %}
@@ -197,3 +197,31 @@ scrape_configs:
           format: RFC3339Nano
       - output:
           source: output
+{% if jenkins_teams_config is defined and jenkins_teams_config | length > 0 %}
+  # Jenkins job build logs (from mounted Docker volumes)
+  - job_name: jenkins-job-logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: jenkins-job-logs
+          source: build-logs
+          __path__: "/jenkins-logs/*/*/jobs/*/builds/*/log"
+    pipeline_stages:
+      # Extract metadata from file path
+      - regex:
+          expression: '/jenkins-logs/(?P<team>[^/]+)/(?P<environment>[^/]+)/jobs/(?P<job_name>[^/]+)/builds/(?P<build_number>[^/]+)/log'
+      - labels:
+          team:
+          environment:
+          job_name:
+          build_number:
+      # Add timestamp (Jenkins logs have timestamps in content)
+      - match:
+          selector: '{job="jenkins-job-logs"}'
+          stages:
+            - regex:
+                expression: '^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3}\s+(?P<log_level>[A-Z]+)\s+(?P<message>.*)$'
+            - labels:
+                log_level:
+{% endif %}

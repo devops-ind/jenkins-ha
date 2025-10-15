@@ -195,6 +195,30 @@
   include_tasks: exporters.yml
   tags: ['exporters']
 
+- name: Include Firewall configuration tasks
+  include_tasks: firewall.yml
+  tags: ['firewall']
+  when: monitoring_deployment_type == 'separate'
+
+- name: Include Cross-VM Exporters deployment tasks
+  include_tasks: cross-vm-exporters.yml
+  tags: ['cross-vm', 'exporters']
+  when: monitoring_deployment_type == 'separate'
+
+- name: Include Cross-VM cAdvisor deployment tasks
+  include_tasks: cross-vm-cadvisor.yml
+  tags: ['cross-vm', 'cadvisor']
+  when:
+    - monitoring_deployment_type == 'separate'
+    - cadvisor_enabled | default(true)
+
+- name: Include Cross-VM Agent Monitoring tasks
+  include_tasks: cross-vm-agent-monitoring.yml
+  tags: ['cross-vm', 'agent-health']
+  when:
+    - monitoring_deployment_type == 'separate'
+    - monitoring_agent_health_check_enabled | default(true)
+
 - name: Generate monitoring stack systemd services
   template:
     src: "{{ item }}.service.j2"

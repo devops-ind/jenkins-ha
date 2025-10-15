@@ -17,7 +17,7 @@ alerting:
   alertmanagers:
     - static_configs:
         - targets:
-          - localhost:{{ alertmanager_port }}
+          - {{ alertmanager_host }}:{{ alertmanager_port }}
 {% endif %}
 
 scrape_configs:
@@ -93,7 +93,7 @@ scrape_configs:
 {% if cadvisor_enabled | default(true) %}
   - job_name: 'cadvisor'
     static_configs:
-      - targets: ['localhost:{{ cadvisor_port }}']
+      - targets: ['{{ monitoring_server_address }}:{{ cadvisor_port }}']
     scrape_interval: 30s
     metrics_path: /metrics
     # Container metrics labeling
@@ -119,7 +119,7 @@ scrape_configs:
 {% if cadvisor_enabled | default(true) %}
   - job_name: 'jenkins-dynamic-agents'
     static_configs:
-      - targets: ['localhost:{{ cadvisor_port }}']
+      - targets: ['{{ monitoring_server_address }}:{{ cadvisor_port }}']
     scrape_interval: 30s
     metrics_path: /metrics
     # Filter for agent containers only
