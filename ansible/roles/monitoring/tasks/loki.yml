@@ -38,9 +38,9 @@
       LOKI_RETENTION_PERIOD: "{{ loki_retention }}"
   when: loki_enabled | default(true)
 
-- name: Deploy Promtail container
+- name: Deploy Promtail container on Monitoring VM
   community.docker.docker_container:
-    name: promtail-{{ deployment_environment | default('local') }}
+    name: promtail-monitoring-{{ deployment_environment | default('local') }}
     image: "grafana/promtail:{{ promtail_version }}"
     state: started
     restart_policy: "{{ monitoring_restart_policy }}"
@@ -52,13 +52,6 @@
       - "/var/log:/var/log:ro"
       - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
-{% if jenkins_teams_config is defined and jenkins_teams_config | length > 0 %}
-      # Mount Jenkins Docker volumes for job log collection
-{% for team in jenkins_teams_config %}
-      - "jenkins-{{ team.team_name }}-blue-home:/jenkins-logs/{{ team.team_name }}/blue:ro"
-      - "jenkins-{{ team.team_name }}-green-home:/jenkins-logs/{{ team.team_name }}/green:ro"
-{% endfor %}
-{% endif %}
     command: ["-config.file=/etc/promtail/promtail-config.yml"]
     networks:
       - name: "{{ monitoring_docker_network }}"

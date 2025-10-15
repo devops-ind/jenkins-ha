@@ -195,9 +195,30 @@ grafana_prometheus_datasource:
   isDefault: true
 
 # Alertmanager configuration
-alertmanager_enabled: false
+alertmanager_enabled: true
 alertmanager_port: 9093
 alertmanager_version: "latest"
+
+# Microsoft Teams notification configuration
+teams_notifications_enabled: true
+teams_notification_strategy: "hybrid"  # Options: single, per-team, hybrid
+
+# Teams webhook configuration (URLs from vault)
+teams_webhook_critical: "{{ vault_teams_webhook_critical | default('') }}"
+teams_webhook_warning: "{{ vault_teams_webhook_warning | default('') }}"
+teams_webhook_info: "{{ vault_teams_webhook_info | default('') }}"
+
+# Per-team Teams webhooks
+teams_webhooks:
+  devops:
+    webhook_url: "{{ vault_teams_devops_webhook | default('') }}"
+    enabled: true
+  dev-qa:
+    webhook_url: "{{ vault_teams_dev_qa_webhook | default('') }}"
+    enabled: true
+  infrastructure:
+    webhook_url: "{{ vault_teams_infrastructure_webhook | default('') }}"
+    enabled: true
 
 # Node Exporter configuration
 node_exporter_enabled: true

@@ -209,8 +209,12 @@ sudo ufw status                 # Debian/Ubuntu
 
 **Check**:
 ```bash
-# Check Promtail status on Jenkins VMs
-docker logs promtail-production
+# Check Promtail status on Jenkins VMs (note: container name includes hostname)
+docker logs promtail-jenkins-vm1-production
+docker logs promtail-jenkins-vm2-production
+
+# Check Promtail on Monitoring VM
+docker logs promtail-monitoring-production
 
 # Check Promtail can reach Loki
 curl http://<monitoring-vm>:9400/ready

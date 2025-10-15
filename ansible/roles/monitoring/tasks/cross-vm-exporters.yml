@@ -79,7 +79,7 @@
 
 - name: Deploy Promtail container on Jenkins VMs
   community.docker.docker_container:
-    name: promtail-{{ deployment_environment | default('local') }}
+    name: "promtail-{{ hostvars[item]['inventory_hostname_short'] }}-{{ deployment_environment | default('local') }}"
     image: "grafana/promtail:{{ promtail_version }}"
     state: started
     restart_policy: "{{ monitoring_restart_policy }}"

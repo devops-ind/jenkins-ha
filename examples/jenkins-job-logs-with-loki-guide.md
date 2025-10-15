@@ -96,8 +96,9 @@ scrape_configs:
 ### 1. Check Volume Mounts
 
 ```bash
-# Verify Promtail has access to Jenkins volumes
-docker exec promtail-production ls -la /jenkins-logs/
+# Verify Promtail on Jenkins VMs has access to Jenkins volumes
+# Note: Container name includes hostname (e.g., promtail-jenkins-vm1-production)
+docker exec promtail-jenkins-vm1-production ls -la /jenkins-logs/
 
 # Expected output:
 # drwxr-xr-x  devops/
@@ -106,7 +107,7 @@ docker exec promtail-production ls -la /jenkins-logs/
 # drwxr-xr-x  tw/
 
 # Check specific team logs
-docker exec promtail-production ls -la /jenkins-logs/devops/blue/jobs/
+docker exec promtail-jenkins-vm1-production ls -la /jenkins-logs/devops/blue/jobs/
 
 # Should show Jenkins job directories
 ```
@@ -340,32 +341,34 @@ loki_retention: "2160h"  # 90 days
 
 ### Issue: No job logs in Loki
 
-**Check volume mounts**:
+**Check volume mounts** (on Jenkins VMs):
 ```bash
-docker inspect promtail-production | jq '.[].Mounts[] | select(.Destination | startswith("/jenkins-logs"))'
+# Replace jenkins-vm1 with actual hostname
+docker inspect promtail-jenkins-vm1-production | jq '.[].Mounts[] | select(.Destination | startswith("/jenkins-logs"))'
 ```
 
-**Check Promtail logs**:
+**Check Promtail logs** (on Jenkins VMs):
 ```bash
-docker logs promtail-production | grep "jenkins-job-logs"
+docker logs promtail-jenkins-vm1-production | grep "jenkins-job-logs"
+docker logs promtail-jenkins-vm2-production | grep "jenkins-job-logs"
 ```
 
 **Check file permissions**:
 ```bash
-docker exec promtail-production ls -la /jenkins-logs/devops/blue/jobs/
+docker exec promtail-jenkins-vm1-production ls -la /jenkins-logs/devops/blue/jobs/
 ```
 
 ### Issue: Logs not updating
 
-**Check Promtail positions**:
+**Check Promtail positions** (on Jenkins VMs):
 ```bash
-docker exec promtail-production cat /promtail/positions.yaml
+docker exec promtail-jenkins-vm1-production cat /promtail/positions.yaml
 ```
 
 **Force re-read** (delete positions file):
 ```bash
-docker exec promtail-production rm /promtail/positions.yaml
-docker restart promtail-production
+docker exec promtail-jenkins-vm1-production rm /promtail/positions.yaml
+docker restart promtail-jenkins-vm1-production
 ```
 
 ### Issue: High Loki disk usage

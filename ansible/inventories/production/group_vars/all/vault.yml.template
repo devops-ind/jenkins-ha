@@ -60,6 +60,17 @@ vault_alertmanager_auth_username: "alertmanager"
 vault_alertmanager_auth_password: "GENERATE_STRONG_ALERTMANAGER_PASSWORD"
 vault_alertmanager_webhook_url: "https://hooks.slack.com/services/CHANGE_TO_REAL_WEBHOOK"
 
+# Microsoft Teams Webhook Configuration
+# Get webhook URLs from Microsoft Teams -> Channel -> Connectors -> Incoming Webhook
+vault_teams_webhook_critical: "https://company.webhook.office.com/webhookb2/CHANGE_TO_REAL_CRITICAL_WEBHOOK"
+vault_teams_webhook_warning: "https://company.webhook.office.com/webhookb2/CHANGE_TO_REAL_WARNING_WEBHOOK"
+vault_teams_webhook_info: "https://company.webhook.office.com/webhookb2/CHANGE_TO_REAL_INFO_WEBHOOK"
+
+# Per-team Teams webhooks
+vault_teams_devops_webhook: "https://company.webhook.office.com/webhookb2/CHANGE_TO_REAL_DEVOPS_WEBHOOK"
+vault_teams_dev_qa_webhook: "https://company.webhook.office.com/webhookb2/CHANGE_TO_REAL_DEV_QA_WEBHOOK"
+vault_teams_infrastructure_webhook: "https://company.webhook.office.com/webhookb2/CHANGE_TO_REAL_INFRA_WEBHOOK"
+
 # High Availability Configuration
 vault_vip_auth_pass: "GENERATE_STRONG_VIP_PASSWORD"
 vault_haproxy_stats_user: "haproxy-admin"

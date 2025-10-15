@@ -44,7 +44,7 @@
 
 - name: restart promtail
   community.docker.docker_container:
-    name: promtail-{{ deployment_environment | default('local') }}
+    name: promtail-monitoring-{{ deployment_environment | default('local') }}
     state: started
     restart: yes
   listen: "restart promtail"

@@ -29,8 +29,9 @@ This is a production-grade Jenkins infrastructure with **Blue-Green Deployment**
 - **✅ Workspace Data Retention**: Automated cleanup system with 7-10 day configurable retention per team, cron-based scheduling, and monitoring - saves 30-50% disk space
 - **✅ Cross-VM Individual Monitoring**: HAProxy monitors each team's Jenkins across VMs with active-passive or active-active failover strategies - enables per-team failover without affecting other teams (configurable: `haproxy_backend_failover_strategy`)
 - **🔄 Hybrid GlusterFS Architecture**: **PRODUCTION-READY** - Jenkins writes to fast local Docker volumes, periodic rsync syncs to GlusterFS sync layer (`/var/jenkins/{team}/sync/{blue|green}`). GlusterFS handles automatic VM-to-VM replication. **Solves**: No concurrent write conflicts, no mount failures, no Jenkins freezes. **RPO**: 5 minutes, **RTO**: < 2 minutes. Best of both worlds: local performance + distributed replication
-- **📊 Separate VM Monitoring Deployment**: **NEW** - Deploy Prometheus/Grafana/Loki stack to dedicated monitoring VM, separate from Jenkins infrastructure. Auto-detects deployment type from inventory, replaces all localhost references with actual IPs, configures firewall rules automatically, deploys cross-VM exporters (Node Exporter, Promtail) on all VMs. Better resource isolation, independent scaling, centralized monitoring for multiple Jenkins instances
-- **📝 Jenkins Job Logs with Loki**: **NEW** - Complete Jenkins job build log collection via Loki/Promtail. Automatically mounts all Jenkins Docker volumes (`/var/jenkins_home/jobs/*/builds/*/log`), extracts metadata (team, environment, job_name, build_number) from file paths, 30-day retention, Grafana visualization ready. Complements existing container log collection for 100% Jenkins observability
+- **📊 Separate VM Monitoring Deployment**: Deploy Prometheus/Grafana/Loki stack to dedicated monitoring VM, separate from Jenkins infrastructure. Auto-detects deployment type from inventory, replaces all localhost references with actual IPs, configures firewall rules automatically, deploys cross-VM exporters (Node Exporter, Promtail, cAdvisor) on all VMs. Better resource isolation, independent scaling, centralized monitoring for multiple Jenkins instances
+- **📝 Jenkins Job Logs with Loki**: Complete Jenkins job build log collection via Loki/Promtail. Automatically mounts all Jenkins Docker volumes (`/var/jenkins_home/jobs/*/builds/*/log`), extracts metadata (team, environment, job_name, build_number) from file paths, 30-day retention, Grafana visualization ready. Complements existing container log collection for 100% Jenkins observability
+- **🔔 Microsoft Teams Alerting**: **NEW** - Native Alertmanager Teams integration with flexible routing strategies (single, per-team, hybrid). Severity-based channels (critical, warning, info), team-specific webhooks, intelligent alert grouping, inhibition rules to prevent alert storms. Rich formatted messages with full alert context. 130+ pre-configured alert rules covering infrastructure, Jenkins, blue-green, and logs. Vault-encrypted webhook management
 
 ## Key Commands
 
@@ -209,6 +210,62 @@ docker stop jenkins-ba-blue  # Should NOT trigger failover (only 1 team down)
 
 # Verify VIP remains on current master
 ip addr show | grep 192.168.1.100
+```
+
+### Microsoft Teams Alerting Commands (NEW)
+```bash
+# Deploy Alertmanager with Teams integration
+ansible-playbook ansible/site.yml --tags monitoring,alertmanager
+
+# Verify Alertmanager configuration
+docker exec alertmanager-production amtool check-config /etc/alertmanager/alertmanager.yml
+
+# View Alertmanager configuration
+docker exec alertmanager-production amtool config show
+
+# Check active alerts
+docker exec alertmanager-production amtool alert query
+
+# Fire test alert (via Prometheus)
+curl -X POST http://prometheus-vm:9090/api/v1/alerts \
+  -H "Content-Type: application/json" \
+  -d '{
+    "alerts": [{
+      "labels": {
+        "alertname": "TestAlert",
+        "severity": "warning",
+        "team": "devops"
+      },
+      "annotations": {
+        "summary": "Test alert for Teams integration"
+      }
+    }]
+  }'
+
+# Silence alert for 2 hours
+docker exec alertmanager-production amtool silence add \
+  alertname="JenkinsMasterDown" team="devops" \
+  --duration=2h --comment="Planned maintenance"
+
+# List active silences
+docker exec alertmanager-production amtool silence query
+
+# Expire silence early
+docker exec alertmanager-production amtool silence expire <SILENCE_ID>
+
+# View Alertmanager logs
+docker logs alertmanager-production -f | grep -i teams
+
+# Check alert routing tree
+docker exec alertmanager-production amtool config routes
+
+# Test Teams webhook manually
+curl -H "Content-Type: application/json" \
+  -d '{"text":"Test from Alertmanager"}' \
+  "https://company.webhook.office.com/webhookb2/YOUR_WEBHOOK_URL"
+
+# Access Alertmanager UI
+# http://monitoring-vm-ip:9093
 ```
 
 ### Workspace Data Retention Commands (NEW)
@@ -419,17 +476,21 @@ curl -G http://<monitoring-vm-ip>:9400/loki/api/v1/query_range \
 
 #### Monitoring Verification
 ```bash
-# Verify Promtail has access to Jenkins volumes
-docker exec promtail-production ls -la /jenkins-logs/
+# Verify Promtail on Monitoring VM
+docker exec promtail-monitoring-production ls -la /var/log/
+
+# Verify Promtail on Jenkins VMs (has access to Jenkins volumes)
+docker exec promtail-jenkins-vm1-production ls -la /jenkins-logs/
+docker exec promtail-jenkins-vm2-production ls -la /jenkins-logs/
 
 # Check Node Exporter on Jenkins VMs
 curl http://<jenkins-vm-ip>:9100/metrics
 
-# Check Promtail status
-docker logs promtail-production
+# Check Promtail status on Jenkins VMs
+docker logs promtail-jenkins-vm1-production
 curl http://<jenkins-vm-ip>:9401/ready
 
-# Check Loki ingestion
+# Check Loki ingestion on Monitoring VM
 curl http://<monitoring-vm-ip>:9400/ready
 
 # Verify firewall rules (RHEL/CentOS)
@@ -453,11 +514,15 @@ curl http://<monitoring-vm-ip>:9300/api/health
 # Check Loki health
 curl http://<monitoring-vm-ip>:9400/ready
 
-# View monitoring logs
+# View monitoring logs (on Monitoring VM)
 docker logs prometheus-production
 docker logs grafana-production
 docker logs loki-production
-docker logs promtail-production
+docker logs promtail-monitoring-production
+
+# View Promtail logs (on Jenkins VMs)
+docker logs promtail-jenkins-vm1-production
+docker logs promtail-jenkins-vm2-production
 ```
 
 #### Monitoring Agent Management (NEW)
