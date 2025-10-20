@@ -46,9 +46,12 @@
     team_effective_port: "{{ team_port_calculations[item.team_name] }}"
     team_target_list: >
       {%- if prometheus_deployment_mode == 'local' -%}
-      ["localhost:{{ team_effective_port }}"] 
+      ["localhost:{{ team_effective_port }}"]
       {%- else -%}
-      [{% for host in prometheus_jenkins_hosts %}"{{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team_effective_port }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+      [{% for host in prometheus_jenkins_hosts %}
+        "{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{{ hostvars[host]['host_fqdn'] }}{% else %}{{ hostvars[host]['ansible_default_ipv4']['address'] }}{% endif %}:{{ team_effective_port }}"
+        {%- if not loop.last %}, {% endif %}
+      {% endfor %}]
       {%- endif -%}
     team_target_config:
       job: "jenkins-{{ item.team_name }}"
@@ -71,7 +74,10 @@
       {%- if prometheus_deployment_mode == 'local' -%}
       ["localhost:8080"]
       {%- else -%}
-      [{% for host in prometheus_jenkins_hosts %}"{{ hostvars[host]['ansible_default_ipv4']['address'] }}:8080"{% if not loop.last %}, {% endif %}{% endfor %}]
+      [{% for host in prometheus_jenkins_hosts %}
+        "{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{{ hostvars[host]['host_fqdn'] }}{% else %}{{ hostvars[host]['ansible_default_ipv4']['address'] }}{% endif %}:8080"
+        {%- if not loop.last %}, {% endif %}
+      {% endfor %}]
       {%- endif -%}
     default_target_config:
       job: "jenkins-default"
@@ -173,6 +179,21 @@
     ipam_config:
       - subnet: "{{ monitoring_network_subnet }}"
 
+# CRITICAL: Deploy cross-VM exporters BEFORE Prometheus to generate scrape targets
+# Cross-VM tasks generate prometheus_cross_vm_targets and prometheus_cadvisor_targets
+# which are needed by prometheus.yml.j2 template rendering
+- name: Include Cross-VM Exporters deployment tasks
+  include_tasks: cross-vm-exporters.yml
+  tags: ['cross-vm', 'exporters']
+  when: monitoring_deployment_type == 'separate'
+
+- name: Include Cross-VM cAdvisor deployment tasks
+  include_tasks: cross-vm-cadvisor.yml
+  tags: ['cross-vm', 'cadvisor']
+  when:
+    - monitoring_deployment_type == 'separate'
+    - cadvisor_enabled | default(true)
+
 - name: Include Prometheus setup tasks
   include_tasks: prometheus.yml
   tags: ['prometheus']
@@ -199,18 +220,6 @@
   include_tasks: firewall.yml
   tags: ['firewall']
   when: monitoring_deployment_type == 'separate'
-
-- name: Include Cross-VM Exporters deployment tasks
-  include_tasks: cross-vm-exporters.yml
-  tags: ['cross-vm', 'exporters']
-  when: monitoring_deployment_type == 'separate'
-
-- name: Include Cross-VM cAdvisor deployment tasks
-  include_tasks: cross-vm-cadvisor.yml
-  tags: ['cross-vm', 'cadvisor']
-  when:
-    - monitoring_deployment_type == 'separate'
-    - cadvisor_enabled | default(true)
 
 - name: Include Cross-VM Agent Monitoring tasks
   include_tasks: cross-vm-agent-monitoring.yml
@@ -253,7 +262,7 @@
 
 - name: Wait for Prometheus to be ready
   uri:
-    url: "http://{{ ansible_default_ipv4.address }}:{{ prometheus_port }}/api/v1/status/config"
+    url: "http://{{ prometheus_host }}:{{ prometheus_port }}/api/v1/status/config"
     method: GET
     timeout: 10
   register: prometheus_ready
@@ -263,7 +272,7 @@
 
 - name: Wait for Grafana to be ready
   uri:
-    url: "http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}/api/health"
+    url: "http://{{ grafana_host }}:{{ grafana_port }}/api/health"
     method: GET
     timeout: 10
   register: grafana_ready
@@ -273,7 +282,7 @@
 
 - name: Configure Grafana Prometheus datasource
   uri:
-    url: "http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}/api/datasources"
+    url: "http://{{ grafana_host }}:{{ grafana_port }}/api/datasources"
     method: POST
     user: "{{ grafana_admin_user }}"
     password: "{{ grafana_admin_password }}"
@@ -284,7 +293,7 @@
 
 - name: Configure Grafana Loki datasource
   uri:
-    url: "http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}/api/datasources"
+    url: "http://{{ grafana_host }}:{{ grafana_port }}/api/datasources"
     method: POST
     user: "{{ grafana_admin_user }}"
     password: "{{ grafana_admin_password }}"
@@ -332,7 +341,7 @@
 
 - name: Check for existing dashboards to prevent duplication
   uri:
-    url: "http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}/api/search?query={{ item.title | urlencode }}"
+    url: "http://{{ grafana_host }}:{{ grafana_port }}/api/search?query={{ item.title | urlencode }}"
     method: GET
     user: "{{ grafana_admin_user }}"
     password: "{{ grafana_admin_password }}"
@@ -382,7 +391,7 @@
 
 - name: Deploy/Update Grafana dashboards with overwrite protection
   uri:
-    url: "http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}/api/dashboards/db"
+    url: "http://{{ grafana_host }}:{{ grafana_port }}/api/dashboards/db"
     method: POST
     user: "{{ grafana_admin_user }}"
     password: "{{ grafana_admin_password }}"
@@ -455,11 +464,11 @@
   debug:
     msg: |
       🎉 Monitoring Stack Deployment Completed!
-      
+
       📊 Access Information:
-      Prometheus: http://{{ ansible_default_ipv4.address }}:{{ prometheus_port }}
-      Grafana: http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}
-      AlertManager: http://{{ ansible_default_ipv4.address }}:{{ alertmanager_port }}
+      Prometheus: http://{{ prometheus_host }}:{{ prometheus_port }}
+      Grafana: http://{{ grafana_host }}:{{ grafana_port }}
+      AlertManager: http://{{ alertmanager_host }}:{{ alertmanager_port }}
       
       🔐 Grafana Credentials:
       Username: {{ grafana_admin_user }}

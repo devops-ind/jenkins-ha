@@ -31,7 +31,9 @@ This is a production-grade Jenkins infrastructure with **Blue-Green Deployment**
 - **🔄 Hybrid GlusterFS Architecture**: **PRODUCTION-READY** - Jenkins writes to fast local Docker volumes, periodic rsync syncs to GlusterFS sync layer (`/var/jenkins/{team}/sync/{blue|green}`). GlusterFS handles automatic VM-to-VM replication. **Solves**: No concurrent write conflicts, no mount failures, no Jenkins freezes. **RPO**: 5 minutes, **RTO**: < 2 minutes. Best of both worlds: local performance + distributed replication
 - **📊 Separate VM Monitoring Deployment**: Deploy Prometheus/Grafana/Loki stack to dedicated monitoring VM, separate from Jenkins infrastructure. Auto-detects deployment type from inventory, replaces all localhost references with actual IPs, configures firewall rules automatically, deploys cross-VM exporters (Node Exporter, Promtail, cAdvisor) on all VMs. Better resource isolation, independent scaling, centralized monitoring for multiple Jenkins instances
 - **📝 Jenkins Job Logs with Loki**: Complete Jenkins job build log collection via Loki/Promtail. Automatically mounts all Jenkins Docker volumes (`/var/jenkins_home/jobs/*/builds/*/log`), extracts metadata (team, environment, job_name, build_number) from file paths, 30-day retention, Grafana visualization ready. Complements existing container log collection for 100% Jenkins observability
-- **🔔 Microsoft Teams Alerting**: **NEW** - Native Alertmanager Teams integration with flexible routing strategies (single, per-team, hybrid). Severity-based channels (critical, warning, info), team-specific webhooks, intelligent alert grouping, inhibition rules to prevent alert storms. Rich formatted messages with full alert context. 130+ pre-configured alert rules covering infrastructure, Jenkins, blue-green, and logs. Vault-encrypted webhook management
+- **🔔 Microsoft Teams Alerting**: Native Alertmanager Teams integration with flexible routing strategies (single, per-team, hybrid). Severity-based channels (critical, warning, info), team-specific webhooks, intelligent alert grouping, inhibition rules to prevent alert storms. Rich formatted messages with full alert context. 130+ pre-configured alert rules covering infrastructure, Jenkins, blue-green, and logs. Vault-encrypted webhook management
+- **🌐 FQDN Infrastructure Addressing**: Complete FQDN support for monitoring infrastructure with toggle-based migration. Smart addressing hierarchy (monitoring_fqdn → host_fqdn → IP fallback), DNS-based service discovery, HA/failover support, network flexibility. Backward compatible with seamless IP-to-FQDN migration. Affects all internal communication: Prometheus targets, Promtail Loki URLs, cross-VM agent addresses, health checks. Zero-downtime migration with rollback support
+- **🔧 Cross-VM Monitoring Fix**: **NEW** - Fixed critical network communication issues between monitoring agents and servers across VMs. All agents (Node Exporter, Promtail, cAdvisor) now use `network_mode: host` for cross-VM connectivity. Prometheus target generation reordered to execute BEFORE template rendering. Template updated to include cross-VM targets with role labels. Comprehensive troubleshooting guide with health check scripts, verification procedures, and migration paths
 
 ## Key Commands
 
@@ -562,6 +564,135 @@ container_memory_usage_bytes{job="cadvisor"}
 
 # Network traffic per container
 container_network_receive_bytes_total{job="cadvisor"}
+```
+
+#### Monitoring FQDN Configuration (NEW)
+```bash
+# Configure FQDN-based infrastructure addressing for monitoring
+
+# Step 1: Add FQDN variables to inventory
+# Edit ansible/inventories/production/hosts.yml
+jenkins_masters:
+  hosts:
+    centos9-vm:
+      ansible_host: 192.168.188.142  # Keep for SSH
+      host_fqdn: centos9-vm.internal.local        # Infrastructure FQDN
+      monitoring_fqdn: monitoring.internal.local  # Monitoring server FQDN
+
+# Step 2: Setup DNS (choose one method)
+# Option A: Production DNS
+# Add A records: centos9-vm.internal.local → 192.168.188.142
+
+# Option B: /etc/hosts (all VMs)
+sudo tee -a /etc/hosts <<EOF
+192.168.188.142 centos9-vm.internal.local monitoring.internal.local
+EOF
+
+# Step 3: Test DNS resolution
+dig +short centos9-vm.internal.local
+ping -c 2 monitoring.internal.local
+
+# Step 4: Deploy with FQDN mode enabled (default)
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring
+
+# Deploy with IP mode (for migration/rollback)
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring -e "monitoring_use_fqdn=false"
+
+# Verify FQDN configuration
+docker exec prometheus-production cat /etc/prometheus/prometheus.yml | grep targets:
+# Should show: centos9-vm.internal.local:8080 (FQDN mode)
+# Or: 192.168.188.142:8080 (IP mode)
+
+# Check Promtail Loki URL
+docker exec promtail-jenkins-vm1-production cat /etc/promtail/promtail-config.yml | grep url:
+# Should show: http://monitoring.internal.local:9400/loki/api/v1/push
+
+# Verify Prometheus targets using FQDNs
+curl http://monitoring.internal.local:9090/api/v1/targets | jq '.data.activeTargets[] | {job: .labels.job, instance: .labels.instance, health: .health}'
+
+# Rollback to IP-based addressing
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring -e "monitoring_use_fqdn=false"
+```
+
+#### Cross-VM Monitoring Troubleshooting (NEW)
+```bash
+# Troubleshoot cross-VM agent communication issues
+# Comprehensive guide: examples/cross-vm-monitoring-troubleshooting-guide.md
+
+# Verify agent containers use host network (required for cross-VM)
+ansible jenkins_masters -m shell -a "docker inspect node-exporter-production | jq '.[0].HostConfig.NetworkMode'"
+# Expected: "host" (NOT "monitoring-net")
+
+# Test agent connectivity from monitoring VM
+curl -s http://centos9-vm.internal.local:9100/metrics | head -n 20  # Node Exporter
+curl -s http://centos9-vm.internal.local:9200/metrics | grep cadvisor  # cAdvisor
+curl -s http://centos9-vm.internal.local:9080/ready  # Promtail
+
+# Check Prometheus configuration includes cross-VM targets
+docker exec prometheus-production cat /etc/prometheus/prometheus.yml | grep -A 10 "Cross-VM"
+# Should show Jenkins VM targets with role: 'jenkins-vm' labels
+
+# Verify Prometheus target health
+curl -s http://monitoring.internal.local:9090/api/v1/targets | \
+  jq '.data.activeTargets[] | select(.labels.role=="jenkins-vm") | {job: .job, health: .health, instance: .labels.instance}'
+# Expected: health: "up" for all cross-VM targets
+
+# Check Promtail sending logs to Loki
+docker logs promtail-jenkins-vm1-production 2>&1 | grep "Successfully sent batch"
+
+# Verify Loki receiving logs from Jenkins VMs
+curl -s "http://monitoring.internal.local:9400/loki/api/v1/label/hostname/values" | jq
+
+# Run comprehensive health check
+cat > /tmp/cross-vm-health-check.sh <<'EOF'
+#!/bin/bash
+set -e
+MONITORING_VM="monitoring.internal.local"
+JENKINS_VM="centos9-vm.internal.local"
+
+echo "Cross-VM Monitoring Health Check"
+echo "=================================="
+
+# Check agent containers
+echo -e "\n[1/5] Agent containers on Jenkins VM:"
+ssh ${JENKINS_VM} "docker ps --filter 'name=node-exporter\|promtail\|cadvisor' --format '{{.Names}} - {{.Status}}'"
+
+# Test endpoints
+echo -e "\n[2/5] Agent endpoints:"
+curl -sf http://${JENKINS_VM}:9100/metrics > /dev/null && echo "✓ Node Exporter" || echo "✗ Node Exporter FAILED"
+curl -sf http://${JENKINS_VM}:9200/metrics > /dev/null && echo "✓ cAdvisor" || echo "✗ cAdvisor FAILED"
+curl -sf http://${JENKINS_VM}:9080/ready > /dev/null && echo "✓ Promtail" || echo "✗ Promtail FAILED"
+
+# Check Prometheus config
+echo -e "\n[3/5] Prometheus configuration:"
+ssh ${MONITORING_VM} "docker exec prometheus-production cat /etc/prometheus/prometheus.yml" | \
+  grep -q "${JENKINS_VM}:9100" && echo "✓ Node Exporter target configured" || echo "✗ MISSING"
+
+# Check target health
+echo -e "\n[4/5] Target health:"
+curl -sf http://${MONITORING_VM}:9090/api/v1/targets | \
+  jq -r '.data.activeTargets[] | select(.labels.role=="jenkins-vm") | "\(.job): \(.health)"'
+
+# Check data flow
+echo -e "\n[5/5] Metrics available:"
+QUERY_RESULT=$(curl -sf "http://${MONITORING_VM}:9090/api/v1/query?query=node_uname_info{role=\"jenkins-vm\"}" | \
+  jq -r '.data.result | length')
+echo "Jenkins VM metrics in Prometheus: ${QUERY_RESULT} series"
+
+echo -e "\n=================================="
+echo "Health check complete"
+EOF
+chmod +x /tmp/cross-vm-health-check.sh
+/tmp/cross-vm-health-check.sh
+
+# Common fixes:
+# 1. Network mode issues → Redeploy: ansible-playbook ansible/site.yml --tags monitoring
+# 2. DNS issues → Check /etc/hosts or DNS A records
+# 3. Firewall → Open ports 9100, 9200, 9080, 9400 between VMs
+# 4. Missing targets → Verify cross-VM tasks run BEFORE Prometheus deployment
 ```
 
 ### Environment Setup

@@ -29,6 +29,13 @@ scrape_configs:
   - job_name: '{{ target.job }}'
     static_configs:
       - targets: {{ target.targets | to_json }}
+{% if monitoring_deployment_type == 'separate' and target.job == 'node-exporter' and prometheus_cross_vm_targets is defined and prometheus_cross_vm_targets | length > 0 %}
+      # Cross-VM node-exporter targets from Jenkins VMs
+      - targets: {{ prometheus_cross_vm_targets | to_json }}
+        labels:
+          role: 'jenkins-vm'
+          deployment_type: 'cross-vm'
+{% endif %}
 {% if target.job == 'prometheus' %}
     # Prometheus self-monitoring
     scrape_interval: 15s
@@ -94,6 +101,13 @@ scrape_configs:
   - job_name: 'cadvisor'
     static_configs:
       - targets: ['{{ monitoring_server_address }}:{{ cadvisor_port }}']
+{% if monitoring_deployment_type == 'separate' and prometheus_cadvisor_targets is defined and prometheus_cadvisor_targets | length > 0 %}
+      # Cross-VM cAdvisor targets from Jenkins VMs
+      - targets: {{ prometheus_cadvisor_targets | to_json }}
+        labels:
+          role: 'jenkins-vm'
+          deployment_type: 'cross-vm'
+{% endif %}
     scrape_interval: 30s
     metrics_path: /metrics
     # Container metrics labeling

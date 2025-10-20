@@ -17,7 +17,24 @@ monitoring_network_name: "monitoring-net"
 monitoring_network_subnet: "172.26.0.0/16"
 
 # Monitoring server addressing (for separate VM deployment)
-monitoring_server_address: "{{ ansible_default_ipv4.address | default('localhost') }}"
+# FQDN Configuration
+monitoring_use_fqdn: true  # Toggle: true = FQDN-based, false = IP-based (for migration)
+monitoring_fqdn_suffix: "internal.local"  # Default domain suffix if host_fqdn not in inventory
+
+# Smart Addressing: FQDN-first with IP fallback
+monitoring_server_address: >-
+  {% if monitoring_use_fqdn and (hostvars[inventory_hostname]['monitoring_fqdn'] is defined) %}
+  {{ hostvars[inventory_hostname]['monitoring_fqdn'] }}
+  {% elif monitoring_use_fqdn and (hostvars[inventory_hostname]['host_fqdn'] is defined) %}
+  {{ hostvars[inventory_hostname]['host_fqdn'] }}
+  {% elif monitoring_use_fqdn and (inventory_hostname | regex_search('\.')) %}
+  {{ inventory_hostname }}
+  {% elif monitoring_use_fqdn %}
+  {{ inventory_hostname }}.{{ monitoring_fqdn_suffix }}
+  {% else %}
+  {{ ansible_default_ipv4.address | default('localhost') }}
+  {% endif %}
+
 prometheus_host: "{{ monitoring_server_address }}"
 grafana_host: "{{ monitoring_server_address }}"
 loki_host: "{{ monitoring_server_address }}"
