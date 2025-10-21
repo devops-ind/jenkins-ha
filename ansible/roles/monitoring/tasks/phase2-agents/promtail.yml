@@ -69,13 +69,6 @@
       - "/var/log:/var/log:ro"
       - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
-{% if jenkins_teams_config is defined and jenkins_teams_config | length > 0 %}
-      # Mount Jenkins Docker volumes for job log collection
-{% for team in jenkins_teams_config %}
-      - "jenkins-{{ team.team_name }}-blue-home:/jenkins-logs/{{ team.team_name }}/blue:ro"
-      - "jenkins-{{ team.team_name }}-green-home:/jenkins-logs/{{ team.team_name }}/green:ro"
-{% endfor %}
-{% endif %}
     command: ["-config.file=/etc/promtail/promtail-config.yml"]
     user: "{{ monitoring_uid }}:{{ monitoring_gid }}"
   delegate_to: "{{ item }}"
@@ -99,30 +92,5 @@
 
 - name: Display Promtail deployment summary
   debug:
-    msg: |
-      ==========================================================
-      Promtail Deployment Complete
-      ==========================================================
-      Deployed to hosts: {{ monitoring_target_hosts | length }}
-
-      Container Names:
-      {% for host in monitoring_target_hosts %}
-      - promtail-{{ hostvars[host]['inventory_hostname_short'] }}-{{ deployment_environment | default('local') }}
-      {% endfor %}
-
-      Loki Endpoint: http://{{ loki_host }}:{{ loki_port }}/loki/api/v1/push
-
-      Log Sources:
-      - System logs: /var/log
-      - Docker container logs: /var/lib/docker/containers
-{% if jenkins_teams_config is defined and jenkins_teams_config | length > 0 %}
-      - Jenkins job logs: {{ jenkins_teams_config | length }} teams (blue + green)
-{% endif %}
-
-      Verification Commands:
-      {% for host in monitoring_target_hosts %}
-      - curl http://{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{{ hostvars[host]['host_fqdn'] }}{% else %}{{ hostvars[host]['ansible_default_ipv4']['address'] }}{% endif %}:{{ promtail_port }}/ready
-      - docker logs promtail-{{ hostvars[host]['inventory_hostname_short'] }}-{{ deployment_environment | default('local') }} | grep "Successfully sent batch"
-      {% endfor %}
-      ==========================================================
+    msg: "Promtail deployed to {{ monitoring_target_hosts | length }} hosts. Shipping logs to http://{{ loki_host }}:{{ loki_port }}/loki/api/v1/push"
   tags: ['monitoring', 'agents', 'promtail', 'summary']

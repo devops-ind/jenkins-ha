@@ -92,10 +92,10 @@ jenkins_port: 8090
 haproxy_gid: 1004
 
 # Domain configuration for production (corrected structure)
-jenkins_domain: "devops.example.com"
-jenkins_wildcard_domain: "*.devops.example.com"
-monitoring_domain: "devops.example.com"  # Monitoring services use same base domain
-monitoring_wildcard_domain: "*.devops.example.com"
+jenkins_domain: "dev.net"
+jenkins_wildcard_domain: "*.dev.net"
+monitoring_domain: "dev.net"  # Monitoring services use same base domain
+monitoring_wildcard_domain: "*.dev.net"
 
 # Multi-team configuration for production HAProxy load balancing
 # devops is the default team (handles jenkins.devops.example.com as default)
