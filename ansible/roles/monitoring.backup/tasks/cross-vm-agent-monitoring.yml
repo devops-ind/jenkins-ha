@@ -1,0 +1,214 @@
+---
+# Cross-VM Agent Monitoring
+# Deploys health monitoring and validation for monitoring agents on Jenkins VMs
+
+- name: Display cross-VM agent monitoring configuration
+  debug:
+    msg: |
+      ==========================================================
+      Cross-VM Agent Monitoring Configuration
+      ==========================================================
+      Health check enabled: {{ monitoring_agent_health_check_enabled | default(true) }}
+      Health check interval: {{ monitoring_agent_health_check_interval | default('*/5 * * * *') }}
+      Health timeout: {{ monitoring_agent_health_timeout | default(10) }}
+      Health retries: {{ monitoring_agent_health_retries | default(3) }}
+      Target Jenkins VMs: {{ groups['jenkins_masters'] | join(', ') if groups['jenkins_masters'] is defined else 'N/A' }}
+      ==========================================================
+  tags: ['monitoring', 'cross-vm', 'agent-health']
+
+- name: Create monitoring scripts directory on Jenkins VMs
+  file:
+    path: /usr/local/bin/monitoring
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['jenkins_masters'] }}"
+  become: yes
+  when:
+    - monitoring_deployment_type == 'separate'
+    - monitoring_agent_health_check_enabled | default(true)
+    - item not in groups['monitoring']
+  tags: ['monitoring', 'cross-vm', 'agent-health', 'setup']
+
+- name: Deploy agent health check script on Jenkins VMs
+  template:
+    src: agent-health-check.sh.j2
+    dest: /usr/local/bin/monitoring/agent-health-check.sh
+    mode: '0755'
+    owner: root
+    group: root
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['jenkins_masters'] }}"
+  become: yes
+  when:
+    - monitoring_deployment_type == 'separate'
+    - monitoring_agent_health_check_enabled | default(true)
+    - item not in groups['monitoring']
+  tags: ['monitoring', 'cross-vm', 'agent-health', 'scripts']
+
+- name: Create monitoring logs directory on Jenkins VMs
+  file:
+    path: /var/log/monitoring-agents
+    state: directory
+    mode: '0755'
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['jenkins_masters'] }}"
+  become: yes
+  when:
+    - monitoring_deployment_type == 'separate'
+    - monitoring_agent_health_check_enabled | default(true)
+    - item not in groups['jenkins_masters']
+  tags: ['monitoring', 'cross-vm', 'agent-health', 'setup']
+
+- name: Deploy agent health check systemd timer on Jenkins VMs
+  template:
+    src: monitoring-agent-health.timer.j2
+    dest: /etc/systemd/system/monitoring-agent-health.timer
+    mode: '0644'
+    owner: root
+    group: root
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['jenkins_masters'] }}"
+  become: yes
+  when:
+    - monitoring_deployment_type == 'separate'
+    - monitoring_agent_health_check_enabled | default(true)
+    - item not in groups['monitoring']
+  tags: ['monitoring', 'cross-vm', 'agent-health', 'systemd']
+
+- name: Deploy agent health check systemd service on Jenkins VMs
+  template:
+    src: monitoring-agent-health.service.j2
+    dest: /etc/systemd/system/monitoring-agent-health.service
+    mode: '0644'
+    owner: root
+    group: root
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['jenkins_masters'] }}"
+  become: yes
+  notify: reload systemd
+  when:
+    - monitoring_deployment_type == 'separate'
+    - monitoring_agent_health_check_enabled | default(true)
+    - item not in groups['monitoring']
+  tags: ['monitoring', 'cross-vm', 'agent-health', 'systemd']
+
+- name: Enable and start agent health check timer on Jenkins VMs
+  systemd:
+    name: monitoring-agent-health.timer
+    enabled: yes
+    state: started
+    daemon_reload: yes
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['jenkins_masters'] }}"
+  become: yes
+  when:
+    - monitoring_deployment_type == 'separate'
+    - monitoring_agent_health_check_enabled | default(true)
+    - item not in groups['monitoring']
+  tags: ['monitoring', 'cross-vm', 'agent-health', 'service']
+
+- name: Verify Node Exporter accessibility from monitoring VM
+  uri:
+    url: "http://{{ hostvars[item]['ansible_default_ipv4']['address'] }}:{{ node_exporter_port }}/metrics"
+    method: GET
+    status_code: 200
+    timeout: "{{ monitoring_agent_health_timeout | default(10) }}"
+  register: node_exporter_health
+  loop: "{{ groups['jenkins_masters'] }}"
+  retries: "{{ monitoring_agent_health_retries | default(3) }}"
+  delay: 5
+  when:
+    - monitoring_deployment_type == 'separate'
+    - item not in groups['monitoring']
+  tags: ['monitoring', 'cross-vm', 'agent-health', 'verify']
+
+- name: Verify Promtail accessibility from monitoring VM
+  uri:
+    url: "http://{{ hostvars[item]['ansible_default_ipv4']['address'] }}:{{ promtail_port }}/ready"
+    method: GET
+    status_code: 200
+    timeout: "{{ monitoring_agent_health_timeout | default(10) }}"
+  register: promtail_health
+  loop: "{{ groups['jenkins_masters'] }}"
+  retries: "{{ monitoring_agent_health_retries | default(3) }}"
+  delay: 5
+  when:
+    - monitoring_deployment_type == 'separate'
+    - item not in groups['monitoring']
+  tags: ['monitoring', 'cross-vm', 'agent-health', 'verify']
+
+- name: Verify cAdvisor accessibility from monitoring VM
+  uri:
+    url: "http://{{ hostvars[item]['ansible_default_ipv4']['address'] }}:{{ cadvisor_port }}/metrics"
+    method: GET
+    status_code: 200
+    timeout: "{{ monitoring_agent_health_timeout | default(10) }}"
+  register: cadvisor_health
+  loop: "{{ groups['jenkins_masters'] }}"
+  retries: "{{ monitoring_agent_health_retries | default(3) }}"
+  delay: 5
+  when:
+    - monitoring_deployment_type == 'separate'
+    - cadvisor_enabled | default(true)
+    - item not in groups['monitoring']
+  tags: ['monitoring', 'cross-vm', 'agent-health', 'verify']
+
+- name: Generate agent health status report
+  set_fact:
+    monitoring_agent_health_status:
+      node_exporter: "{{ node_exporter_health.results | default([]) | map(attribute='status') | list }}"
+      promtail: "{{ promtail_health.results | default([]) | map(attribute='status') | list }}"
+      cadvisor: "{{ cadvisor_health.results | default([]) | map(attribute='status') | list if cadvisor_enabled | default(true) else [] }}"
+  when:
+    - monitoring_deployment_type == 'separate'
+    - groups['jenkins_masters'] is defined
+  tags: ['monitoring', 'cross-vm', 'agent-health', 'report']
+
+- name: Display agent health status summary
+  debug:
+    msg: |
+      ==========================================================
+      Monitoring Agent Health Status
+      ==========================================================
+      {% if monitoring_deployment_type == 'separate' and groups['jenkins_masters'] is defined %}
+      {% for vm in groups['jenkins_masters'] %}
+      {% if vm not in groups['monitoring'] %}
+      Jenkins VM: {{ vm }} ({{ hostvars[vm]['ansible_default_ipv4']['address'] }})
+        - Node Exporter:  {{ 'OK' if node_exporter_health.results[loop.index0].status == 200 else 'FAILED' }}
+        - Promtail:       {{ 'OK' if promtail_health.results[loop.index0].status == 200 else 'FAILED' }}
+        {% if cadvisor_enabled | default(true) %}
+        - cAdvisor:       {{ 'OK' if cadvisor_health.results[loop.index0].status == 200 else 'FAILED' }}
+        {% endif %}
+      {% endif %}
+      {% endfor %}
+
+      Health Check Commands:
+      {% for vm in groups['jenkins_masters'] %}
+      {% if vm not in groups['monitoring'] %}
+      - ssh {{ vm }} '/usr/local/bin/monitoring/agent-health-check.sh'
+      {% endif %}
+      {% endfor %}
+
+      View Health Logs:
+      {% for vm in groups['jenkins_masters'] %}
+      {% if vm not in groups['monitoring'] %}
+      - ssh {{ vm }} 'tail -f /var/log/monitoring-agents/health-check.log'
+      {% endif %}
+      {% endfor %}
+
+      Systemd Timer Status:
+      {% for vm in groups['jenkins_masters'] %}
+      {% if vm not in groups['monitoring'] %}
+      - ssh {{ vm }} 'systemctl status monitoring-agent-health.timer'
+      {% endif %}
+      {% endfor %}
+      {% else %}
+      Co-located deployment - agent health monitoring not applicable
+      {% endif %}
+      ==========================================================
+  tags: ['monitoring', 'cross-vm', 'agent-health', 'summary']

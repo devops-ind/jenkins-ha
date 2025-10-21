@@ -256,7 +256,7 @@
         - (groups['jenkins_masters'] | default([]) | length > 1) or (jenkins_teams_for_haproxy | default([]) | length > 1)
 
 - name: Setup Monitoring Stack
-  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'monitoring') }}"
+  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'monitoring:jenkins_masters') }}"
   become: yes
   gather_facts: yes
   pre_tasks:

@@ -1,0 +1,87 @@
+---
+# Unified Node Exporter Deployment
+# Deploys to ALL monitoring target hosts (monitoring VM + Jenkins VMs)
+# Eliminates code duplication between local and cross-VM deployment
+
+- name: Display Node Exporter deployment info
+  debug:
+    msg: |
+      ==========================================================
+      Node Exporter Deployment
+      ==========================================================
+      Deployment type: {{ monitoring_deployment_type }}
+      Target hosts: {{ monitoring_target_hosts | join(', ') }}
+      Node Exporter version: {{ node_exporter_version }}
+      Port: {{ node_exporter_port }}
+      Enabled: {{ node_exporter_enabled | default(true) }}
+      ==========================================================
+  tags: ['monitoring', 'agents', 'node-exporter']
+
+- name: Deploy Node Exporter containers to all target hosts
+  community.docker.docker_container:
+    name: "node-exporter-{{ deployment_environment | default('local') }}"
+    image: "prom/node-exporter:{{ node_exporter_version }}"
+    state: started
+    restart_policy: "{{ monitoring_restart_policy }}"
+    network_mode: host  # Required for cross-VM metrics scraping
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    volumes:
+      - '/proc:/host/proc:ro'
+      - '/sys:/host/sys:ro'
+      - '/:/rootfs:ro'
+    user: "{{ monitoring_uid }}:{{ monitoring_gid }}"
+  delegate_to: "{{ item }}"
+  loop: "{{ monitoring_target_hosts }}"
+  when: node_exporter_enabled | default(true)
+  tags: ['monitoring', 'agents', 'node-exporter', 'deploy']
+
+- name: Wait for Node Exporter to be ready on all hosts
+  uri:
+    url: "http://{% if monitoring_use_fqdn and hostvars[item]['host_fqdn'] is defined %}{{ hostvars[item]['host_fqdn'] }}{% else %}{{ hostvars[item]['ansible_default_ipv4']['address'] }}{% endif %}:{{ node_exporter_port }}/metrics"
+    method: GET
+    status_code: 200
+    timeout: 10
+  register: node_exporter_ready
+  until: node_exporter_ready.status == 200
+  retries: 10
+  delay: 3
+  loop: "{{ monitoring_target_hosts }}"
+  when: node_exporter_enabled | default(true)
+  tags: ['monitoring', 'agents', 'node-exporter', 'verify']
+
+- name: Generate Node Exporter Prometheus scrape targets
+  set_fact:
+    prometheus_node_exporter_targets: >-
+      {% set targets = [] %}
+      {% for host in monitoring_target_hosts %}
+        {% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}
+          {% set _ = targets.append(hostvars[host]['host_fqdn'] + ':' + (node_exporter_port | string)) %}
+        {% else %}
+          {% set _ = targets.append(hostvars[host]['ansible_default_ipv4']['address'] + ':' + (node_exporter_port | string)) %}
+        {% endif %}
+      {% endfor %}
+      {{ targets }}
+  when: node_exporter_enabled | default(true)
+  tags: ['monitoring', 'agents', 'node-exporter', 'targets']
+
+- name: Display Node Exporter deployment summary
+  debug:
+    msg: |
+      ==========================================================
+      Node Exporter Deployment Complete
+      ==========================================================
+      Deployed to hosts: {{ monitoring_target_hosts | length }}
+      Prometheus scrape targets: {{ prometheus_node_exporter_targets | default([]) | length }}
+
+      Verification URLs:
+      {% for host in monitoring_target_hosts %}
+      - http://{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{{ hostvars[host]['host_fqdn'] }}{% else %}{{ hostvars[host]['ansible_default_ipv4']['address'] }}{% endif %}:{{ node_exporter_port }}/metrics
+      {% endfor %}
+
+      Prometheus Query: node_uname_info
+      ==========================================================
+  tags: ['monitoring', 'agents', 'node-exporter', 'summary']

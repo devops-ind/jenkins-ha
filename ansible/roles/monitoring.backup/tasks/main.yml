@@ -1,0 +1,490 @@
+---
+# Monitoring Role - Prometheus, Grafana, and Exporters
+# Complete monitoring stack for Jenkins infrastructure
+
+# ==============================================================================
+# ROBUST PROMETHEUS TARGET GENERATION - Split Complex Template into Safe Tasks
+# ==============================================================================
+# Applying successful patterns from haproxy.cfg.j2 and jenkins-master-v2 roles:
+# 1. Pre-assignment with {% set team_ports = team.ports | default({'web': 8080}) %}
+# 2. Type safety with | int filter before arithmetic
+# 3. String concatenation with | string filter
+# 4. Defensive programming with multiple validation layers
+# 5. Split complex logic into multiple safer set_fact tasks
+
+- name: Initialize Prometheus target configuration
+  set_fact:
+    prometheus_jenkins_targets: []
+    prometheus_deployment_mode: "{{ deployment_mode | default('local') }}"
+    prometheus_jenkins_hosts: "{{ groups['jenkins_masters'] | default(['localhost']) }}"
+  tags: ['monitoring', 'targets']
+
+- name: Validate team configuration for monitoring
+  set_fact:
+    prometheus_teams_validated: "{{ jenkins_teams if (jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0) else [] }}"
+  tags: ['monitoring', 'targets']
+
+# Split the complex logic into safer, more explicit tasks
+- name: Calculate effective ports for each team (separate task for clarity)
+  set_fact:
+    team_port_calculations: "{{ team_port_calculations | default({}) | combine({item.team_name: calculated_port}) }}"
+  vars:
+    team_web_port: "{{ item.ports.web | default(8080) | int }}"
+    team_active_env: "{{ item.active_environment | default('blue') }}"
+    team_bg_enabled: "{{ item.blue_green_enabled | default(true) }}"
+    calculated_port: "{{ team_web_port | int + (100 if (team_bg_enabled and team_active_env == 'green') else 0) }}"
+  loop: "{{ prometheus_teams_validated }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  when: prometheus_teams_validated | length > 0
+  tags: ['monitoring', 'targets']
+
+- name: Generate team-specific Jenkins Prometheus targets (safe approach)
+  set_fact:
+    prometheus_jenkins_targets: "{{ prometheus_jenkins_targets + [team_target_config] }}"
+  vars:
+    team_effective_port: "{{ team_port_calculations[item.team_name] }}"
+    team_target_list: >
+      {%- if prometheus_deployment_mode == 'local' -%}
+      ["localhost:{{ team_effective_port }}"]
+      {%- else -%}
+      [{% for host in prometheus_jenkins_hosts %}
+        "{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{{ hostvars[host]['host_fqdn'] }}{% else %}{{ hostvars[host]['ansible_default_ipv4']['address'] }}{% endif %}:{{ team_effective_port }}"
+        {%- if not loop.last %}, {% endif %}
+      {% endfor %}]
+      {%- endif -%}
+    team_target_config:
+      job: "jenkins-{{ item.team_name }}"
+      targets: "{{ team_target_list | from_yaml }}"
+      team_name: "{{ item.team_name }}"
+      active_environment: "{{ item.active_environment | default('blue') }}"
+      port: "{{ team_effective_port | int }}"
+      blue_green_enabled: "{{ item.blue_green_enabled | default(true) }}"
+  loop: "{{ prometheus_teams_validated }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  when: prometheus_teams_validated | length > 0
+  tags: ['monitoring', 'targets']
+
+- name: Generate default Jenkins Prometheus target (fallback - safe approach)
+  set_fact:
+    prometheus_jenkins_targets: "{{ prometheus_jenkins_targets + [default_target_config] }}"
+  vars:
+    default_target_list: >
+      {%- if prometheus_deployment_mode == 'local' -%}
+      ["localhost:8080"]
+      {%- else -%}
+      [{% for host in prometheus_jenkins_hosts %}
+        "{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{{ hostvars[host]['host_fqdn'] }}{% else %}{{ hostvars[host]['ansible_default_ipv4']['address'] }}{% endif %}:8080"
+        {%- if not loop.last %}, {% endif %}
+      {% endfor %}]
+      {%- endif -%}
+    default_target_config:
+      job: "jenkins-default"
+      targets: "{{ default_target_list | from_yaml }}"
+      team_name: "default"
+      active_environment: "blue"
+      port: 8080
+      blue_green_enabled: false
+  when: prometheus_teams_validated | length == 0
+  tags: ['monitoring', 'targets']
+
+- name: Merge Jenkins targets with base Prometheus targets
+  set_fact:
+    prometheus_targets: "{{ prometheus_base_targets | default([]) + prometheus_jenkins_targets }}"
+  tags: ['monitoring', 'targets']
+
+- name: Validate final Prometheus configuration
+  assert:
+    that:
+      - prometheus_jenkins_targets is defined
+      - prometheus_jenkins_targets | length > 0
+      - prometheus_targets is defined
+      - prometheus_targets | length > 0
+    fail_msg: |
+      ERROR: Prometheus target generation failed!
+      
+      Teams validated: {{ prometheus_teams_validated | length }}
+      Jenkins targets generated: {{ prometheus_jenkins_targets | length }}
+      Total targets: {{ prometheus_targets | length }}
+      
+      This indicates a configuration or template processing error.
+    success_msg: |
+      ✅ Prometheus target generation successful!
+      
+      Teams configured: {{ prometheus_teams_validated | length }}
+      Jenkins targets: {{ prometheus_jenkins_targets | length }}
+      Total targets: {{ prometheus_targets | length }}
+  tags: ['monitoring', 'targets']
+
+- name: Display monitoring target configuration
+  debug:
+    msg: |
+      ====================================================
+      🎯 Monitoring Target Configuration Summary
+      ====================================================
+      Deployment Mode: {{ prometheus_deployment_mode }}
+      Teams Validated: {{ prometheus_teams_validated | length }}
+      Jenkins Jobs Generated: {{ prometheus_jenkins_targets | map(attribute='job') | join(', ') if prometheus_jenkins_targets else 'none' }}
+      Total Prometheus Targets: {{ prometheus_targets | length }}
+      
+      📊 Jenkins Monitoring Details:
+      {% for target in prometheus_jenkins_targets %}
+      • {{ target.job }} ({{ target.team_name }} - {{ target.active_environment }})
+        Port: {{ target.port }} | Blue-Green: {{ target.blue_green_enabled }}
+        Targets: {{ target.targets | join(', ') }}
+      {% endfor %}
+      
+      🌐 All Prometheus Targets:
+      {% for target in prometheus_targets %}
+      • {{ target.job }}: {{ target.targets | join(', ') }}
+      {% endfor %}
+      ====================================================
+  tags: ['monitoring', 'targets']
+
+- name: Create monitoring user and group
+  group:
+    name: "{{ monitoring_group }}"
+    gid: "{{ monitoring_gid }}"
+    state: present
+  become: yes
+  when: deployment_mode | default('local') not in ['devcontainer', 'local']
+
+- name: Create monitoring system user
+  user:
+    name: "{{ monitoring_user }}"
+    uid: "{{ monitoring_uid }}"
+    group: "{{ monitoring_group }}"
+    home: "{{ monitoring_home_dir }}"
+    shell: /bin/bash
+    system: yes
+    create_home: yes
+  become: yes
+  when: deployment_mode | default('local') not in ['devcontainer', 'local']
+
+- name: Create monitoring directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ monitoring_user if deployment_mode | default('local') not in ['devcontainer', 'local'] else omit }}"
+    group: "{{ monitoring_group if deployment_mode | default('local') not in ['devcontainer', 'local'] else omit }}"
+    mode: '0755'
+  loop: "{{ monitoring_directories }}"
+  become: "{{ deployment_mode | default('local') not in ['devcontainer', 'local'] }}"
+
+- name: Create monitoring network
+  community.docker.docker_network:
+    name: "{{ monitoring_network_name }}"
+    driver: bridge
+    ipam_config:
+      - subnet: "{{ monitoring_network_subnet }}"
+
+# CRITICAL: Deploy cross-VM exporters BEFORE Prometheus to generate scrape targets
+# Cross-VM tasks generate prometheus_cross_vm_targets and prometheus_cadvisor_targets
+# which are needed by prometheus.yml.j2 template rendering
+- name: Include Cross-VM Exporters deployment tasks
+  include_tasks: cross-vm-exporters.yml
+  tags: ['cross-vm', 'exporters']
+  when: monitoring_deployment_type == 'separate'
+
+- name: Include Cross-VM cAdvisor deployment tasks
+  include_tasks: cross-vm-cadvisor.yml
+  tags: ['cross-vm', 'cadvisor']
+  when:
+    - monitoring_deployment_type == 'separate'
+    - cadvisor_enabled | default(true)
+
+- name: Include Prometheus setup tasks
+  include_tasks: prometheus.yml
+  tags: ['prometheus']
+
+- name: Include Loki setup tasks
+  include_tasks: loki.yml
+  tags: ['loki', 'logging']
+  when: loki_enabled | default(true)
+
+- name: Include Grafana setup tasks
+  include_tasks: grafana.yml
+  tags: ['grafana']
+
+- name: Include Alertmanager setup tasks
+  include_tasks: alertmanager.yml
+  tags: ['alertmanager']
+  when: alertmanager_enabled | default(true)
+
+- name: Include Exporters setup tasks
+  include_tasks: exporters.yml
+  tags: ['exporters']
+
+- name: Include Firewall configuration tasks
+  include_tasks: firewall.yml
+  tags: ['firewall']
+  when: monitoring_deployment_type == 'separate'
+
+- name: Include Cross-VM Agent Monitoring tasks
+  include_tasks: cross-vm-agent-monitoring.yml
+  tags: ['cross-vm', 'agent-health']
+  when:
+    - monitoring_deployment_type == 'separate'
+    - monitoring_agent_health_check_enabled | default(true)
+
+- name: Generate monitoring stack systemd services
+  template:
+    src: "{{ item }}.service.j2"
+    dest: "/etc/systemd/system/{{ item }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - prometheus
+    - grafana
+    - alertmanager
+    - node-exporter
+  notify: reload systemd
+  become: yes
+
+- name: Force systemd to reload configs
+  systemd:
+    daemon_reload: yes
+  become: yes
+
+- name: Enable and start monitoring services
+  systemd:
+    name: "{{ item }}"
+    enabled: yes
+    state: started
+  loop:
+    - prometheus
+    - grafana
+    - alertmanager
+    - node-exporter
+  become: yes
+
+- name: Wait for Prometheus to be ready
+  uri:
+    url: "http://{{ prometheus_host }}:{{ prometheus_port }}/api/v1/status/config"
+    method: GET
+    timeout: 10
+  register: prometheus_ready
+  until: prometheus_ready is succeeded
+  retries: 30
+  delay: 10
+
+- name: Wait for Grafana to be ready
+  uri:
+    url: "http://{{ grafana_host }}:{{ grafana_port }}/api/health"
+    method: GET
+    timeout: 10
+  register: grafana_ready
+  until: grafana_ready is succeeded
+  retries: 30
+  delay: 10
+
+- name: Configure Grafana Prometheus datasource
+  uri:
+    url: "http://{{ grafana_host }}:{{ grafana_port }}/api/datasources"
+    method: POST
+    user: "{{ grafana_admin_user }}"
+    password: "{{ grafana_admin_password }}"
+    force_basic_auth: yes
+    body_format: json
+    body: "{{ grafana_prometheus_datasource }}"
+    status_code: [200, 409]  # 409 if datasource already exists
+
+- name: Configure Grafana Loki datasource
+  uri:
+    url: "http://{{ grafana_host }}:{{ grafana_port }}/api/datasources"
+    method: POST
+    user: "{{ grafana_admin_user }}"
+    password: "{{ grafana_admin_password }}"
+    force_basic_auth: yes
+    body_format: json
+    body: "{{ loki_datasource }}"
+    status_code: [200, 409]  # 409 if datasource already exists
+  when: loki_enabled | default(true)
+
+# Generate dashboard list for API operations (using centralized config)
+- name: Generate API dashboard list from centralized configuration
+  set_fact:
+    api_dashboard_list: |
+      [
+      {% for dashboard_id, config in grafana_dashboards.items() %}
+      {% if config.enabled and ((config.category == 'core' and dashboard_deployment.core_enabled) or (config.category == 'enhanced' and dashboard_deployment.enhanced_enabled)) %}
+        {
+          "name": "{{ dashboard_id }}",
+          "title": "{{ config.title }} - {{ deployment_mode | default('local') | title }}",
+          "template_file": "{{ config.template_file }}"
+        },
+      {% endif %}
+      {% endfor %}
+      ]
+
+- name: Parse API dashboard list
+  set_fact:
+    sorted_api_dashboards: "{{ api_dashboard_list | from_yaml | sort(attribute='name') }}"
+
+- name: Display centralized dashboard configuration summary
+  debug:
+    msg: |
+      🎛️ Centralized Dashboard Configuration:
+      Total Configured: {{ grafana_dashboards | length }}
+      Core Category: {{ grafana_dashboards | dict2items | selectattr('value.category', 'equalto', 'core') | list | length }}
+      Enhanced Category: {{ grafana_dashboards | dict2items | selectattr('value.category', 'equalto', 'enhanced') | list | length }}
+      Enabled for Deployment: {{ sorted_api_dashboards | length }}
+      
+      Configuration Status:
+      • Core Enabled: {{ dashboard_deployment.core_enabled }}
+      • Enhanced Enabled: {{ dashboard_deployment.enhanced_enabled }}
+      • Update Mode: {{ dashboard_deployment.update_mode }}
+      • Validation: {{ 'Strict' if dashboard_deployment.validation_strict else 'Permissive' }}
+  tags: ['monitoring', 'dashboards', 'config']
+
+- name: Check for existing dashboards to prevent duplication
+  uri:
+    url: "http://{{ grafana_host }}:{{ grafana_port }}/api/search?query={{ item.title | urlencode }}"
+    method: GET
+    user: "{{ grafana_admin_user }}"
+    password: "{{ grafana_admin_password }}"
+    force_basic_auth: yes
+  register: dashboard_search_results
+  loop: "{{ sorted_api_dashboards }}"
+  loop_control:
+    label: "{{ item.name }}"
+  ignore_errors: yes
+
+- name: Debug dashboard content for API deployment
+  debug:
+    msg: |
+      Dashboard: {{ item.name }}
+      File exists: {{ (dashboard_content.results | selectattr('item.name', 'equalto', item.name) | first).content is defined }}
+      Dashboard title from file: {{ (dashboard_content.results | selectattr('item.name', 'equalto', item.name) | first).content | b64decode | from_json | json_query('dashboard.title') | default('MISSING TITLE') }}
+      Dashboard structure: {{ (dashboard_content.results | selectattr('item.name', 'equalto', item.name) | first).content | b64decode | from_json | json_query('dashboard') | default('MISSING DASHBOARD') | type }}
+  loop: "{{ sorted_api_dashboards }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: false  # Enable for debugging: -e debug_dashboards=true
+  tags: ['debug']
+
+- name: Read dashboard files for API deployment
+  slurp:
+    src: "{{ monitoring_home_dir }}/grafana/dashboards/{{ item.template_file }}"
+  register: dashboard_content
+  loop: "{{ sorted_api_dashboards }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Validate dashboard JSON structure before API deployment
+  assert:
+    that:
+      - dashboard_json is defined
+      - dashboard_json.dashboard is defined
+      - dashboard_json.dashboard.title is defined
+      - dashboard_json.dashboard.title | length > 0
+    fail_msg: "Dashboard {{ item.name }} has invalid JSON structure - missing title or dashboard key"
+    success_msg: "Dashboard {{ item.name }} JSON structure is valid"
+  loop: "{{ sorted_api_dashboards }}"
+  vars:
+    dashboard_json: "{{ (dashboard_content.results | selectattr('item.name', 'equalto', item.name) | first).content | b64decode | from_json }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: ['monitoring', 'dashboards', 'validation']
+
+- name: Deploy/Update Grafana dashboards with overwrite protection
+  uri:
+    url: "http://{{ grafana_host }}:{{ grafana_port }}/api/dashboards/db"
+    method: POST
+    user: "{{ grafana_admin_user }}"
+    password: "{{ grafana_admin_password }}"
+    force_basic_auth: yes
+    body_format: json
+    body:
+      dashboard: "{{ (dashboard_content.results | selectattr('item.name', 'equalto', item.name) | first).content | b64decode | from_json | json_query('dashboard') }}"
+      overwrite: true
+      folderId: 0
+      message: "Updated by Ansible - {{ deployment_mode | default('local') }} deployment"
+    status_code: [200, 412]
+  register: dashboard_deploy_result
+  failed_when: >-
+    dashboard_deploy_result.status|default(0) not in [200, 412] or
+    (dashboard_deploy_result.json.message|default('') is search('title cannot be empty'))
+  loop: "{{ sorted_api_dashboards }}"
+  vars:
+    existing_dashboard: "{{ dashboard_search_results.results[loop_index0].json | length > 0 }}"
+    dashboard_json: "{{ (dashboard_content.results | selectattr('item.name', 'equalto', item.name) | first).content | b64decode | from_json }}"
+  when: >
+    dashboard_deployment.update_mode == 'always' or
+    (dashboard_deployment.update_mode == 'skip_existing' and not existing_dashboard) or
+    (dashboard_deployment.update_mode == 'update_only' and existing_dashboard)
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Display dashboard deployment summary
+  debug:
+    msg: |
+      📊 Dashboard API Deployment Summary:
+      Update Mode: {{ dashboard_deployment.update_mode }}
+      Total Dashboards: {{ sorted_api_dashboards | length }}
+      
+      {% for dashboard in dashboard_search_results.results %}
+      {% set dashboard_item = (dashboard_deploy_result.results[loop.index0] | default({})).item | default({}) %}
+      {% set existed = dashboard.json | length > 0 %}
+      {% set deployed = (dashboard_deploy_result.results[loop.index0] | default({})).status | default(0) == 200 %}
+      • {{ dashboard_item.name | default('unknown') }}: {% if deployed %}✅ {{ 'Updated' if existed else 'Created' }}{% elif existed and dashboard_deployment.update_mode == 'skip_existing' %}⏭️ Skipped (exists){% elif not existed and dashboard_deployment.update_mode == 'update_only' %}⏭️ Skipped (not found){% else %}❌ Failed{% endif %}
+      {% endfor %}
+  when: dashboard_search_results is defined and dashboard_deploy_result is defined
+  tags: ['monitoring', 'dashboards']
+
+- name: Create monitoring bin directory
+  file:
+    path: "{{ monitoring_home_dir }}/bin"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  become: yes
+
+- name: Create monitoring health check script
+  template:
+    src: monitoring-health.sh.j2
+    dest: "{{ monitoring_home_dir }}/bin/monitoring-health.sh"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  become: yes
+
+- name: Setup monitoring health check cron job
+  cron:
+    name: "Monitoring stack health check"
+    minute: "*/5"
+    user: "{{ monitoring_user }}"
+    job: "{{ monitoring_home_dir }}/bin/monitoring-health.sh"
+    state: present
+
+- name: Display monitoring access information
+  debug:
+    msg: |
+      🎉 Monitoring Stack Deployment Completed!
+
+      📊 Access Information:
+      Prometheus: http://{{ prometheus_host }}:{{ prometheus_port }}
+      Grafana: http://{{ grafana_host }}:{{ grafana_port }}
+      AlertManager: http://{{ alertmanager_host }}:{{ alertmanager_port }}
+      
+      🔐 Grafana Credentials:
+      Username: {{ grafana_admin_user }}
+      Password: [Check vault for grafana_admin_password]
+      
+      📋 Available Dashboards ({{ sorted_api_dashboards | length }}):
+      {% for dashboard in sorted_api_dashboards %}
+      • {{ dashboard.title.split(' - ')[0] }} - {{ grafana_dashboards[dashboard.name].description }}
+      {% endfor %}
+      
+      🎯 Monitored Targets ({{ prometheus_targets | length }}):
+      {% for target in prometheus_targets %}
+      • {{ target.job }}: {{ target.targets | join(', ') }}
+      {% endfor %}
+      
+      🔍 Jenkins-Specific Monitoring:
+      {% for target in prometheus_jenkins_targets %}
+      • {{ target.team_name }} ({{ target.active_environment }}): {{ target.targets | join(', ') }}
+      {% endfor %}

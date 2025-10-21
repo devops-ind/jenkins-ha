@@ -1,0 +1,35 @@
+groups:
+- name: infrastructure
+  rules:
+  - alert: HighCpuUsage
+    expr: 100 - (avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+    for: 10m
+    labels:
+      severity: warning
+      service: infrastructure
+      environment: "{{ deployment_environment | default('local') }}"
+    annotations:
+      summary: "High CPU usage detected"
+      description: "CPU usage is {{ '{{' }} $value | printf \"%.2f\" {{ '}}' }}% on {{ '{{' }} $labels.instance {{ '}}' }}."
+
+  - alert: HighMemoryUsage
+    expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+    for: 10m
+    labels:
+      severity: critical
+      service: infrastructure
+      environment: "{{ deployment_environment | default('local') }}"
+    annotations:
+      summary: "High memory usage detected"
+      description: "Memory usage is {{ '{{' }} $value | printf \"%.2f\" {{ '}}' }}% on {{ '{{' }} $labels.instance {{ '}}' }}."
+
+  - alert: DiskSpaceLow
+    expr: (1 - (node_filesystem_avail_bytes / node_filesystem_size_bytes)) * 100 > 85
+    for: 15m
+    labels:
+      severity: warning
+      service: infrastructure
+      environment: "{{ deployment_environment | default('local') }}"
+    annotations:
+      summary: "Disk space is running low"
+      description: "Disk space usage is {{ '{{' }} $value | printf \"%.2f\" {{ '}}' }}% on {{ '{{' }} $labels.instance {{ '}}' }} filesystem {{ '{{' }} $labels.mountpoint {{ '}}' }}."

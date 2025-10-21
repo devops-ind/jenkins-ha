@@ -1,0 +1,128 @@
+---
+# Unified Promtail Deployment
+# Deploys to ALL monitoring target hosts (monitoring VM + Jenkins VMs)
+# Consolidates local and cross-VM Promtail deployment
+
+- name: Display Promtail deployment info
+  debug:
+    msg: |
+      ==========================================================
+      Promtail Deployment
+      ==========================================================
+      Deployment type: {{ monitoring_deployment_type }}
+      Target hosts: {{ monitoring_target_hosts | join(', ') }}
+      Promtail version: {{ promtail_version }}
+      Loki URL: http://{{ loki_host }}:{{ loki_port }}/loki/api/v1/push
+      Enabled: {{ promtail_enabled | default(true) }}
+      ==========================================================
+  tags: ['monitoring', 'agents', 'promtail']
+
+- name: Create Promtail config directory on all target hosts
+  file:
+    path: "{{ monitoring_home_dir }}/promtail/config"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  delegate_to: "{{ item }}"
+  loop: "{{ monitoring_target_hosts }}"
+  become: yes
+  when: promtail_enabled | default(true)
+  tags: ['monitoring', 'agents', 'promtail']
+
+- name: Create Promtail data directory on all target hosts
+  file:
+    path: "{{ monitoring_home_dir }}/promtail/data"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  delegate_to: "{{ item }}"
+  loop: "{{ monitoring_target_hosts }}"
+  become: yes
+  when: promtail_enabled | default(true)
+  tags: ['monitoring', 'agents', 'promtail']
+
+- name: Deploy Promtail config on all target hosts
+  template:
+    src: promtail/promtail-config.yml.j2
+    dest: "{{ monitoring_home_dir }}/promtail/config/promtail-config.yml"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  delegate_to: "{{ item }}"
+  loop: "{{ monitoring_target_hosts }}"
+  become: yes
+  when: promtail_enabled | default(true)
+  tags: ['monitoring', 'agents', 'promtail']
+
+- name: Deploy Promtail containers to all target hosts
+  community.docker.docker_container:
+    name: "promtail-{{ hostvars[item]['inventory_hostname_short'] }}-{{ deployment_environment | default('local') }}"
+    image: "grafana/promtail:{{ promtail_version }}"
+    state: started
+    restart_policy: "{{ monitoring_restart_policy }}"
+    network_mode: host  # Required for cross-VM log shipping to Loki
+    volumes:
+      - "{{ monitoring_home_dir }}/promtail/config:/etc/promtail"
+      - "{{ monitoring_home_dir }}/promtail/data:/promtail"
+      - "/var/log:/var/log:ro"
+      - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+{% if jenkins_teams_config is defined and jenkins_teams_config | length > 0 %}
+      # Mount Jenkins Docker volumes for job log collection
+{% for team in jenkins_teams_config %}
+      - "jenkins-{{ team.team_name }}-blue-home:/jenkins-logs/{{ team.team_name }}/blue:ro"
+      - "jenkins-{{ team.team_name }}-green-home:/jenkins-logs/{{ team.team_name }}/green:ro"
+{% endfor %}
+{% endif %}
+    command: ["-config.file=/etc/promtail/promtail-config.yml"]
+    user: "{{ monitoring_uid }}:{{ monitoring_gid }}"
+  delegate_to: "{{ item }}"
+  loop: "{{ monitoring_target_hosts }}"
+  when: promtail_enabled | default(true)
+  tags: ['monitoring', 'agents', 'promtail', 'deploy']
+
+- name: Wait for Promtail to be ready on all hosts
+  uri:
+    url: "http://{% if monitoring_use_fqdn and hostvars[item]['host_fqdn'] is defined %}{{ hostvars[item]['host_fqdn'] }}{% else %}{{ hostvars[item]['ansible_default_ipv4']['address'] }}{% endif %}:{{ promtail_port }}/ready"
+    method: GET
+    status_code: 200
+    timeout: 10
+  register: promtail_ready
+  until: promtail_ready.status == 200
+  retries: 10
+  delay: 3
+  loop: "{{ monitoring_target_hosts }}"
+  when: promtail_enabled | default(true)
+  tags: ['monitoring', 'agents', 'promtail', 'verify']
+
+- name: Display Promtail deployment summary
+  debug:
+    msg: |
+      ==========================================================
+      Promtail Deployment Complete
+      ==========================================================
+      Deployed to hosts: {{ monitoring_target_hosts | length }}
+
+      Container Names:
+      {% for host in monitoring_target_hosts %}
+      - promtail-{{ hostvars[host]['inventory_hostname_short'] }}-{{ deployment_environment | default('local') }}
+      {% endfor %}
+
+      Loki Endpoint: http://{{ loki_host }}:{{ loki_port }}/loki/api/v1/push
+
+      Log Sources:
+      - System logs: /var/log
+      - Docker container logs: /var/lib/docker/containers
+{% if jenkins_teams_config is defined and jenkins_teams_config | length > 0 %}
+      - Jenkins job logs: {{ jenkins_teams_config | length }} teams (blue + green)
+{% endif %}
+
+      Verification Commands:
+      {% for host in monitoring_target_hosts %}
+      - curl http://{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{{ hostvars[host]['host_fqdn'] }}{% else %}{{ hostvars[host]['ansible_default_ipv4']['address'] }}{% endif %}:{{ promtail_port }}/ready
+      - docker logs promtail-{{ hostvars[host]['inventory_hostname_short'] }}-{{ deployment_environment | default('local') }} | grep "Successfully sent batch"
+      {% endfor %}
+      ==========================================================
+  tags: ['monitoring', 'agents', 'promtail', 'summary']

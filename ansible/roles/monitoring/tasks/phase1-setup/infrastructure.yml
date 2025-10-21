@@ -1,0 +1,60 @@
+---
+# Infrastructure Setup
+# Creates users, directories, and Docker network for monitoring stack
+
+- name: Create monitoring user and group
+  group:
+    name: "{{ monitoring_group }}"
+    gid: "{{ monitoring_gid }}"
+    state: present
+  become: yes
+  when: deployment_mode | default('local') not in ['devcontainer', 'local']
+  tags: ['monitoring', 'setup', 'infrastructure']
+
+- name: Create monitoring system user
+  user:
+    name: "{{ monitoring_user }}"
+    uid: "{{ monitoring_uid }}"
+    group: "{{ monitoring_group }}"
+    home: "{{ monitoring_home_dir }}"
+    shell: /bin/bash
+    system: yes
+    create_home: yes
+  become: yes
+  when: deployment_mode | default('local') not in ['devcontainer', 'local']
+  tags: ['monitoring', 'setup', 'infrastructure']
+
+- name: Create monitoring directories on monitoring server
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ monitoring_user if deployment_mode | default('local') not in ['devcontainer', 'local'] else omit }}"
+    group: "{{ monitoring_group if deployment_mode | default('local') not in ['devcontainer', 'local'] else omit }}"
+    mode: '0755'
+  loop: "{{ monitoring_directories }}"
+  become: "{{ deployment_mode | default('local') not in ['devcontainer', 'local'] }}"
+  when: inventory_hostname == monitoring_server_host
+  tags: ['monitoring', 'setup', 'infrastructure']
+
+- name: Create monitoring network
+  community.docker.docker_network:
+    name: "{{ monitoring_network_name }}"
+    driver: bridge
+    ipam_config:
+      - subnet: "{{ monitoring_network_subnet }}"
+  when: inventory_hostname == monitoring_server_host
+  tags: ['monitoring', 'setup', 'infrastructure', 'network']
+
+- name: Display infrastructure setup summary
+  debug:
+    msg: |
+      ==========================================================
+      Infrastructure Setup Complete
+      ==========================================================
+      Monitoring User: {{ monitoring_user }} (UID: {{ monitoring_uid }})
+      Monitoring Group: {{ monitoring_group }} (GID: {{ monitoring_gid }})
+      Home Directory: {{ monitoring_home_dir }}
+      Docker Network: {{ monitoring_network_name }} ({{ monitoring_network_subnet }})
+      Directories Created: {{ monitoring_directories | length }}
+      ==========================================================
+  tags: ['monitoring', 'setup', 'infrastructure', 'summary']

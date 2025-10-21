@@ -1,0 +1,42 @@
+apiVersion: 1
+
+datasources:
+  - name: {{ loki_datasource.name }}
+    type: {{ loki_datasource.type }}
+    access: {{ loki_datasource.access }}
+    url: {{ loki_datasource.url }}
+    isDefault: {{ loki_datasource.isDefault | lower }}
+    editable: true
+    version: 1
+    jsonData:
+      maxLines: 1000
+      derivedFields:
+        # Extract container ID from logs
+        - name: "Container ID"
+          matcherRegex: "container_id=([a-f0-9]+)"
+          url: "/explore?orgId=1&left=[\"now-1h\",\"now\",\"Loki\",{\"expr\":\"{container_id=\\\"${__value.raw}\\\"}\"}]"
+          
+        # Extract team information
+        - name: "Team Dashboard"
+          matcherRegex: "team=([a-zA-Z0-9_-]+)"
+          url: "/d/jenkins-overview-${__value.raw}/jenkins-overview-${__value.raw}-team"
+          
+        # Extract job names for build correlation
+        - name: "Job Details"
+          matcherRegex: "job=([a-zA-Z0-9_-]+)"
+          url: "/explore?orgId=1&left=[\"now-1h\",\"now\",\"Loki\",{\"expr\":\"{job=\\\"${__value.raw}\\\"}\"}]"
+          
+        # Extract error patterns
+        - name: "Error Context"
+          matcherRegex: "(?i)(error|exception|failed).*?(\\w+Error|\\w+Exception)"
+          url: "/explore?orgId=1&left=[\"now-1h\",\"now\",\"Loki\",{\"expr\":\"{} |~ \\\"${__value.raw}\\\"\"}]"
+          
+    # Alert configuration for Loki
+    alerting:
+      enabled: true
+      
+    # Log level parsing
+    logLevelField: "level"
+    
+    # Time field configuration
+    timeField: "@timestamp"

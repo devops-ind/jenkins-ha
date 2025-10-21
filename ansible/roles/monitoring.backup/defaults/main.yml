@@ -43,18 +43,6 @@ alertmanager_host: "{{ monitoring_server_address }}"
 # Deployment type detection (separate vs colocated)
 monitoring_deployment_type: "{{ 'separate' if (groups['monitoring'] is defined and groups['jenkins_masters'] is defined and groups['monitoring'][0] not in groups['jenkins_masters']) else 'colocated' }}"
 
-# Target host configuration (NEW - for unified agent deployment)
-# Unified list of ALL hosts where agents should be deployed
-monitoring_target_hosts: >-
-  {% if monitoring_deployment_type == 'separate' %}
-  {{ (groups['monitoring'] | default([]) + groups['jenkins_masters'] | default([])) | unique }}
-  {% else %}
-  {{ groups['monitoring'] | default(['localhost']) }}
-  {% endif %}
-
-# Server deployment host (single host where servers run)
-monitoring_server_host: "{{ groups['monitoring'][0] if groups['monitoring'] is defined and groups['monitoring'] | length > 0 else 'localhost' }}"
-
 # Service configuration
 prometheus_enabled: true
 prometheus_port: 9090

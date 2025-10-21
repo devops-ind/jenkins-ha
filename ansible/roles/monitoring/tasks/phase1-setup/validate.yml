@@ -1,0 +1,105 @@
+---
+# Pre-deployment Validation
+# Validates configuration before deploying monitoring stack
+
+- name: Display monitoring deployment configuration
+  debug:
+    msg: |
+      ==========================================================
+      🔍 Monitoring Deployment Configuration
+      ==========================================================
+      Deployment Type: {{ monitoring_deployment_type }}
+      Deployment Mode: {{ deployment_mode | default('local') }}
+
+      Target Hosts:
+      - Monitoring Server: {{ monitoring_server_host }}
+      - All Target Hosts: {{ monitoring_target_hosts | join(', ') }}
+
+      Components:
+      - Prometheus: {{ prometheus_enabled | default(true) }}
+      - Grafana: {{ grafana_enabled | default(true) }}
+      - Loki: {{ loki_enabled | default(true) }}
+      - Alertmanager: {{ alertmanager_enabled | default(false) }}
+
+      Agents:
+      - Node Exporter: {{ node_exporter_enabled | default(true) }}
+      - Promtail: {{ promtail_enabled | default(true) }}
+      - cAdvisor: {{ cadvisor_enabled | default(true) }}
+
+      Network Configuration:
+      - Use FQDN: {{ monitoring_use_fqdn }}
+      - Network Subnet: {{ monitoring_network_subnet }}
+
+      Teams to Monitor: {{ (jenkins_teams_config | default([]) | length) if jenkins_teams_config is defined else 0 }}
+      ==========================================================
+  tags: ['monitoring', 'setup', 'validate']
+
+- name: Validate required variables are defined
+  assert:
+    that:
+      - monitoring_home_dir is defined
+      - monitoring_user is defined
+      - monitoring_group is defined
+      - monitoring_uid is defined
+      - monitoring_gid is defined
+      - monitoring_network_name is defined
+      - monitoring_network_subnet is defined
+      - prometheus_version is defined
+      - grafana_version is defined
+      - loki_version is defined
+      - promtail_version is defined
+      - node_exporter_version is defined
+      - cadvisor_version is defined
+    fail_msg: "Required monitoring variables are not defined. Check defaults/main.yml"
+    success_msg: "✅ All required variables are defined"
+  tags: ['monitoring', 'setup', 'validate']
+
+- name: Validate monitoring_target_hosts is not empty
+  assert:
+    that:
+      - monitoring_target_hosts is defined
+      - monitoring_target_hosts | length > 0
+    fail_msg: "monitoring_target_hosts must contain at least one host"
+    success_msg: "✅ Monitoring target hosts configured: {{ monitoring_target_hosts | length }} hosts"
+  tags: ['monitoring', 'setup', 'validate']
+
+- name: Validate monitoring_server_host is defined
+  assert:
+    that:
+      - monitoring_server_host is defined
+      - monitoring_server_host | length > 0
+    fail_msg: "monitoring_server_host must be defined"
+    success_msg: "✅ Monitoring server: {{ monitoring_server_host }}"
+  tags: ['monitoring', 'setup', 'validate']
+
+- name: Check Docker is installed and running
+  community.docker.docker_host_info:
+  register: docker_info
+  failed_when: false
+  delegate_to: "{{ item }}"
+  loop: "{{ monitoring_target_hosts }}"
+  tags: ['monitoring', 'setup', 'validate', 'docker']
+
+- name: Validate Docker availability on all target hosts
+  assert:
+    that:
+      - docker_info.results | selectattr('failed', 'defined') | selectattr('failed') | list | length == 0
+    fail_msg: "Docker is not available on one or more target hosts"
+    success_msg: "✅ Docker is available on all {{ monitoring_target_hosts | length }} target hosts"
+  tags: ['monitoring', 'setup', 'validate', 'docker']
+
+- name: Display validation summary
+  debug:
+    msg: |
+      ==========================================================
+      ✅ Pre-deployment Validation Complete
+      ==========================================================
+      All validation checks passed. Ready to deploy monitoring stack.
+
+      Next Steps:
+      1. Phase 1: Setup infrastructure (users, directories, network)
+      2. Phase 2: Deploy agents to {{ monitoring_target_hosts | length }} hosts
+      3. Phase 3: Deploy servers to {{ monitoring_server_host }}
+      4. Phase 4: Configure targets, dashboards, and verification
+      ==========================================================
+  tags: ['monitoring', 'setup', 'validate', 'summary']

@@ -1,0 +1,28 @@
+---
+# Alertmanager setup tasks
+- name: Create Alertmanager configuration
+  template:
+    src: alertmanager.yml.j2
+    dest: "{{ monitoring_home_dir }}/alertmanager/alertmanager.yml"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  notify: restart alertmanager
+
+- name: Deploy Alertmanager container
+  community.docker.docker_container:
+    name: alertmanager-{{ deployment_environment | default('local') }}
+    image: "prom/alertmanager:{{ alertmanager_version }}"
+    state: started
+    restart_policy: "{{ monitoring_restart_policy }}"
+    ports:
+      - "{{ alertmanager_port }}:9093"
+    volumes:
+      - "{{ monitoring_home_dir }}/alertmanager:/etc/alertmanager"
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    networks:
+      - name: "{{ monitoring_docker_network }}"
+    user: "{{ monitoring_uid }}:{{ monitoring_gid }}"
+  when: alertmanager_enabled | default(false)

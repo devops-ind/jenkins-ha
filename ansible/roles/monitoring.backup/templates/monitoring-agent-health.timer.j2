@@ -1,0 +1,14 @@
+[Unit]
+Description=Monitoring Agent Health Check Timer
+Documentation=https://github.com/your-org/jenkins-ha
+Requires=monitoring-agent-health.service
+
+[Timer]
+# Run health check every {{ monitoring_agent_health_check_interval | default('5 minutes') }}
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=yes
+
+[Install]
+WantedBy=timers.target
