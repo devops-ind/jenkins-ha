@@ -1,37 +1,33 @@
 auth_enabled: false
 
 server:
-  http_listen_port: {{ loki_port }}
+  http_listen_port: 3100
   log_level: info
 
 common:
   path_prefix: /tmp/loki
-  storage:
-    filesystem:
-      chunks_directory: /tmp/loki/chunks
-      rules_directory: /tmp/loki/rules
   replication_factor: 1
   ring:
     instance_addr: 127.0.0.1
     kvstore:
       store: inmemory
 
-query_range:
-  results_cache:
-    cache:
-      embedded_cache:
-        enabled: true
-        max_size_mb: 100
-
 schema_config:
   configs:
-    - from: 2020-10-24
-      store: boltdb-shipper
+    - from: 2024-01-01
+      store: tsdb
       object_store: filesystem
-      schema: v11
+      schema: v13
       index:
         prefix: index_
         period: 24h
+
+storage_config:
+  tsdb_shipper:
+    active_index_directory: /tmp/loki/tsdb-index
+    cache_location: /tmp/loki/tsdb-cache
+  filesystem:
+    directory: /tmp/loki/chunks
 
 ruler:
   alertmanager_url: http://localhost:{{ alertmanager_port | default(9093) }}
@@ -39,30 +35,20 @@ ruler:
 # Retention and compaction
 limits_config:
   retention_period: {{ loki_retention }}
-  enforce_metric_name: false
   reject_old_samples: true
   reject_old_samples_max_age: 168h
   max_cache_freshness_per_query: 10m
   split_queries_by_interval: 15m
 
-# Compactor for retention
+# Compactor for retention (Loki 3.x compatible)
 compactor:
   working_directory: /tmp/loki/compactor
-  shared_store: filesystem
   compaction_interval: 10m
-  retention_enabled: {{ loki_compactor_retention_enabled | lower }}
+  retention_enabled: {{ loki_compactor_retention_enabled | default(true) | lower }}
   retention_delete_delay: 2h
   retention_delete_worker_count: 150
 
-# Chunk configuration
-chunk_store_config:
-  max_look_back_period: {{ loki_retention }}
-  chunk_cache_config:
-    embedded_cache:
-      enabled: true
-      max_size_mb: 100
-
-# Ingester configuration  
+# Ingester configuration
 ingester:
   max_chunk_age: {{ loki_max_chunk_age }}
   chunk_idle_period: {{ loki_chunk_idle_period }}
