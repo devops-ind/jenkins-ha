@@ -36,6 +36,34 @@
   tags: ['monitoring', 'always']
 
 # =============================================================================
+# VARIABLE NORMALIZATION
+# =============================================================================
+# Normalize jenkins_teams variable to support both naming conventions
+# This ensures compatibility with both jenkins_teams and jenkins_teams_config
+# Pattern follows jenkins-master-v2 role normalization logic
+
+- name: Normalize Jenkins teams configuration for monitoring
+  set_fact:
+    jenkins_teams: "{{ jenkins_teams | default(jenkins_teams_config) | default([]) }}"
+  tags: ['monitoring', 'always']
+
+- name: Display normalized teams configuration
+  debug:
+    msg: |
+      ==========================================================
+      Jenkins Teams Configuration (Normalized)
+      ==========================================================
+      Teams Count: {{ jenkins_teams | length }}
+      {% if jenkins_teams | length > 0 %}
+      Teams: {{ jenkins_teams | map(attribute='team_name') | list | join(', ') }}
+      {% else %}
+      Teams: (none configured - using base monitoring only)
+      {% endif %}
+      ==========================================================
+  tags: ['monitoring', 'always']
+  when: ansible_verbosity >= 1
+
+# =============================================================================
 # PHASE 1: SETUP AND VALIDATION
 # =============================================================================
 - name: Phase 1 - Pre-deployment Validation

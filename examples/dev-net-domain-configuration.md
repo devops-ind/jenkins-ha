@@ -689,6 +689,100 @@ ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml
 
 ---
 
+## Variable Naming Convention
+
+### `jenkins_teams_config` vs `jenkins_teams`
+
+The infrastructure uses two related but distinct variable names for team configuration:
+
+#### `jenkins_teams_config` (Inventory Variable)
+- **Location**: Inventory files (`hosts.yml`, `group_vars/all/main.yml`)
+- **Purpose**: Define team configurations in inventory
+- **Format**: List of team objects with full configuration
+- **Used in**: Production and local inventories
+
+**Example**:
+```yaml
+# ansible/inventories/production/group_vars/all/main.yml
+jenkins_teams_config:
+  - team_name: "devops"
+    blue_green_enabled: true
+    active_environment: "green"
+    ports:
+      web: 8080
+      agent: 50000
+```
+
+#### `jenkins_teams` (Role Variable)
+- **Location**: Roles (monitoring, jenkins-master-v2)
+- **Purpose**: Normalized team data passed to roles
+- **Format**: Same list format, but filtered/processed
+- **Used in**: Template rendering, role logic
+
+**Mapping Flow**:
+```
+Inventory                site.yml pre_tasks         Role
+---------                ------------------         ----
+jenkins_teams_config  →  Filter/process teams  →  jenkins_teams
+```
+
+#### Role Normalization Pattern
+
+Both `jenkins-master-v2` and `monitoring` roles normalize variables to handle both naming conventions:
+
+**jenkins-master-v2 Pattern** (`tasks/main.yml:18`):
+```yaml
+- name: Determine deployment configuration
+  set_fact:
+    jenkins_teams_config: "{{ jenkins_teams_config | default(jenkins_teams) | default([jenkins_master_config]) }}"
+```
+
+**monitoring Role Pattern** (`tasks/main.yml:47`):
+```yaml
+- name: Normalize Jenkins teams configuration for monitoring
+  set_fact:
+    jenkins_teams: "{{ jenkins_teams | default(jenkins_teams_config) | default([]) }}"
+```
+
+#### Why Two Variables?
+
+1. **Separation of Concerns**: Inventory defines configuration (`jenkins_teams_config`), roles consume normalized data (`jenkins_teams`)
+2. **Filtering**: `site.yml` can filter teams before passing to roles
+3. **Backward Compatibility**: Supports both direct and filtered team configurations
+4. **Role Independence**: Roles work standalone or as part of full playbook
+
+#### Best Practices
+
+1. **In Inventory Files**: Always use `jenkins_teams_config`
+   - Production: `ansible/inventories/production/group_vars/all/main.yml`
+   - Local: `ansible/inventories/local/group_vars/all/main.yml`
+
+2. **In Roles**: Always normalize at the start of `tasks/main.yml`
+   - Monitoring role: `jenkins_teams | default(jenkins_teams_config) | default([])`
+   - Jenkins role: `jenkins_teams_config | default(jenkins_teams) | default([...])`
+
+3. **In Templates**: Use `jenkins_teams` with safe defaults
+   ```jinja2
+   {% for team in jenkins_teams | default([]) %}
+     # Team configuration for {{ team.team_name }}
+   {% endfor %}
+   ```
+
+4. **In site.yml**: Filter `jenkins_teams_config`, pass as `jenkins_teams`
+   ```yaml
+   pre_tasks:
+     - name: Prepare teams for monitoring
+       set_fact:
+         jenkins_teams_for_monitoring: "{{ jenkins_teams_config | default([]) }}"
+
+   roles:
+     - role: monitoring
+       vars:
+         jenkins_teams: "{{ jenkins_teams_for_monitoring }}"
+   ```
+
+---
+
 ## References
 
 - **Inventory**: `ansible/inventories/production/hosts.yml`
@@ -696,3 +790,6 @@ ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml
 - **SSL Template**: `ansible/roles/high-availability-v2/tasks/ssl-certificates.yml`
 - **HAProxy Template**: `ansible/roles/high-availability-v2/templates/haproxy.cfg.j2`
 - **Main Documentation**: `CLAUDE.md`
+- **Variable Normalization**:
+  - `ansible/roles/monitoring/tasks/main.yml` (line 47)
+  - `ansible/roles/jenkins-master-v2/tasks/main.yml` (line 18)
