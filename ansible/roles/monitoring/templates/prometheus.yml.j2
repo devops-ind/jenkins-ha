@@ -18,6 +18,8 @@ alerting:
     - static_configs:
         - targets:
           - {{ alertmanager_host }}:{{ alertmanager_port }}
+{% else %}
+  alertmanagers: []
 {% endif %}
 
 scrape_configs:
@@ -116,6 +118,7 @@ scrape_configs:
       - source_labels: [__name__]
         target_label: deployment_mode
         replacement: '{{ deployment_mode | default("local") }}'
+{% if jenkins_teams | default([]) | length > 0 %}
       # Filter Jenkins container metrics by team
 {% for team in jenkins_teams | default([]) %}
       - source_labels: [container_label_com_docker_compose_service]
@@ -123,6 +126,7 @@ scrape_configs:
         target_label: jenkins_team
         replacement: '{{ team.team_name }}'
 {% endfor %}
+{% endif %}
 {% endif %}
 
 # ======================================================
@@ -138,8 +142,10 @@ scrape_configs:
     metrics_path: /metrics
     # Filter for agent containers only
     params:
-      'match[]': ['container_cpu_usage_seconds_total{container_label_com_docker_compose_service=~"jenkins-agent-.*"}']
+      match[]:
+        - 'container_cpu_usage_seconds_total{container_label_com_docker_compose_service=~"jenkins-agent-.*"}'
     metric_relabel_configs:
+{% if jenkins_teams | default([]) | length > 0 %}
       # Extract team from agent container names
 {% for team in jenkins_teams | default([]) %}
       - source_labels: [container_label_com_docker_compose_service]
@@ -151,6 +157,7 @@ scrape_configs:
         target_label: agent_type
         replacement: '${1}'
 {% endfor %}
+{% endif %}
       # Add deployment mode for consistency
       - source_labels: [__name__]
         target_label: deployment_mode
