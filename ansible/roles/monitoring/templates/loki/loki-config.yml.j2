@@ -64,6 +64,24 @@ ingester:
     enabled: true
     dir: /tmp/loki/wal
 
+# Ruler configuration for alerting
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /tmp/loki/rules
+  rule_path: /tmp/loki/rules-temp
+  {% if alertmanager_enabled | default(false) %}
+  alertmanager_url: http://{{ alertmanager_host }}:{{ alertmanager_port }}
+  {% endif %}
+  ring:
+    kvstore:
+      store: inmemory
+  enable_api: true
+  enable_alertmanager_v2: true
+  evaluation_interval: 1m
+  poll_interval: 1m
+
 # Analytics
 analytics:
   reporting_enabled: false

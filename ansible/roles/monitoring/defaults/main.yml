@@ -181,6 +181,19 @@ grafana_dashboards:
     template_file: "jenkins-advanced-overview.json"
     team_specific: true  # Generate per-team versions
 
+  jenkins-build-logs:
+    category: enhanced
+    enabled: true
+    title: "Jenkins Build Logs"
+    description: "Comprehensive Jenkins build log analysis with Loki - 24 panels covering success rates, errors, durations, and team comparisons"
+    refresh_interval: "30s"
+    time_range: "24h"
+    priority: 13
+    template_file: "jenkins-build-logs.json.j2"
+    team_specific: true  # Generate per-team versions
+    datasource: "loki"  # Primary datasource for this dashboard
+    tags: ["jenkins", "loki", "builds", "ci-cd", "logs"]
+
 # Dashboard deployment controls
 dashboard_deployment:
   core_enabled: true

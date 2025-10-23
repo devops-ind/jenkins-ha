@@ -224,4 +224,47 @@ scrape_configs:
                 expression: '^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3}\s+(?P<log_level>[A-Z]+)\s+(?P<message>.*)$'
             - labels:
                 log_level:
+      # Extract build result (SUCCESS, FAILURE, UNSTABLE, ABORTED)
+      - regex:
+          expression: '^.*Finished:\s+(?P<build_result>SUCCESS|FAILURE|UNSTABLE|ABORTED).*$'
+      - labels:
+          build_result:
+      # Extract build duration (convert to seconds for metrics)
+      - regex:
+          expression: 'Duration:\s+(?:(?P<hours>\d+)\s*hr\s*)?(?:(?P<minutes>\d+)\s*min\s*)?(?:(?P<seconds>\d+)\s*sec)?'
+      - template:
+          source: duration_seconds
+          template: {% raw %}'{{ if .hours }}{{ mul .hours 3600 }}{{ else }}0{{ end }}{{ if .minutes }}{{ add (mul .minutes 60) }}{{ else }}{{ end }}{{ if .seconds }}{{ add .seconds }}{{ else }}{{ end }}'{% endraw %}
+      - labels:
+          duration_seconds:
+      # Extract error messages for failed builds
+      - match:
+          selector: '{job="jenkins-job-logs", build_result="FAILURE"}'
+          stages:
+            - regex:
+                expression: '(?i)(?P<error_type>ERROR|EXCEPTION|FATAL|BUILD\s+FAIL)'
+            - labels:
+                error_type:
+      # Generate Prometheus metrics from logs
+      - metrics:
+          jenkins_build_logs_total:
+            type: Counter
+            description: "Total Jenkins builds processed from logs"
+            source: build_result
+            config:
+              action: inc
+              match_all: true
+          jenkins_build_duration_seconds:
+            type: Histogram
+            description: "Jenkins build duration in seconds from logs"
+            source: duration_seconds
+            config:
+              buckets: [60, 300, 600, 1800, 3600, 7200]
+          jenkins_build_errors_total:
+            type: Counter
+            description: "Total errors detected in Jenkins build logs"
+            source: error_type
+            config:
+              action: inc
+              match_all: true
 {% endif %}

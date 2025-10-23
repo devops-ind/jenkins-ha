@@ -11,6 +11,26 @@ route:
 
   routes:
 {% if teams_notifications_enabled | default(true) %}
+    # Jenkins build failure alerts (immediate notification)
+    - match:
+        alert_type: build_failure
+      receiver: 'jenkins-build-failures'
+      group_by: ['team', 'job_name']
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 1h
+      continue: false
+
+    # Jenkins error rate alerts
+    - match:
+        alert_type: error_rate
+      receiver: 'jenkins-errors'
+      group_by: ['team', 'job_name']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      continue: false
+
     # Severity-based routing
     - match:
         severity: critical
@@ -46,6 +66,53 @@ route:
 
 # Receiver definitions
 receivers:
+  # Jenkins build failure receiver
+  - name: 'jenkins-build-failures'
+{% if teams_webhook_warning %}
+    msteams_configs:
+      - webhook_url: '{{ teams_webhook_warning }}'
+        send_resolved: true
+        title: '❌ Jenkins Build Failed'
+        text: |
+          **Job:** {{ '{{' }} .CommonLabels.job_name {{ '}}' }}
+          **Build Number:** {{ '{{' }} .CommonLabels.build_number {{ '}}' }}
+          **Team:** {{ '{{' }} .CommonLabels.team | title {{ '}}' }}
+          **Environment:** {{ '{{' }} .CommonLabels.environment {{ '}}' }}
+
+          **Summary:** {{ '{{' }} .CommonAnnotations.summary {{ '}}' }}
+          **Description:** {{ '{{' }} .CommonAnnotations.description {{ '}}' }}
+
+          **Jenkins Console:** {{ '{{' }} .CommonAnnotations.jenkins_url {{ '}}' }}
+          **Grafana Logs:** {{ '{{' }} .CommonAnnotations.dashboard_url {{ '}}' }}
+
+          **Time:** {{ '{{' }} .CommonAnnotations.timestamp | default "now" {{ '}}' }}
+{% else %}
+    webhook_configs:
+      - url: 'http://localhost:5001/webhook'
+        send_resolved: true
+{% endif %}
+
+  # Jenkins error rate receiver
+  - name: 'jenkins-errors'
+{% if teams_webhook_warning %}
+    msteams_configs:
+      - webhook_url: '{{ teams_webhook_warning }}'
+        send_resolved: true
+        title: '⚠️ High Error Rate in Jenkins Build'
+        text: |
+          **Job:** {{ '{{' }} .CommonLabels.job_name {{ '}}' }}
+          **Team:** {{ '{{' }} .CommonLabels.team | title {{ '}}' }}
+
+          **Summary:** {{ '{{' }} .CommonAnnotations.summary {{ '}}' }}
+          **Description:** {{ '{{' }} .CommonAnnotations.description {{ '}}' }}
+
+          **Dashboard:** {{ '{{' }} .CommonAnnotations.dashboard_url {{ '}}' }}
+{% else %}
+    webhook_configs:
+      - url: 'http://localhost:5001/webhook'
+        send_resolved: true
+{% endif %}
+
   # Default receiver
   - name: 'default-teams'
 {% if teams_notifications_enabled | default(true) and teams_webhook_info %}

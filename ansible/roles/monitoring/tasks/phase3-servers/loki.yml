@@ -11,7 +11,7 @@
     mode: '0644'
   notify: restart loki
 
-- name: Create TSDB directories for Loki
+- name: Create TSDB and rules directories for Loki
   file:
     path: "{{ item }}"
     state: directory
@@ -24,6 +24,17 @@
     - "{{ monitoring_home_dir }}/loki/chunks"
     - "{{ monitoring_home_dir }}/loki/compactor"
     - "{{ monitoring_home_dir }}/loki/wal"
+    - "{{ monitoring_home_dir }}/loki/rules"
+    - "{{ monitoring_home_dir }}/loki/rules-temp"
+
+- name: Deploy Loki alerting rules
+  template:
+    src: loki/loki-alerting-rules.yml.j2
+    dest: "{{ monitoring_home_dir }}/loki/rules/jenkins.yml"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  notify: restart loki
 
 - name: Deploy Loki container
   community.docker.docker_container:
@@ -41,6 +52,8 @@
       - "{{ monitoring_home_dir }}/loki/chunks:/tmp/loki/chunks"
       - "{{ monitoring_home_dir }}/loki/compactor:/tmp/loki/compactor"
       - "{{ monitoring_home_dir }}/loki/wal:/tmp/loki/wal"
+      - "{{ monitoring_home_dir }}/loki/rules:/tmp/loki/rules:ro"
+      - "{{ monitoring_home_dir }}/loki/rules-temp:/tmp/loki/rules-temp"
     command: ["-config.file=/etc/loki/loki-config.yml"]
     networks:
       - name: "{{ monitoring_docker_network }}"
