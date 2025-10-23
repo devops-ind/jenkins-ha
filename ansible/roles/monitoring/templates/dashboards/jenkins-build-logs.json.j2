@@ -37,7 +37,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "${DS_LOKI:0}"
       },
       "fieldConfig": {
         "defaults": {
@@ -86,7 +86,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "count_over_time({job=\"jenkins-job-logs\", team=~\"$team\"}[24h])",
@@ -100,7 +100,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "${DS_LOKI:0}"
       },
       "fieldConfig": {
         "defaults": {
@@ -158,7 +158,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "(sum(count_over_time({job=\"jenkins-job-logs\", team=~\"$team\"} |= \"Finished: SUCCESS\" [24h])) / sum(count_over_time({job=\"jenkins-job-logs\", team=~\"$team\"}[24h]))) * 100",
@@ -172,7 +172,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "${DS_LOKI:0}"
       },
       "fieldConfig": {
         "defaults": {
@@ -229,7 +229,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "count_over_time({job=\"jenkins-job-logs\", team=~\"$team\"} |= \"Finished: FAILURE\" [24h])",
@@ -243,7 +243,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "${DS_LOKI:0}"
       },
       "fieldConfig": {
         "defaults": {
@@ -300,7 +300,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "avg(avg_over_time({job=\"jenkins-job-logs\", team=~\"$team\"} | regexp \"Duration: (?:(?P<hours>\\\\d+) hr )?(?P<minutes>\\\\d+) min\" | unwrap minutes [24h]))",
@@ -327,7 +327,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "${DS_LOKI:0}"
       },
       "fieldConfig": {
         "defaults": {
@@ -433,7 +433,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "sum(rate({job=\"jenkins-job-logs\", team=~\"$team\"} |= \"Finished: SUCCESS\" [5m])) by (team)",
@@ -444,7 +444,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "sum(rate({job=\"jenkins-job-logs\", team=~\"$team\"} |= \"Finished: FAILURE\" [5m])) by (team)",
@@ -460,7 +460,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "${DS_LOKI:0}"
       },
       "fieldConfig": {
         "defaults": {
@@ -533,7 +533,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "sum(count_over_time({job=\"jenkins-job-logs\"} [24h])) by (team)",
@@ -560,7 +560,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "${DS_LOKI:0}"
       },
       "fieldConfig": {
         "defaults": {
@@ -637,7 +637,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "topk(10, sum(count_over_time({job=\"jenkins-job-logs\", team=~\"$team\"} |= \"Finished: FAILURE\" [24h])) by (job_name))",
@@ -661,7 +661,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "${DS_LOKI:0}"
       },
       "fieldConfig": {
         "defaults": {
@@ -740,7 +740,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "topk(10, avg(avg_over_time({job=\"jenkins-job-logs\", team=~\"$team\"} | regexp \"Duration: (?:(?P<hours>\\\\d+) hr )?(?P<minutes>\\\\d+) min\" | unwrap minutes [24h])) by (job_name))",
@@ -764,7 +764,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "${DS_LOKI:0}"
       },
       "fieldConfig": {
         "defaults": {
@@ -828,7 +828,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "count_over_time({job=\"jenkins-job-logs\", team=~\"$team\"} [1h]) by (job_name)",
@@ -855,7 +855,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "${DS_LOKI:0}"
       },
       "fieldConfig": {
         "defaults": {
@@ -934,7 +934,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "sum(rate({job=\"jenkins-job-logs\"} |~ \"(?i)(error|exception|fatal)\" [5m])) by (team)",
@@ -948,7 +948,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "${DS_LOKI:0}"
       },
       "fieldConfig": {
         "defaults": {
@@ -999,7 +999,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "topk(20, sum(count_over_time({job=\"jenkins-job-logs\", team=~\"$team\"} |~ \"(?i)(error|exception|failed|fatal)\" [24h])))",
@@ -1036,7 +1036,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "${DS_LOKI:0}"
       },
       "gridPos": {
         "h": 10,
@@ -1059,7 +1059,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "{job=\"jenkins-job-logs\", team=~\"$team\"} |= \"Finished: FAILURE\"",
@@ -1073,7 +1073,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "${DS_LOKI:0}"
       },
       "gridPos": {
         "h": 10,
@@ -1096,7 +1096,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "{job=\"jenkins-job-logs\"} |~ \"(?i)(error|exception|fatal)\"",
@@ -1123,7 +1123,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "${DS_LOKI:0}"
       },
       "fieldConfig": {
         "defaults": {
@@ -1184,7 +1184,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "(sum(count_over_time({job=\"jenkins-job-logs\"} |= \"Finished: SUCCESS\" [24h])) by (team) / sum(count_over_time({job=\"jenkins-job-logs\"} [24h])) by (team)) * 100",
@@ -1198,7 +1198,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "${DS_LOKI:0}"
       },
       "fieldConfig": {
         "defaults": {
@@ -1271,7 +1271,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "sum(count_over_time({job=\"jenkins-job-logs\"} [24h])) by (team, environment)",
@@ -1285,7 +1285,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "${DS_LOKI:0}"
       },
       "fieldConfig": {
         "defaults": {
@@ -1364,7 +1364,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "sum(count_over_time({job=\"jenkins-job-logs\"} |~ \"(?i)(error|exception)\" [5m])) by (team)",
@@ -1391,7 +1391,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "${DS_LOKI:0}"
       },
       "gridPos": {
         "h": 10,
@@ -1414,7 +1414,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "${DS_LOKI:0}"
           },
           "editorMode": "code",
           "expr": "{job=\"jenkins-job-logs\", team=~\"$team\", environment=~\"$environment\"} |= \"$search_query\"",
@@ -1466,7 +1466,7 @@
         },
         "datasource": {
           "type": "loki",
-          "uid": "${DS_LOKI}"
+          "uid": "${DS_LOKI:0}"
         },
         "definition": "label_values(team)",
         "hide": 0,
@@ -1499,7 +1499,7 @@
         },
         "datasource": {
           "type": "loki",
-          "uid": "${DS_LOKI}"
+          "uid": "${DS_LOKI:0}"
         },
         "definition": "label_values(environment)",
         "hide": 0,
@@ -1548,8 +1548,8 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Jenkins Build Logs{% if team_specific is defined and team_specific %} - {{ team_name | title }} Team{% endif %}",
-  "uid": "jenkins-build-logs{% if team_specific is defined and team_specific %}-{{ team_name }}{% endif %}",
+  "title": "Jenkins Build Logs{% if team_specific is defined and team_specific and team_name is defined %} - {{ team_name | title }} Team{% endif %}",
+  "uid": "jenkins-build-logs{% if team_specific is defined and team_specific and team_name is defined %}-{{ team_name }}{% endif %}",
   "version": 1,
   "weekStart": ""
 }
