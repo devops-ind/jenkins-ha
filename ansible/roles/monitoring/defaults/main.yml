@@ -74,6 +74,20 @@ grafana_disable_gravatar: true
 # Dashboard update behavior: always, skip_existing, update_only
 dashboard_update_mode: "always"
 
+# GitHub Enterprise Datasource Configuration
+github_enterprise_enabled: true
+github_enterprise_url: "{{ vault_github_enterprise_url | default('https://github.yourcompany.com') }}"
+github_enterprise_org: "{{ vault_github_enterprise_org | default('') }}"
+github_enterprise_repos: "{{ vault_github_enterprise_repos | default([]) }}"
+github_enterprise_token: "{{ vault_github_enterprise_token | default('') }}"
+
+# Jira Cloud Datasource Configuration
+jira_cloud_enabled: true
+jira_cloud_url: "{{ vault_jira_cloud_url | default('https://company.atlassian.net') }}"
+jira_cloud_email: "{{ vault_jira_cloud_email | default('') }}"
+jira_cloud_projects: "{{ vault_jira_cloud_projects | default([]) }}"
+jira_cloud_token: "{{ vault_jira_cloud_token | default('') }}"
+
 # Enhanced dashboard configuration
 jenkins_enhanced_dashboards_enabled: true
 
@@ -193,6 +207,19 @@ grafana_dashboards:
     team_specific: true  # Generate per-team versions
     datasource: "loki"  # Primary datasource for this dashboard
     tags: ["jenkins", "loki", "builds", "ci-cd", "logs"]
+
+  github-jira-metrics:
+    category: enhanced
+    enabled: true
+    title: "GitHub & Jira Metrics"
+    description: "Repository activity, PR metrics, sprint progress, and issue tracking - correlates code and project management data"
+    refresh_interval: "5m"
+    time_range: "30d"
+    priority: 14
+    template_file: "github-jira-metrics.json.j2"
+    team_specific: false  # Global dashboard - monitors all repos and projects
+    datasources: ["github-enterprise", "jira-cloud"]  # Multiple datasources
+    tags: ["github", "jira", "ci-cd", "devops", "metrics"]
 
 # Dashboard deployment controls
 dashboard_deployment:

@@ -703,11 +703,52 @@ count(count_over_time({job="jenkins-job-logs"} [24h])) by (team, job_name)
 
 ---
 
+## Troubleshooting: Datasource Issues
+
+### Issue: Undefined DS_LOKI Variable
+
+**Symptom**: Dashboard fails to load or shows "Datasource not found" error for panels.
+
+**Root Cause**: Dashboard JSON was using incorrect datasource UID format `${DS_LOKI}` which Grafana's templating system couldn't properly resolve.
+
+### Solution Applied (October 23, 2025)
+
+**Fix**: Updated all 37 datasource references in `jenkins-build-logs.json.j2` from:
+```json
+"datasource": {
+  "type": "loki",
+  "uid": "${DS_LOKI}"
+}
+```
+
+To:
+```json
+"datasource": {
+  "type": "loki",
+  "uid": "${DS_LOKI:0}"
+}
+```
+
+**Why This Works**:
+- The `:0` index tells Grafana to use the first (or only) datasource with the `DS_LOKI` variable name
+- This is the proper Grafana templating syntax for datasource variable resolution
+- Ensures compatibility with Grafana's datasource provisioning system
+
+**Verification**:
+- ansible-playbook --syntax-check: PASSED
+- All 37 datasource references updated (panel datasources + target datasources + variables)
+- Dashboard structure preserved (24 panels, all variables intact)
+
+**Impact**: Dashboard now properly resolves the Loki datasource and all panels can execute LogQL queries against it.
+
+---
+
 ## References
 
 - **Loki Documentation**: https://grafana.com/docs/loki/latest/
 - **LogQL Query Language**: https://grafana.com/docs/loki/latest/query/
 - **Grafana Dashboards**: https://grafana.com/grafana/dashboards/
+- **Grafana Templating**: https://grafana.com/docs/grafana/latest/dashboards/variables/
 - **Promtail Configuration**: https://grafana.com/docs/loki/latest/send-data/promtail/
 - **Alerting Rules**: https://grafana.com/docs/loki/latest/alert/
 - **Prometheus Integration**: https://prometheus.io/docs/alerting/latest/

@@ -35,6 +35,7 @@ This is a production-grade Jenkins infrastructure with **Blue-Green Deployment**
 - **🌐 FQDN Infrastructure Addressing**: Complete FQDN support for monitoring infrastructure with toggle-based migration. Smart addressing hierarchy (monitoring_fqdn → host_fqdn → IP fallback), DNS-based service discovery, HA/failover support, network flexibility. Backward compatible with seamless IP-to-FQDN migration. Affects all internal communication: Prometheus targets, Promtail Loki URLs, cross-VM agent addresses, health checks. Zero-downtime migration with rollback support
 - **🔧 Cross-VM Monitoring Fix**: Fixed critical network communication issues between monitoring agents and servers across VMs. All agents (Node Exporter, Promtail, cAdvisor) now use `network_mode: host` for cross-VM connectivity. Prometheus target generation reordered to execute BEFORE template rendering. Template updated to include cross-VM targets with role labels. Comprehensive troubleshooting guide with health check scripts, verification procedures, and migration paths
 - **♻️ Monitoring Role Refactoring v2.0**: **NEW** - Complete architectural refactoring with phase-based organization. **67% reduction in main.yml** (489→161 lines), **40% elimination of code duplication** (unified agent deployment), clear server/agent separation across 4 phases. Multi-host deployment capability (`monitoring:jenkins_masters`), single deployment path per agent, improved maintainability and testability. Follows HAProxy/Jenkins role patterns with import_tasks orchestration. Production-ready with comprehensive refactoring guide
+- **🔌 GitHub & Jira Integration**: GitHub Enterprise datasource for repository metrics, PR tracking, and workflow status; Jira Cloud datasource for sprint management and issue tracking; Auto-provisioned with secure vault credential management; Pre-built 10-panel dashboard correlating code and project management data; Full JQL query support for custom Jira metrics
 
 ## Key Commands
 
@@ -717,6 +718,134 @@ scripts/ha-setup.sh production full
 scripts/disaster-recovery.sh production --validate
 ```
 
+### Grafana Plugin Management Commands (NEW)
+
+#### Install & Verify Plugins
+
+```bash
+# Deploy Grafana with GitHub and Jira plugins
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring
+
+# Verify plugins are installed
+docker exec grafana-production grafana-cli plugin ls
+
+# Expected output:
+# grafana-github-datasource @ 1.3.9 (grafana-plugin)
+# grafana-jira-datasource @ 1.x.x (grafana-plugin)
+
+# Check Grafana logs for plugin loading
+docker logs grafana-production | grep -i plugin
+
+# Verify datasources provisioned
+curl -u admin:password http://localhost:9300/api/datasources | jq '.[] | {name, type, uid}'
+```
+
+#### GitHub Enterprise Datasource Configuration
+
+```bash
+# Test GitHub Enterprise API connectivity
+curl -H "Authorization: token {{ vault_github_enterprise_token }}" \
+  https://{{ vault_github_enterprise_url }}/api/v3/user/repos | jq '.[] | {name, full_name, default_branch}' | head -n 10
+
+# Verify GitHub datasource in Grafana
+curl -u admin:password http://localhost:9300/api/datasources/uid/github-enterprise | jq '.{name, type, access, jsonData}'
+
+# Test GitHub datasource query
+curl -u admin:password http://localhost:9300/api/datasources/uid/github-enterprise/health
+```
+
+#### Jira Cloud Datasource Configuration
+
+```bash
+# Test Jira Cloud API connectivity
+curl -u {{ vault_jira_cloud_email }}:{{ vault_jira_cloud_token }} \
+  https://{{ vault_jira_cloud_url }}/rest/api/3/myself | jq '{displayName, emailAddress, accountType}'
+
+# Verify Jira datasource in Grafana
+curl -u admin:password http://localhost:9300/api/datasources/uid/jira-cloud | jq '.{name, type, access, jsonData}'
+
+# Test Jira datasource query
+curl -u admin:password http://localhost:9300/api/datasources/uid/jira-cloud/health
+
+# Query Jira issues via API (test JQL)
+curl -u {{ vault_jira_cloud_email }}:{{ vault_jira_cloud_token }} \
+  "https://{{ vault_jira_cloud_url }}/rest/api/3/search?jql=project%20in%20(DEVOPS)%20AND%20status%20%3D%20Done&maxResults=5" | jq '.issues[] | {key, summary, status}'
+```
+
+#### Dashboard Access
+
+```bash
+# Access GitHub & Jira Metrics dashboard
+# http://localhost:9300/d/github-jira-metrics/github-jira-metrics
+
+# Verify dashboard loaded (API check)
+curl -u admin:password http://localhost:9300/api/dashboards/uid/github-jira-metrics | jq '.dashboard | {title, panels: (.panels | length), refresh}'
+```
+
+#### Plugin Updates
+
+```bash
+# Update plugins to latest versions
+# Option 1: Via environment variable (requires container restart)
+# Edit GF_INSTALL_PLUGINS in ansible/roles/monitoring/tasks/phase3-servers/grafana.yml
+# Change to: "grafana-github-datasource@latest,grafana-jira-datasource@latest"
+
+# Then redeploy
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring
+
+# Option 2: Manual update via CLI
+docker exec grafana-production grafana-cli plugin update grafana-github-datasource
+docker exec grafana-production grafana-cli plugin update grafana-jira-datasource
+docker restart grafana-production
+
+# Option 3: Specific version update
+docker exec grafana-production grafana-cli plugin install grafana-github-datasource 1.3.9
+docker restart grafana-production
+```
+
+#### Troubleshooting Plugins
+
+```bash
+# View all Grafana container configuration
+docker inspect grafana-production | grep -A 20 '"Env"'
+
+# Check if GF_INSTALL_PLUGINS environment variable is set
+docker exec grafana-production printenv | grep GF_INSTALL_PLUGINS
+
+# View plugin installation logs (during container startup)
+docker logs grafana-production | head -n 100
+
+# Check plugin directory
+docker exec grafana-production ls -la /var/lib/grafana/plugins/
+
+# Check plugin configuration
+docker exec grafana-production cat /etc/grafana/provisioning/plugins/plugins.yml
+
+# Check datasource provisioning status
+docker exec grafana-production cat /etc/grafana/provisioning/datasources/github-datasource.yml
+docker exec grafana-production cat /etc/grafana/provisioning/datasources/jira-datasource.yml
+
+# View Grafana database logs (plugin records)
+docker exec grafana-production tail -f /var/log/grafana/grafana.log | grep -i plugin
+
+# Force Grafana to reload provisioned datasources
+docker restart grafana-production
+```
+
+#### Documentation
+
+```bash
+# View comprehensive plugin integration guide
+cat examples/github-jira-datasource-integration.md
+
+# View vault credentials (requires vault password)
+ansible-vault view ansible/inventories/production/group_vars/all/vault.yml | grep -E 'github_enterprise|jira_cloud'
+```
+
+---
+
 ## Architecture Overview
 
 ### Core Infrastructure Components
@@ -748,7 +877,7 @@ scripts/disaster-recovery.sh production --validate
 - `shared-storage`: **ENHANCED** Multi-backend storage (local/NFS/GlusterFS) with team-based volume mounting, automatic failover configuration, and smart data sharing integration
 - `jenkins-master-v2`: **OPTIMIZED** Unified Jenkins deployment with single configuration per team, **resource-optimized blue-green deployment** (active-only containers), production-safe DSL architecture, 55% code reduction (4 files vs 13 files), and **SEPARATED DATA OPERATIONS** with dedicated backup daemons and Ansible-native sync
 - `high-availability-v2`: **ENHANCED** Advanced HA configuration with perfect jenkins-master-v2 compatibility, dynamic team discovery, resource-optimized blue-green deployment, and **NEW** dynamic SSL certificate generation based on `jenkins_teams`
-- `monitoring`: Enhanced Prometheus/Grafana stack with 26-panel dashboards, DORA metrics, SLI tracking, and automated alerting
+- `monitoring`: Enhanced Prometheus/Grafana stack with GitHub/Jira datasources, 26+ panel dashboards, DORA metrics, SLI tracking, and automated alerting
 - `security`: **REFACTORED** System hardening and compliance validation (SSL generation moved to high-availability-v2 for better separation of concerns)
 - `common`: System bootstrap with pre-deployment validation framework
 

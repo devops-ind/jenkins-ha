@@ -1,0 +1,61 @@
+apiVersion: 1
+
+# GitHub Enterprise Datasource Provisioning
+# Provides access to GitHub repositories, issues, pull requests, and workflows
+# Reference: https://grafana.com/grafana/plugins/grafana-github-datasource/
+
+datasources:
+  - name: GitHub Enterprise
+    type: grafana-github-datasource
+    uid: github-enterprise
+    access: proxy
+    orgId: 1
+    isDefault: false
+    editable: true
+    jsonData:
+      # GitHub Enterprise URL (must be accessible from Grafana container)
+      githubUrl: "{{ github_enterprise_url }}"
+
+      # Organization/User to query (can be overridden in individual dashboard queries)
+      organization: "{{ github_enterprise_org | default('') }}"
+
+      # Optional: Repository patterns to allow querying
+      # Examples: ["my-org/my-repo", "my-org/api-*", "*/public-*"]
+      repositories: {{ github_enterprise_repos | default([]) | to_json }}
+
+      # Cache settings for API responses
+      cacheTimeInSeconds: 300  # Cache GitHub API responses for 5 minutes
+
+      # Rate limit configuration
+      # GitHub has rate limits - this helps respect them
+      requestTimeout: 30
+
+    # Store GitHub Personal Access Token securely
+    secureJsonData:
+      # Token must have appropriate scopes:
+      # - repo: Full control of private repositories
+      # - read:org: Read organization info
+      # - workflow: Access GitHub Actions workflows
+      accessToken: "{{ github_enterprise_token }}"
+
+    version: 1
+
+# Optional: Additional GitHub datasource for public GitHub.com (if needed)
+# Uncomment to enable querying public GitHub repositories alongside Enterprise
+#
+#  - name: GitHub Public
+#    type: grafana-github-datasource
+#    uid: github-public
+#    access: proxy
+#    orgId: 1
+#    isDefault: false
+#    editable: true
+#    jsonData:
+#      githubUrl: "https://github.com"
+#      organization: "{{ github_public_org | default('') }}"
+#      repositories: {{ github_public_repos | default([]) | to_json }}
+#      cacheTimeInSeconds: 300
+#      requestTimeout: 30
+#    secureJsonData:
+#      accessToken: "{{ github_public_token | default('') }}"
+#    version: 1
