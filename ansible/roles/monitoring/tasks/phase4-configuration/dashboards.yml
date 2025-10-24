@@ -50,17 +50,31 @@
   tags: ['monitoring', 'dashboards', 'datasources']
 
 # Generate dashboard list for API operations (using centralized config)
+# Includes both global and team-specific dashboards with proper file paths
 - name: Generate API dashboard list from centralized configuration
   set_fact:
     api_dashboard_list: |
       [
       {% for dashboard_id, config in grafana_dashboards.items() %}
       {% if config.enabled and ((config.category == 'core' and dashboard_deployment.core_enabled) or (config.category == 'enhanced' and dashboard_deployment.enhanced_enabled)) %}
+        {% if config.team_specific | default(false) %}
+          {% for team in jenkins_teams_config | default(jenkins_teams) %}
+        {
+          "name": "{{ dashboard_id }}-{{ team.team_name }}",
+          "title": "{{ config.title }} - {{ team.team_name | title }} Team - {{ deployment_mode | default('local') | title }}",
+          "template_file": "{{ config.template_file }}",
+          "file_path": "teams/{{ team.team_name }}/{{ dashboard_id }}-{{ team.team_name }}.json",
+          "team_name": "{{ team.team_name }}"
+        },
+          {% endfor %}
+        {% else %}
         {
           "name": "{{ dashboard_id }}",
           "title": "{{ config.title }} - {{ deployment_mode | default('local') | title }}",
-          "template_file": "{{ config.template_file }}"
+          "template_file": "{{ config.template_file }}",
+          "file_path": "{{ config.template_file }}"
         },
+        {% endif %}
       {% endif %}
       {% endfor %}
       ]
@@ -103,11 +117,11 @@
 
 - name: Read dashboard files for API deployment
   slurp:
-    src: "{{ monitoring_home_dir }}/grafana/dashboards/{{ item.template_file }}"
+    src: "{{ monitoring_home_dir }}/grafana/dashboards/{{ item.file_path | default(item.template_file) }}"
   register: dashboard_content
   loop: "{{ sorted_api_dashboards }}"
   loop_control:
-    label: "{{ item.name }}"
+    label: "{{ item.name }} ({{ item.file_path | default(item.template_file) }})"
   tags: ['monitoring', 'dashboards']
 
 - name: Validate dashboard JSON structure before API deployment
