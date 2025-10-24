@@ -21,6 +21,7 @@
   "id": null,
   "links": [],
   "panels": [
+    {% raw %}
     {
       "collapsed": false,
       "gridPos": {
@@ -1425,6 +1426,7 @@
       "title": "Filtered Build Logs (Use variables above)",
       "type": "logs"
     }
+    {% endraw %}
   ],
   "refresh": "30s",
   "schemaVersion": 39,
@@ -1436,7 +1438,7 @@
   ],
   "templating": {
     "list": [
-      {
+      {% raw %}{
         "current": {
           "selected": false,
           "text": "Loki",
@@ -1539,7 +1541,7 @@
         "query": "",
         "skipUrlSync": false,
         "type": "textbox"
-      }
+      }{% endraw %}
     ]
   },
   "time": {
