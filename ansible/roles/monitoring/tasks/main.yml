@@ -174,6 +174,33 @@
   tags: ['monitoring', 'phase5', 'configuration', 'dashboards']
 
 # =============================================================================
+# PHASE 5.5: MODERNIZATION - DASHBOARD-AS-CODE (Phase 2 Modern)
+# =============================================================================
+# Generate dashboards from Grafonnet source files (modern Dashboard-as-Code approach)
+# Runs after traditional dashboard deployment
+
+- name: Phase 5.5 - Setup Grafonnet Environment
+  import_tasks: phase4-dashboards/setup-grafonnet.yml
+  when:
+    - grafonnet_enabled | default(true)
+    - inventory_hostname == monitoring_server_host
+  tags: ['monitoring', 'phase4-dashboards', 'phase2-dashboards', 'grafonnet']
+
+- name: Phase 5.5 - Generate Dashboards from Grafonnet
+  import_tasks: phase4-dashboards/generate-dashboards.yml
+  when:
+    - grafonnet_enabled | default(true)
+    - inventory_hostname == monitoring_server_host
+  tags: ['monitoring', 'phase4-dashboards', 'phase2-dashboards', 'grafonnet']
+
+- name: Phase 5.5 - Test and Validate Grafonnet Dashboards
+  import_tasks: phase4-dashboards/test-dashboards.yml
+  when:
+    - grafonnet_enabled | default(true)
+    - inventory_hostname == monitoring_server_host
+  tags: ['monitoring', 'phase4-dashboards', 'phase2-dashboards', 'grafonnet']
+
+# =============================================================================
 # PHASE 6: VERIFICATION
 # =============================================================================
 - name: Phase 6 - Post-Deployment Verification

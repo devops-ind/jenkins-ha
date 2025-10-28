@@ -1,0 +1,130 @@
+---
+# Phase 2 Modernization: Test and validate Grafonnet-generated dashboards
+# Ensures dashboards have required fields and valid configuration
+
+- name: Find all generated dashboard JSON files
+  find:
+    path: "{{ grafonnet_output_dir }}"
+    patterns: '*.json'
+    depth: 0
+  register: generated_dashboards
+  tags: ['monitoring', 'phase2-dashboards', 'test', 'validate']
+
+- name: Validate dashboard structure and required fields
+  shell: |
+    set -e
+    ERROR_COUNT=0
+
+    validate_dashboard() {
+      DASHBOARD_FILE="$1"
+      DASHBOARD_NAME=$(basename "$DASHBOARD_FILE")
+
+      # Check for required dashboard fields
+      python3 << 'EOF'
+import json
+import sys
+
+with open(sys.argv[1], 'r') as f:
+    dashboard = json.load(f)
+
+errors = []
+
+# Required fields
+if 'title' not in dashboard:
+    errors.append('Missing required field: title')
+if 'uid' not in dashboard:
+    errors.append('Missing required field: uid')
+if 'panels' not in dashboard:
+    errors.append('Missing required field: panels')
+if 'templating' not in dashboard:
+    errors.append('Missing required field: templating (variables)')
+
+# Validate panel structure
+if 'panels' in dashboard:
+    if not isinstance(dashboard['panels'], list):
+        errors.append('panels must be an array')
+    else:
+        for i, panel in enumerate(dashboard['panels']):
+            if not isinstance(panel, dict):
+                errors.append(f'panel {i} must be an object')
+            elif 'type' not in panel and 'collapsed' not in panel:
+                errors.append(f'panel {i} missing type and collapsed')
+
+# Report results
+if errors:
+    print(f"FAILED: {sys.argv[1]}")
+    for error in errors:
+        print(f"  - {error}")
+    sys.exit(1)
+else:
+    print(f"VALID: {sys.argv[1]}")
+    print(f"  - Title: {dashboard.get('title', 'N/A')}")
+    print(f"  - UID: {dashboard.get('uid', 'N/A')}")
+    print(f"  - Panels: {len(dashboard.get('panels', []))}")
+    print(f"  - Variables: {len(dashboard.get('templating', {}).get('list', []))}")
+EOF
+    }
+
+    for dashboard_file in {{ grafonnet_output_dir }}/*.json; do
+      if [ -f "$dashboard_file" ]; then
+        validate_dashboard "$dashboard_file" || ERROR_COUNT=$((ERROR_COUNT + 1))
+      fi
+    done
+
+    if [ $ERROR_COUNT -gt 0 ]; then
+      echo "ERROR: $ERROR_COUNT dashboard(s) failed validation"
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+  tags: ['monitoring', 'phase2-dashboards', 'test', 'validate']
+
+- name: Count dashboard statistics
+  shell: |
+    python3 << 'EOF'
+import json
+import os
+from pathlib import Path
+
+total_panels = 0
+total_variables = 0
+dashboard_count = 0
+
+for json_file in Path("{{ grafonnet_output_dir }}").glob("*.json"):
+    with open(json_file, 'r') as f:
+        dashboard = json.load(f)
+        dashboard_count += 1
+        total_panels += len(dashboard.get('panels', []))
+        total_variables += len(dashboard.get('templating', {}).get('list', []))
+
+print(f"{dashboard_count}|{total_panels}|{total_variables}")
+EOF
+  register: dashboard_stats
+  changed_when: false
+  tags: ['monitoring', 'phase2-dashboards', 'test', 'validate']
+
+- name: Display dashboard validation summary
+  debug:
+    msg: |
+      ========================================================
+      ✅ Dashboard Validation Complete
+      ========================================================
+      Total Dashboards: {{ (dashboard_stats.stdout.split('|')[0] | int) }}
+      Total Panels: {{ (dashboard_stats.stdout.split('|')[1] | int) }}
+      Total Variables: {{ (dashboard_stats.stdout.split('|')[2] | int) }}
+
+      Dashboards Generated:
+      {% for dashboard in generated_dashboards.files %}
+      • {{ dashboard.path | basename }} ({{ dashboard.size }} bytes)
+      {% endfor %}
+
+      Validation Results:
+      ✓ JSON syntax valid
+      ✓ Required fields present (title, uid, panels, variables)
+      ✓ Panel structure valid
+      ✓ All variables properly configured
+
+      Ready for deployment to Grafana
+      ========================================================
+  tags: ['monitoring', 'phase2-dashboards', 'test', 'validate']

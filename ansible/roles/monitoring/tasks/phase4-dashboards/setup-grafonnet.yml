@@ -1,0 +1,117 @@
+---
+# Phase 2 Modernization: Dashboard-as-Code with Grafonnet
+# Setup Grafonnet environment and install required tools
+
+- name: Create Grafonnet working directory
+  file:
+    path: "{{ grafonnet_project_dir }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Create Grafonnet output directory
+  file:
+    path: "{{ grafonnet_output_dir }}"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Create Grafonnet backup directory
+  file:
+    path: "{{ grafonnet_output_dir }}/.backups"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Check if jsonnet is installed
+  command: which jsonnet
+  register: jsonnet_check
+  changed_when: false
+  failed_when: false
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Check if jb (jsonnet-bundler) is installed
+  command: which jb
+  register: jb_check
+  changed_when: false
+  failed_when: false
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Install jsonnet compiler (CentOS/RHEL)
+  yum:
+    name: jsonnet
+    state: present
+  when:
+    - ansible_os_family == 'RedHat'
+    - jsonnet_check.rc != 0
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Install jsonnet compiler (Debian/Ubuntu)
+  apt:
+    name: jsonnet
+    state: present
+  when:
+    - ansible_os_family == 'Debian'
+    - jsonnet_check.rc != 0
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Install jsonnet-bundler from Go
+  shell: |
+    if [ ! -f /usr/local/bin/jb ]; then
+      TEMP_DIR=$(mktemp -d)
+      cd $TEMP_DIR
+      git clone https://github.com/jsonnet-bundler/jsonnet-bundler
+      cd jsonnet-bundler
+      go build -o /usr/local/bin/jb ./cmd/jb
+      rm -rf $TEMP_DIR
+    fi
+  args:
+    executable: /bin/bash
+  when: jb_check.rc != 0
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Copy Grafonnet project files to working directory
+  copy:
+    src: "{{ role_path }}/files/dashboards/jsonnet/"
+    dest: "{{ grafonnet_project_dir }}/"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Install Grafonnet dependencies with jsonnet-bundler
+  shell: |
+    cd "{{ grafonnet_project_dir }}"
+    jb install
+  environment:
+    HOME: "{{ grafonnet_project_dir }}"
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Display Grafonnet setup summary
+  debug:
+    msg: |
+      ========================================================
+      ✅ Grafonnet Environment Setup Complete
+      ========================================================
+      Project Directory: {{ grafonnet_project_dir }}
+      Output Directory: {{ grafonnet_output_dir }}
+
+      Tools Installed:
+      • jsonnet compiler
+      • jsonnet-bundler (jb)
+
+      Grafonnet Files:
+      • jsonnetfile.json (dependencies)
+      • lib/common.libsonnet (shared library)
+      • infrastructure-health.jsonnet (dashboard)
+      • jenkins-overview.jsonnet (dashboard)
+
+      Next Step: Generate dashboards from Grafonnet source files
+      ========================================================
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']

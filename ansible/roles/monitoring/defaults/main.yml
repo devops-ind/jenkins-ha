@@ -422,3 +422,40 @@ prometheus_targets_backup_versions: 10
 # Prometheus reload endpoint configuration
 prometheus_reload_retry_count: 3
 prometheus_reload_retry_delay: 2
+
+# =============================================================================
+# PHASE 2 MODERNIZATION: DASHBOARD-AS-CODE WITH GRAFONNET
+# =============================================================================
+# Enable/disable Dashboard-as-Code with Grafonnet
+grafonnet_enabled: true
+
+# Grafonnet project directory (where Jsonnet source files live)
+grafonnet_project_dir: "/opt/grafonnet"
+
+# Grafonnet output directory (where compiled JSON dashboards are generated)
+grafonnet_output_dir: "{{ monitoring_home_dir }}/grafana/dashboards/generated"
+
+# Grafonnet backup retention
+grafonnet_backup_retention_days: 30
+grafonnet_backup_versions: 7
+
+# Jsonnet compiler and bundler tools
+jsonnet_compiler: "jsonnet"
+jsonnet_bundler: "jb"
+
+# List of Grafonnet dashboards to generate
+grafonnet_dashboards:
+  - name: "infrastructure-health"
+    enabled: true
+    description: "System health monitoring dashboard"
+    tags:
+      - infrastructure
+      - system
+      - health
+  - name: "jenkins-overview"
+    enabled: true
+    description: "Comprehensive Jenkins monitoring dashboard"
+    tags:
+      - jenkins
+      - ci-cd
+      - pipelines
