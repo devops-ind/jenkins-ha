@@ -1,0 +1,278 @@
+---
+# Phase 1 Modernization: File-Based Prometheus Service Discovery
+# Generates JSON target files for dynamic target management
+# Enables zero-downtime target updates via Prometheus HTTP reload
+
+- name: Create Prometheus file-sd targets directory
+  file:
+    path: "{{ monitoring_home_dir }}/prometheus/targets.d"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  tags: ['monitoring', 'phase1-file-sd', 'targets']
+
+- name: Create Prometheus targets backup directory
+  file:
+    path: "{{ monitoring_home_dir }}/prometheus/targets.d/.backups"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  tags: ['monitoring', 'phase1-file-sd', 'targets']
+
+- name: Generate Jenkins team targets in file-sd format
+  copy:
+    content: |
+      [
+      {% for host in monitoring_jenkins_hosts %}
+        {
+          "targets": ["{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{{ hostvars[host]['host_fqdn'] }}{% else %}{{ hostvars[host]['ansible_default_ipv4']['address'] }}{% endif %}:{{ team_effective_port }}"],
+          "labels": {
+            "job": "jenkins-{{ team.team_name }}",
+            "team": "{{ team.team_name }}",
+            "environment": "{{ team.active_environment | default('blue') }}",
+            "deployment_mode": "{{ deployment_mode | default('local') }}",
+            "blue_green_enabled": "{{ team.blue_green_enabled | default(false) }}"
+          }
+        }{% if not loop.last %},{% endif %}
+      {% endfor %}
+      ]
+    dest: "{{ monitoring_home_dir }}/prometheus/targets.d/jenkins-{{ team.team_name }}.json"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  vars:
+    monitoring_jenkins_hosts: "{{ groups['jenkins_masters'] | default(['localhost']) }}"
+    team_web_port: "{{ team.ports.web | default(8080) | int }}"
+    team_active_env: "{{ team.active_environment | default('blue') }}"
+    team_bg_enabled: "{{ team.blue_green_enabled | default(true) }}"
+    team_effective_port: "{{ team_web_port | int + (100 if (team_bg_enabled and team_active_env == 'green') else 0) }}"
+  loop: "{{ prometheus_teams_validated }}"
+  loop_control:
+    label: "jenkins-{{ team.team_name }}.json"
+  when: prometheus_teams_validated | length > 0
+  notify: reload prometheus
+  tags: ['monitoring', 'phase1-file-sd', 'targets']
+
+- name: Generate default Jenkins target in file-sd format (fallback)
+  copy:
+    content: |
+      [
+      {% for host in monitoring_jenkins_hosts %}
+        {
+          "targets": ["{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{{ hostvars[host]['host_fqdn'] }}{% else %}{{ hostvars[host]['ansible_default_ipv4']['address'] }}{% endif %}:8080"],
+          "labels": {
+            "job": "jenkins-default",
+            "team": "default",
+            "environment": "blue",
+            "deployment_mode": "{{ deployment_mode | default('local') }}",
+            "blue_green_enabled": "false"
+          }
+        }{% if not loop.last %},{% endif %}
+      {% endfor %}
+      ]
+    dest: "{{ monitoring_home_dir }}/prometheus/targets.d/jenkins-default.json"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  vars:
+    monitoring_jenkins_hosts: "{{ groups['jenkins_masters'] | default(['localhost']) }}"
+  when: prometheus_teams_validated | length == 0
+  notify: reload prometheus
+  tags: ['monitoring', 'phase1-file-sd', 'targets']
+
+- name: Generate node-exporter targets in file-sd format
+  copy:
+    content: |
+      [
+      {% if prometheus_node_exporter_targets is defined and prometheus_node_exporter_targets | length > 0 %}
+      {% for target in prometheus_node_exporter_targets %}
+        {
+          "targets": ["{{ target }}"],
+          "labels": {
+            "job": "node-exporter",
+            "role": "system-metrics"
+          }
+        }{% if not loop.last %},{% endif %}
+      {% endfor %}
+      {% else %}
+        {
+          "targets": ["{{ monitoring_server_address }}:{{ node_exporter_port }}"],
+          "labels": {
+            "job": "node-exporter",
+            "role": "system-metrics"
+          }
+        }
+      {% endif %}
+      ]
+    dest: "{{ monitoring_home_dir }}/prometheus/targets.d/node-exporter.json"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  notify: reload prometheus
+  tags: ['monitoring', 'phase1-file-sd', 'targets']
+
+- name: Generate cAdvisor targets in file-sd format
+  copy:
+    content: |
+      [
+        {
+          "targets": ["{{ monitoring_server_address }}:{{ cadvisor_port }}"],
+          "labels": {
+            "job": "cadvisor",
+            "role": "container-metrics"
+          }
+        }{% if monitoring_deployment_type == 'separate' and prometheus_cadvisor_targets is defined and prometheus_cadvisor_targets | length > 0 %},
+      {% for target in prometheus_cadvisor_targets %}
+        {
+          "targets": ["{{ target }}"],
+          "labels": {
+            "job": "cadvisor",
+            "role": "jenkins-vm",
+            "deployment_type": "cross-vm"
+          }
+        }{% if not loop.last %},{% endif %}
+      {% endfor %}
+      {% endif %}
+      ]
+    dest: "{{ monitoring_home_dir }}/prometheus/targets.d/cadvisor.json"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  when: cadvisor_enabled | default(true)
+  notify: reload prometheus
+  tags: ['monitoring', 'phase1-file-sd', 'targets']
+
+- name: Generate Loki targets in file-sd format
+  copy:
+    content: |
+      [
+        {
+          "targets": ["{{ monitoring_server_address }}:{{ loki_port }}"],
+          "labels": {
+            "job": "loki",
+            "role": "log-aggregation"
+          }
+        }
+      ]
+    dest: "{{ monitoring_home_dir }}/prometheus/targets.d/loki.json"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  when: loki_enabled | default(true)
+  notify: reload prometheus
+  tags: ['monitoring', 'phase1-file-sd', 'targets']
+
+- name: Generate Promtail targets in file-sd format
+  copy:
+    content: |
+      [
+      {% if prometheus_promtail_targets is defined and prometheus_promtail_targets | length > 0 %}
+      {% for target in prometheus_promtail_targets %}
+        {
+          "targets": ["{{ target }}"],
+          "labels": {
+            "job": "promtail",
+            "role": "log-processor"
+          }
+        }{% if not loop.last %},{% endif %}
+      {% endfor %}
+      {% else %}
+        {
+          "targets": ["{{ monitoring_server_address }}:{{ promtail_port }}"],
+          "labels": {
+            "job": "promtail",
+            "role": "log-processor"
+          }
+        }
+      {% endif %}
+      ]
+    dest: "{{ monitoring_home_dir }}/prometheus/targets.d/promtail.json"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  when: promtail_enabled | default(true)
+  notify: reload prometheus
+  tags: ['monitoring', 'phase1-file-sd', 'targets']
+
+- name: Generate Grafana targets in file-sd format
+  copy:
+    content: |
+      [
+        {
+          "targets": ["{{ monitoring_server_address }}:{{ grafana_port }}"],
+          "labels": {
+            "job": "grafana",
+            "role": "visualization"
+          }
+        }
+      ]
+    dest: "{{ monitoring_home_dir }}/prometheus/targets.d/grafana.json"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  when: grafana_enabled | default(true)
+  notify: reload prometheus
+  tags: ['monitoring', 'phase1-file-sd', 'targets']
+
+- name: Backup existing target files (rotation management)
+  shell: |
+    if [ -f "{{ monitoring_home_dir }}/prometheus/targets.d/jenkins-*.json" ]; then
+      BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
+      for file in {{ monitoring_home_dir }}/prometheus/targets.d/jenkins-*.json \
+                  {{ monitoring_home_dir }}/prometheus/targets.d/node-exporter.json \
+                  {{ monitoring_home_dir }}/prometheus/targets.d/cadvisor.json \
+                  {{ monitoring_home_dir }}/prometheus/targets.d/loki.json \
+                  {{ monitoring_home_dir }}/prometheus/targets.d/promtail.json \
+                  {{ monitoring_home_dir }}/prometheus/targets.d/grafana.json; do
+        if [ -f "$file" ]; then
+          mkdir -p "{{ monitoring_home_dir }}/prometheus/targets.d/.backups"
+          cp "$file" "{{ monitoring_home_dir }}/prometheus/targets.d/.backups/$(basename $file)-${BACKUP_DATE}"
+        fi
+      done
+
+      # Keep only last N versions
+      find "{{ monitoring_home_dir }}/prometheus/targets.d/.backups" -type f -name "*.json-*" | \
+        sort -r | tail -n +{{ prometheus_targets_backup_versions | default(10) + 1 }} | xargs -r rm
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+  tags: ['monitoring', 'phase1-file-sd', 'targets', 'backup']
+
+- name: Display file-sd target generation summary
+  debug:
+    msg: |
+      ========================================================
+      ✅ File-Based Service Discovery Targets Generated
+      ========================================================
+      Location: {{ monitoring_home_dir }}/prometheus/targets.d/
+
+      Generated Target Files:
+      {% for team in prometheus_teams_validated %}
+      • jenkins-{{ team.team_name }}.json
+      {% endfor %}
+      {% if prometheus_teams_validated | length == 0 %}
+      • jenkins-default.json
+      {% endif %}
+      • node-exporter.json
+      {% if cadvisor_enabled | default(true) %}
+      • cadvisor.json
+      {% endif %}
+      {% if loki_enabled | default(true) %}
+      • loki.json
+      {% endif %}
+      {% if promtail_enabled | default(true) %}
+      • promtail.json
+      {% endif %}
+      {% if grafana_enabled | default(true) %}
+      • grafana.json
+      {% endif %}
+
+      Backup Retention: {{ prometheus_targets_backup_versions | default(10) }} versions
+      Backup Location: {{ monitoring_home_dir }}/prometheus/targets.d/.backups/
+
+      Next Step: Prometheus will reload configuration to use file_sd_configs
+      ========================================================
+  tags: ['monitoring', 'phase1-file-sd', 'targets']

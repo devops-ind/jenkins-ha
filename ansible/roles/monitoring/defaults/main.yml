@@ -399,3 +399,26 @@ loki_datasource:
   access: "proxy"
   url: "http://{{ loki_host }}:{{ loki_port }}"
   isDefault: false
+
+# =============================================================================
+# PHASE 1 MODERNIZATION: FILE-BASED SERVICE DISCOVERY
+# =============================================================================
+# Enable/disable file-based Prometheus service discovery
+prometheus_file_sd_enabled: true
+
+# Refresh interval for discovering new target files
+prometheus_file_sd_refresh_interval: "30s"
+
+# Enable Prometheus HTTP reload (zero-downtime config updates)
+prometheus_reload_enabled: true
+
+# Target file validation
+prometheus_target_validation: true
+
+# Target file backup retention
+prometheus_targets_backup_retention_days: 30
+prometheus_targets_backup_versions: 10
+
+# Prometheus reload endpoint configuration
+prometheus_reload_retry_count: 3
+prometheus_reload_retry_delay: 2

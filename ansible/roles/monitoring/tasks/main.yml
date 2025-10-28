@@ -117,6 +117,22 @@
   tags: ['monitoring', 'phase3', 'targets']
 
 # =============================================================================
+# PHASE 3.5: MODERNIZATION - FILE-BASED SERVICE DISCOVERY (Phase 1 Modern)
+# =============================================================================
+# Generate file-sd JSON targets for dynamic target management (zero-downtime updates)
+# Runs after traditional target generation to build upon it
+
+- name: Phase 3.5 - Generate File-Based Service Discovery Targets
+  import_tasks: phase3-targets/generate-file-sd.yml
+  when: prometheus_file_sd_enabled | default(true)
+  tags: ['monitoring', 'phase3-targets', 'phase1-file-sd', 'targets']
+
+- name: Phase 3.5 - Validate File-Based Service Discovery Targets
+  import_tasks: phase3-targets/validate-targets.yml
+  when: prometheus_file_sd_enabled | default(true)
+  tags: ['monitoring', 'phase3-targets', 'phase1-file-sd', 'targets', 'validate']
+
+# =============================================================================
 # PHASE 4: SERVER DEPLOYMENT
 # =============================================================================
 # Servers use targets generated in Phase 3

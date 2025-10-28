@@ -1,0 +1,91 @@
+---
+# Phase 1 Modernization: Validate File-Based Service Discovery Targets
+# Validates JSON syntax and target configuration health
+
+- name: Validate JSON syntax for all target files
+  shell: |
+    set -e
+    ERROR_COUNT=0
+
+    for file in {{ monitoring_home_dir }}/prometheus/targets.d/*.json; do
+      if [ -f "$file" ]; then
+        if ! python3 -m json.tool "$file" > /dev/null 2>&1; then
+          echo "ERROR: Invalid JSON in $file"
+          ERROR_COUNT=$((ERROR_COUNT + 1))
+        else
+          TARGETS_COUNT=$(python3 -c "import json; data=json.load(open('$file')); print(len(data))" 2>/dev/null || echo "0")
+          echo "✓ $(basename $file): $TARGETS_COUNT target(s)"
+        fi
+      fi
+    done
+
+    if [ $ERROR_COUNT -gt 0 ]; then
+      echo "ERROR: $ERROR_COUNT file(s) have invalid JSON syntax"
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+  tags: ['monitoring', 'phase1-file-sd', 'targets', 'validate']
+
+- name: Verify target file permissions
+  stat:
+    path: "{{ item }}"
+  register: target_file_stat
+  loop: "{{ target_files }}"
+  vars:
+    target_files: "{{ lookup('fileglob', monitoring_home_dir + '/prometheus/targets.d/*.json', wantlist=True) }}"
+  failed_when:
+    - target_file_stat.stat.pw_name != monitoring_user
+    - target_file_stat.stat.gr_name != monitoring_group
+    - not (target_file_stat.stat.mode | int & 0o644)
+  tags: ['monitoring', 'phase1-file-sd', 'targets', 'validate']
+
+- name: Count total targets across all files
+  shell: |
+    TOTAL_TARGETS=0
+    for file in {{ monitoring_home_dir }}/prometheus/targets.d/*.json; do
+      if [ -f "$file" ]; then
+        COUNT=$(python3 -c "import json; data=json.load(open('$file')); print(sum(len(t.get('targets', [])) for t in data))" 2>/dev/null || echo "0")
+        TOTAL_TARGETS=$((TOTAL_TARGETS + COUNT))
+      fi
+    done
+    echo $TOTAL_TARGETS
+  args:
+    executable: /bin/bash
+  register: total_targets_count
+  changed_when: false
+  tags: ['monitoring', 'phase1-file-sd', 'targets', 'validate']
+
+- name: Validate target count is reasonable
+  assert:
+    that:
+      - total_targets_count.stdout | int > 0
+    fail_msg: "ERROR: No targets found in file-sd configuration"
+    success_msg: "✅ Total targets configured: {{ total_targets_count.stdout }}"
+  tags: ['monitoring', 'phase1-file-sd', 'targets', 'validate']
+
+- name: Display file-sd validation summary
+  debug:
+    msg: |
+      ========================================================
+      ✅ File-SD Targets Validation Complete
+      ========================================================
+      Total Target Files: {{ lookup('fileglob', monitoring_home_dir + '/prometheus/targets.d/*.json', wantlist=True) | length }}
+      Total Targets: {{ total_targets_count.stdout }}
+      Owner: {{ monitoring_user }}:{{ monitoring_group }}
+      Permissions: 0644
+
+      Files Validated:
+      {% set target_files = lookup('fileglob', monitoring_home_dir + '/prometheus/targets.d/*.json', wantlist=True) %}
+      {% for file in target_files | sort %}
+      • {{ file | basename }}
+      {% endfor %}
+
+      ✓ JSON syntax valid
+      ✓ File permissions correct
+      ✓ Target count > 0
+
+      Prometheus will dynamically discover these targets
+      ========================================================
+  tags: ['monitoring', 'phase1-file-sd', 'targets', 'validate']

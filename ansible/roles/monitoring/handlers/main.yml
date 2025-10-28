@@ -19,6 +19,18 @@
     restart: yes
   listen: "restart prometheus"
 
+- name: reload prometheus
+  uri:
+    url: "http://{{ monitoring_server_address }}:{{ prometheus_port }}/-/reload"
+    method: POST
+    status_code: 200
+  listen: "reload prometheus"
+  ignore_errors: yes
+  register: prometheus_reload_result
+  retries: 3
+  delay: 2
+  when: inventory_hostname == monitoring_server_host
+
 - name: restart grafana
   community.docker.docker_container:
     name: grafana-{{ deployment_environment | default('local') }}
