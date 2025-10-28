@@ -844,6 +844,151 @@ cat examples/github-jira-datasource-integration.md
 ansible-vault view ansible/inventories/production/group_vars/all/vault.yml | grep -E 'github_enterprise|jira_cloud'
 ```
 
+#### Monitoring Stack Modernization (Phase 1 & 2) - NEW
+
+##### Phase 1: File-Based Prometheus Service Discovery
+
+```bash
+# Deploy with file-based service discovery enabled (default)
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring
+
+# Deploy with file-sd explicitly enabled
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring,phase1-file-sd -e "prometheus_file_sd_enabled=true"
+
+# Verify file-sd target files are generated
+ls -la /opt/monitoring/prometheus/targets.d/
+# Expected files: jenkins-*.json, node-exporter.json, cadvisor.json, loki.json, promtail.json, grafana.json
+
+# Validate target file JSON syntax
+python3 -m json.tool /opt/monitoring/prometheus/targets.d/jenkins-devops.json
+
+# Check Prometheus targets from API (file-sd loaded)
+curl http://localhost:9090/api/v1/targets | jq '.data.activeTargets[] | {job: .labels.job, instance: .labels.instance, health: .health}'
+
+# Monitor Prometheus reload endpoint
+curl -X POST http://localhost:9090/-/reload
+
+# View Prometheus configuration using file-sd
+docker exec prometheus-production cat /etc/prometheus/prometheus.yml | grep -A 5 "file_sd_configs"
+
+# Verify target file refresh interval (30s default)
+docker logs prometheus-production | grep "config reloading"
+
+# Backup target files (automatic, keep 10 versions)
+ls -la /opt/monitoring/prometheus/targets.d/.backups/
+
+# Zero-downtime target update (no Prometheus restart)
+# 1. Modify team configuration in inventory
+# 2. Run: ansible-playbook ... --tags monitoring,phase1-file-sd
+# 3. Prometheus auto-reloads within 30 seconds
+```
+
+##### Phase 2: Dashboard-as-Code with Modern Grafonnet
+
+```bash
+# Deploy with Grafonnet dashboards enabled (default)
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring
+
+# Deploy with Grafonnet explicitly enabled
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring,phase2-dashboards,grafonnet -e "grafonnet_enabled=true"
+
+# Setup Grafonnet environment (install tools and dependencies)
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring,phase4-dashboards,setup-grafonnet
+
+# Generate dashboards from Grafonnet source
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring,phase4-dashboards,generate
+
+# Test and validate generated dashboards
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring,phase4-dashboards,test
+
+# View Grafonnet project structure
+ls -la /opt/grafonnet/
+# Structure:
+# - jsonnetfile.json (dependencies)
+# - lib/common.libsonnet (reusable components)
+# - infrastructure-health.jsonnet (system health dashboard)
+# - jenkins-overview.jsonnet (Jenkins CI/CD dashboard)
+# - vendor/ (grafonnet library, auto-installed)
+
+# View generated JSON dashboards
+ls -la /opt/monitoring/grafana/dashboards/generated/
+# Generated: infrastructure-health.json, jenkins-overview.json
+
+# Validate generated dashboard JSON
+python3 -m json.tool /opt/monitoring/grafana/dashboards/generated/infrastructure-health.json
+
+# Check generated dashboard statistics
+python3 /tmp/dashboard_stats.py /opt/monitoring/grafana/dashboards/generated/
+# Output: dashboard_count|total_panels|total_variables
+
+# View Grafonnet source files (version controlled)
+cat ansible/roles/monitoring/files/dashboards/jsonnet/infrastructure-health.jsonnet
+cat ansible/roles/monitoring/files/dashboards/jsonnet/jenkins-overview.jsonnet
+cat ansible/roles/monitoring/files/dashboards/jsonnet/lib/common.libsonnet
+
+# Backup dashboards (automatic, keep 7 versions)
+ls -la /opt/monitoring/grafana/dashboards/generated/.backups/
+
+# Access generated dashboards in Grafana
+# Infrastructure Health: http://localhost:9300/d/infrastructure-health-modern
+# Jenkins Overview: http://localhost:9300/d/jenkins-overview-modern
+
+# Modify Grafonnet dashboards (edit source files, regenerate)
+# 1. Edit: ansible/roles/monitoring/files/dashboards/jsonnet/*.jsonnet
+# 2. Commit changes to Git
+# 3. Run: ansible-playbook ... --tags monitoring,phase4-dashboards,generate
+# 4. Dashboards auto-update with new version backup
+
+# Jsonnet compilation (manual, for testing)
+cd /opt/grafonnet
+jsonnet -J vendor infrastructure-health.jsonnet -o infrastructure-health.json
+jsonnet -J vendor jenkins-overview.jsonnet -o jenkins-overview.json
+
+# Update Grafonnet dependencies
+cd /opt/grafonnet
+jb install  # Update vendor/ with latest grafonnet library
+
+# Grafonnet documentation
+cat examples/monitoring-modernization-guide.md  # (comprehensive Phase 1 & 2 guide)
+
+# Monitor dashboard generation
+docker logs grafana-production | grep -i "dashboard"
+
+# Verify dashboard variables loaded
+curl -u admin:password http://localhost:9300/api/dashboards/uid/infrastructure-health-modern | \
+  jq '.dashboard.templating.list[] | {name, type}'
+```
+
+##### Phase 1 & 2 Configuration Variables
+
+```bash
+# View Phase 1 file-sd variables in defaults
+cat ansible/roles/monitoring/defaults/main.yml | grep -A 10 "PHASE 1 MODERNIZATION"
+
+# View Phase 2 Grafonnet variables in defaults
+cat ansible/roles/monitoring/defaults/main.yml | grep -A 20 "PHASE 2 MODERNIZATION"
+
+# Configure file-sd refresh interval (default 30s)
+prometheus_file_sd_refresh_interval: "30s"
+
+# Configure target file backup retention (default 10 versions)
+prometheus_targets_backup_versions: 10
+
+# Configure Grafonnet backup retention (default 7 versions)
+grafonnet_backup_versions: 7
+
+# Enable/disable file-sd and Grafonnet
+prometheus_file_sd_enabled: true
+grafonnet_enabled: true
+```
+
 ---
 
 ## Architecture Overview
