@@ -215,12 +215,27 @@
   tags: ['monitoring', 'phase5-fqdn', 'fqdn-migration']
 
 # =============================================================================
-# PHASE 6: VERIFICATION
+# PHASE 6: TEAM-BASED MONITORING ISOLATION (Production Improvements)
 # =============================================================================
-- name: Phase 6 - Post-Deployment Verification
+# Configure per-team Prometheus scrape configs, alert rules, and Grafana folders
+# All configurations dynamically generated from jenkins_teams.yml
+# Enables team-specific monitoring, alerting, and dashboards
+
+- name: Phase 6 - Team-Based Monitoring Isolation
+  import_tasks: phase6-team-isolation/main.yml
+  when:
+    - monitoring_team_isolation_enabled | default(true)
+    - inventory_hostname == monitoring_server_host
+    - jenkins_teams | length > 0
+  tags: ['monitoring', 'phase6', 'team-isolation']
+
+# =============================================================================
+# PHASE 7: POST-DEPLOYMENT VERIFICATION
+# =============================================================================
+- name: Phase 7 - Post-Deployment Verification
   import_tasks: phase4-configuration/verification.yml
   when: inventory_hostname == monitoring_server_host
-  tags: ['monitoring', 'phase6', 'verification']
+  tags: ['monitoring', 'phase7', 'verification']
 
 - name: Display deployment completion message
   debug:

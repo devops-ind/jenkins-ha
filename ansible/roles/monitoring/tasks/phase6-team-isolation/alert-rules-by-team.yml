@@ -1,0 +1,138 @@
+---
+# Generate per-team Prometheus alert rules
+# Each team gets customized alert thresholds based on team configuration
+
+- name: Create Prometheus rules directory for team-specific alerts
+  file:
+    path: "{{ prometheus_rules_dir | default(monitoring_home_dir + '/prometheus/rules') }}"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  tags: ['monitoring', 'phase6-team-isolation', 'alerts', 'setup']
+
+- name: Generate per-team alert rules
+  copy:
+    content: |
+      # Alert rules for {{ item.display_name }}
+      # Team-specific thresholds: severity={{ item.monitoring.alert_severity_threshold }}, SLO={{ item.monitoring.slo_target_availability }}
+      # Generated from jenkins_teams.yml
+
+      groups:
+        - name: jenkins-{{ item.name }}-alerts
+          interval: 30s
+          rules:
+            # Jenkins Master Down Alert
+            - alert: JenkinsMaster{{ item.name | capitalize }}Down
+              expr: 'up{job="jenkins-{{ item.name }}"} == 0'
+              for: 2m
+              severity: critical
+              team: '{{ item.name }}'
+              annotations:
+                summary: "Jenkins master for {{ item.display_name }} is DOWN"
+                description: "Jenkins instance for {{ item.display_name }} ({{ item.name }}) has been unreachable for more than 2 minutes"
+                dashboard: "jenkins-{{ item.name }}"
+
+            # High Build Queue Alert
+            - alert: JenkinsBuildQueue{{ item.name | capitalize }}High
+              expr: 'jenkins_queue_size{team="{{ item.name }}"} > 10'
+              for: 5m
+              severity: '{{ item.monitoring.alert_severity_threshold }}'
+              team: '{{ item.name }}'
+              annotations:
+                summary: "Build queue for {{ item.display_name }} is high"
+                description: "The build queue for {{ item.display_name }} has {{ `{{ $value }}` }} pending builds"
+                runbook: "https://wiki.example.com/jenkins-queue-buildup"
+
+            # Executor Utilization Alert
+            - alert: JenkinsExecutorUtilization{{ item.name | capitalize }}High
+              expr: 'jenkins_executors_in_use{team="{{ item.name }}"} / jenkins_executors_free{team="{{ item.name }}"} > 0.8'
+              for: 10m
+              severity: '{{ item.monitoring.alert_severity_threshold }}'
+              team: '{{ item.name }}'
+              annotations:
+                summary: "Executor utilization for {{ item.display_name }} is high"
+                description: "{{ item.display_name }} executors are {{ `{{ $value | humanizePercentage }}` }} utilized"
+
+            # Job Failure Rate Alert
+            - alert: JenkinsJobFailureRate{{ item.name | capitalize }}High
+              expr: 'increase(jenkins_job_builds_last_build_failure_total{team="{{ item.name }}"}[5m]) > 3'
+              for: 5m
+              severity: warning
+              team: '{{ item.name }}'
+              annotations:
+                summary: "Job failure rate for {{ item.display_name }} is elevated"
+                description: "{{ item.display_name }} had more than 3 job failures in the last 5 minutes"
+
+            # SLO: Availability Alert
+            - alert: JenkinsSLO{{ item.name | capitalize }}AvailabilityLow
+              expr: |
+                (
+                  sum(rate(jenkins_up_time_total{team="{{ item.name }}"}[15m]))
+                  /
+                  sum(rate(jenkins_up_time_total{team="{{ item.name }}"}[15m])) + sum(rate(jenkins_down_time_total{team="{{ item.name }}"}[15m]))
+                ) < {{ item.monitoring.slo_target_availability | float }}
+              for: 5m
+              severity: critical
+              team: '{{ item.name }}'
+              annotations:
+                summary: "SLO violation: {{ item.display_name }} availability below {{ item.monitoring.slo_target_availability }}"
+                description: "{{ item.display_name }} availability has fallen below SLO target of {{ item.monitoring.slo_target_availability }}"
+                slo_target: "{{ item.monitoring.slo_target_availability }}"
+
+            # MTTR: Jenkins Down Duration Alert
+            - alert: JenkinsSLO{{ item.name | capitalize }}MTTRExceeded
+              expr: 'up{job="jenkins-{{ item.name }}"} == 0'
+              for: {{ (item.monitoring.slo_target_mttr | regex_replace('[mhd]$', '') | int) + 5 }}m
+              severity: critical
+              team: '{{ item.name }}'
+              annotations:
+                summary: "SLO violation: {{ item.display_name }} down time exceeds {{ item.monitoring.slo_target_mttr }}"
+                description: "{{ item.display_name }} has been down for longer than SLO MTTR target of {{ item.monitoring.slo_target_mttr }}"
+                slo_target_mttr: "{{ item.monitoring.slo_target_mttr }}"
+                runbook: "https://wiki.example.com/jenkins-down-emergency-recovery"
+
+    dest: "{{ prometheus_rules_dir }}/alerts-{{ item.name }}.yml"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  loop: "{{ jenkins_teams }}"
+  loop_control:
+    label: "{{ item.name }}"
+  notify: reload prometheus
+  tags: ['monitoring', 'phase6-team-isolation', 'alerts', 'generate']
+
+- name: Validate per-team alert rules YAML syntax
+  command: "python3 -m yaml {{ prometheus_rules_dir }}/alerts-{{ item.name }}.yml"
+  register: alert_validation
+  loop: "{{ jenkins_teams }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: false
+  failed_when: alert_validation.rc != 0
+  tags: ['monitoring', 'phase6-team-isolation', 'alerts', 'validate']
+
+- name: Display per-team alert rules summary
+  debug:
+    msg: |
+      Per-Team Alert Rules Generated:
+
+      {% for team in jenkins_teams %}
+      Team: {{ team.display_name }} ({{ team.name }})
+      Alert Severity: {{ team.monitoring.alert_severity_threshold }}
+      SLO Availability: {{ team.monitoring.slo_target_availability }}
+      SLO MTTR: {{ team.monitoring.slo_target_mttr }}
+
+      Rules:
+      - JenkinsMaster{{ team.name | capitalize }}Down (Critical)
+      - JenkinsBuildQueue{{ team.name | capitalize }}High ({{ team.monitoring.alert_severity_threshold }})
+      - JenkinsExecutorUtilization{{ team.name | capitalize }}High ({{ team.monitoring.alert_severity_threshold }})
+      - JenkinsJobFailureRate{{ team.name | capitalize }}High (Warning)
+      - JenkinsSLO{{ team.name | capitalize }}AvailabilityLow (Critical - SLO Target: {{ team.monitoring.slo_target_availability }})
+      - JenkinsSLO{{ team.name | capitalize }}MTTRExceeded (Critical - SLO MTTR: {{ team.monitoring.slo_target_mttr }})
+
+      Configuration File: {{ prometheus_rules_dir }}/alerts-{{ team.name }}.yml
+      {% endfor %}
+
+      All per-team alert rules generated successfully.
+  tags: ['monitoring', 'phase6-team-isolation', 'alerts', 'display']
