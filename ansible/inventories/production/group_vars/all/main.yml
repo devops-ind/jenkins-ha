@@ -98,103 +98,14 @@ monitoring_domain: "dev.net"  # Monitoring services use same base domain
 monitoring_wildcard_domain: "*.dev.net"
 
 # Multi-team configuration for production HAProxy load balancing
-# devops is the default team (handles jenkins.devops.example.com as default)
-# Team subdomain format: {team}jenkins.devops.example.com
-jenkins_teams_config:
-  - team_name: "devops"
-    blue_green_enabled: true
-    active_environment: "green"
-    ports:
-      web: 8080
-      agent: 50000
-    resources:
-      memory: "2g"
-      cpu: "1.0"
-    env_vars: {}
-    labels:
-      tier: "production"
-      environment: "prod"
-      role: "default"
-    # Jenkins DSL repositories for external job definitions
-    jenkins_dsl_repos:
-      - repo_url: "https://github.com/devops-team/jenkins-dsl.git"
-        repo_branch: "main"
-        dsl_directory: "dsl"
-        credentials_id: "devops-git-credentials"
-        scan_schedule: "H/30 * * * *"  # Scan every 30 minutes
-        description: "DevOps team job definitions and pipelines"
-      - repo_url: "https://github.com/shared/common-dsl.git"
-        repo_branch: "main"
-        dsl_directory: "common"
-        credentials_id: "shared-git-credentials"
-        scan_schedule: "H H/4 * * *"  # Scan every 4 hours
-        description: "Shared common DSL templates and utilities"
-  - team_name: "ma"
-    blue_green_enabled: true
-    active_environment: "blue"
-    ports:
-      web: 8081
-      agent: 50001
-    resources:
-      memory: "2g"
-      cpu: "1.0"
-    env_vars: {}
-    labels:
-      tier: "production"
-      environment: "prod"
-      role: "marketing-analytics"
-    # Jenkins DSL repositories for marketing analytics team
-    jenkins_dsl_repos:
-      - repo_url: "https://github.com/ma-team/jenkins-dsl.git"
-        repo_branch: "main"
-        dsl_directory: "dsl"
-        credentials_id: "ma-git-credentials"
-        scan_schedule: "H/45 * * * *"  # Scan every 45 minutes (offset from devops)
-        description: "Marketing Analytics team job definitions"
-  - team_name: "ba"
-    blue_green_enabled: true
-    active_environment: "blue"
-    ports:
-      web: 8082
-      agent: 50002
-    resources:
-      memory: "2g"
-      cpu: "1.0"
-    env_vars: {}
-    labels:
-      tier: "production"
-      environment: "prod"
-      role: "business-analytics"
-    # Jenkins DSL repositories for business analytics team
-    jenkins_dsl_repos:
-      - repo_url: "https://github.com/ba-team/jenkins-dsl.git"
-        repo_branch: "main"
-        dsl_directory: "dsl"
-        credentials_id: "ba-git-credentials"
-        scan_schedule: "H/15 * * * *"  # Scan every 15 minutes (offset from others)
-        description: "Business Analytics team job definitions"
-  - team_name: "tw"
-    blue_green_enabled: true
-    active_environment: "blue"
-    ports:
-      web: 8083
-      agent: 50003
-    resources:
-      memory: "2g"
-      cpu: "1.0"
-    env_vars: {}
-    labels:
-      tier: "production"
-      environment: "prod"
-      role: "test-qa"
-    # Jenkins DSL repositories for test/QA team
-    jenkins_dsl_repos:
-      - repo_url: "https://github.com/tw-team/jenkins-dsl.git"
-        repo_branch: "main"
-        dsl_directory: "dsl"
-        credentials_id: "tw-git-credentials"
-        scan_schedule: "H/20 * * * *"  # Scan every 20 minutes (offset from others)
-        description: "Test/QA team job definitions and test automation"
+# Single source of truth: ansible/inventories/production/group_vars/all/jenkins_teams.yml
+# This is automatically loaded and used by monitoring, jenkins-master, and high-availability roles
+# to generate team-specific configurations
+jenkins_teams: "{{ lookup('file', inventory_dir + '/group_vars/all/jenkins_teams.yml') | from_yaml | json_query('jenkins_teams') }}"
+
+# Backward compatibility: keep jenkins_teams_config as alias to jenkins_teams
+# (some roles may still reference this, will be deprecated in future versions)
+jenkins_teams_config: "{{ jenkins_teams }}"
 
 # Timezone
 common_timezone: "UTC"

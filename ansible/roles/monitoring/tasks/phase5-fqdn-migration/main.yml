@@ -1,0 +1,50 @@
+---
+# Phase 5: FQDN Migration & Consistency
+# Migrate monitoring from IP-based targets to FQDN-based infrastructure
+# addressing for consistency and HAProxy integration
+
+# Step 1: Validate FQDN resolution across all monitoring targets
+- name: Validate FQDN resolution
+  import_tasks: validate-fqdn.yml
+  tags: ['monitoring', 'phase5-fqdn', 'validate']
+
+# Step 2: Ensure Jenkins Prometheus plugin consistency
+# Both Jenkins VMs must have Prometheus plugin for consistent metrics
+- name: Ensure Jenkins Prometheus plugin consistency
+  import_tasks: jenkins-prometheus-plugin.yml
+  tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin']
+
+# Step 3: Update Prometheus configuration to use FQDN targets
+# Generate team-aware targets with FQDN addressing
+- name: Configure Prometheus FQDN targets
+  import_tasks: prometheus-fqdn-targets.yml
+  tags: ['monitoring', 'phase5-fqdn', 'prometheus-targets']
+
+# Step 4: Verify FQDN configuration
+- name: Verify FQDN configuration
+  import_tasks: verify-fqdn.yml
+  tags: ['monitoring', 'phase5-fqdn', 'verify']
+
+# Step 5: Summary
+- name: Display Phase 5 FQDN Migration Summary
+  debug:
+    msg: |
+      ========================================================
+      Phase 5: FQDN Migration & Consistency - COMPLETE
+      ========================================================
+
+      Completed Tasks:
+      1. Validated FQDN resolution across all VMs
+      2. Ensured Jenkins Prometheus plugin on both Jenkins VMs
+      3. Updated Prometheus to use FQDN targets
+      4. Verified team-aware FQDN configuration
+
+      Key Changes:
+      - All Prometheus targets now use FQDNs (*.devops.abc.net)
+      - Team-aware target labeling for isolation
+      - Fallback to IP addressing for resilience
+      - HAProxy integration ready
+
+      Next Step: Deploy Phase 6 (Team-Based Monitoring Isolation)
+      ========================================================
+  tags: ['monitoring', 'phase5-fqdn']

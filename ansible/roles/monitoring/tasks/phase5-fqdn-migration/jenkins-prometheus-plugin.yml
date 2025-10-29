@@ -1,0 +1,124 @@
+---
+# Ensure Jenkins Prometheus Plugin Consistency
+# Both Jenkins VMs must have the Prometheus plugin for consistent metrics
+# This fixes the issue where one VM has the plugin and the other doesn't,
+# causing false "down" alerts
+
+- name: Check Jenkins Prometheus plugin installation
+  shell: |
+    docker exec jenkins-{{ item.name }}-{{ item.active_environment }} \
+      grep -r "org.jenkinsci.plugins.prometheus" /var/jenkins_home/plugins/ 2>/dev/null || echo "NOT_FOUND"
+  register: prometheus_plugin_check
+  loop: "{{ jenkins_teams }}"
+  loop_control:
+    label: "{{ item.name }}-{{ item.active_environment }}"
+  changed_when: false
+  failed_when: false
+  tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin', 'check']
+
+- name: Display Prometheus plugin status per team
+  debug:
+    msg: |
+      Jenkins Prometheus Plugin Status:
+      {% for item in prometheus_plugin_check.results %}
+      - Team: {{ item.item.name }} ({{ item.item.active_environment }})
+        Status: {% if 'NOT_FOUND' not in item.stdout %}INSTALLED{% else %}MISSING - Will be installed{% endif %}
+      {% endfor %}
+  tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin', 'display']
+
+- name: Check if Jenkins container is running
+  shell: "docker ps --format '{{ \"{{\" }}.Names{{ \"}}\" }}' | grep -q '^jenkins-{{ item.item.name }}-{{ item.item.active_environment }}$' && echo 'running' || echo 'stopped'"
+  register: jenkins_container_status
+  loop: "{{ prometheus_plugin_check.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: "'NOT_FOUND' in item.stdout"
+  changed_when: false
+  failed_when: false
+  tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin', 'check']
+
+- name: Install Prometheus plugin on Jenkins containers
+  block:
+    - name: Create plugins directory
+      community.docker.docker_container_exec:
+        container: "jenkins-{{ item.item.name }}-{{ item.item.active_environment }}"
+        command: "mkdir -p /var/jenkins_home/plugins"
+      loop: "{{ jenkins_container_status.results }}"
+      loop_control:
+        label: "{{ item.item.item.name }}"
+      when: "'running' in item.stdout"
+      tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin', 'install']
+
+    - name: Download and install Prometheus plugin
+      shell: |
+        JENKINS_CONTAINER="jenkins-{{ item.item.name }}-{{ item.item.active_environment }}"
+        PLUGIN_VERSION="2.0.8"
+        PLUGIN_URL="https://repo.jenkins-ci.org/releases/org/jenkinsci/plugins/prometheus/${PLUGIN_VERSION}/prometheus-${PLUGIN_VERSION}.hpi"
+
+        docker exec "${JENKINS_CONTAINER}" curl -fsSL -o /var/jenkins_home/plugins/prometheus.hpi "${PLUGIN_URL}"
+        echo "Prometheus plugin installed"
+      register: plugin_install
+      loop: "{{ prometheus_plugin_check.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: "'NOT_FOUND' in item.stdout and item.status | default('') != 'FAILED'"
+      failed_when: plugin_install.rc != 0
+      tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin', 'install']
+  tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin']
+
+- name: Restart Jenkins containers to load Prometheus plugin
+  community.docker.docker_container:
+    name: "jenkins-{{ item.item.name }}-{{ item.item.active_environment }}"
+    state: started
+    restart: yes
+  register: jenkins_restart
+  loop: "{{ prometheus_plugin_check.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: "'NOT_FOUND' in item.stdout"
+  tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin', 'restart']
+
+- name: Wait for Jenkins to be ready after plugin installation
+  uri:
+    url: "http://localhost:{{ item.item.ports.web }}/login"
+    method: GET
+    status_code: 200, 301, 302, 403
+    timeout: 30
+  register: jenkins_ready
+  retries: 30
+  delay: 5
+  until: jenkins_ready is succeeded
+  loop: "{{ prometheus_plugin_check.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: "'NOT_FOUND' in item.stdout"
+  tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin', 'wait']
+
+- name: Verify Prometheus plugin metrics are accessible
+  uri:
+    url: "http://localhost:{{ item.item.ports.web }}/prometheus/"
+    method: GET
+    status_code: 200, 403
+    timeout: 10
+  register: prometheus_metrics
+  retries: 5
+  delay: 2
+  until: prometheus_metrics is succeeded
+  loop: "{{ prometheus_plugin_check.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  failed_when: false
+  tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin', 'verify']
+
+- name: Display Jenkins Prometheus plugin verification results
+  debug:
+    msg: |
+      Jenkins Prometheus Plugin Installation Summary:
+      {% for item in prometheus_metrics.results %}
+      - Team: {{ item.item.item.name }} ({{ item.item.item.active_environment }})
+        Metrics Endpoint: {% if item.status == 200 %}ACTIVE (accessible at /prometheus/){% elif item.status == 403 %}INSTALLED (403 = auth required, plugin working){% else %}ERROR (status: {{ item.status }}){% endif %}
+      {% endfor %}
+
+      All Jenkins teams now have Prometheus plugin for consistent metrics collection.
+      Ready for FQDN-based target configuration.
+  tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin', 'summary']

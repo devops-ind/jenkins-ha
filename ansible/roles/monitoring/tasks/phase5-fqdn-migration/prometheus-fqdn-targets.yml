@@ -1,0 +1,188 @@
+---
+# Configure Prometheus to use FQDN-based targets
+# Updates file-based service discovery to use FQDNs instead of IPs
+# Enables team-aware monitoring for all targets
+
+- name: Ensure targets.d directory exists
+  file:
+    path: "{{ monitoring_home_dir }}/prometheus/targets.d"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  tags: ['monitoring', 'phase5-fqdn', 'prometheus-targets', 'setup']
+
+- name: Backup existing targets files
+  shell: |
+    if [ -d "{{ monitoring_home_dir }}/prometheus/targets.d" ]; then
+      BACKUP_DIR="{{ monitoring_home_dir }}/prometheus/targets.d/.backup-$(date +%Y%m%d_%H%M%S)"
+      mkdir -p "${BACKUP_DIR}"
+      cp -r {{ monitoring_home_dir }}/prometheus/targets.d/*.json "${BACKUP_DIR}/" 2>/dev/null || true
+      echo "Backed up existing targets to ${BACKUP_DIR}"
+    fi
+  changed_when: false
+  tags: ['monitoring', 'phase5-fqdn', 'prometheus-targets', 'backup']
+
+- name: Generate FQDN-based Jenkins targets
+  copy:
+    content: |
+      [
+        {% for team in jenkins_teams %}
+        {
+          "targets": ["jenkins-{{ team.name }}-{{ team.active_environment }}.{{ monitoring_domain }}:{{ team.ports.web }}"],
+          "labels": {
+            "job": "jenkins-{{ team.name }}",
+            "team": "{{ team.name }}",
+            "environment": "{{ team.active_environment }}",
+            "instance": "jenkins-{{ team.name }}"
+          }
+        }{{ "," if not loop.last else "" }}
+        {% endfor %}
+      ]
+    dest: "{{ monitoring_home_dir }}/prometheus/targets.d/jenkins-teams.json"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  notify: reload prometheus
+  tags: ['monitoring', 'phase5-fqdn', 'prometheus-targets', 'jenkins']
+
+- name: Generate FQDN-based Node Exporter targets
+  copy:
+    content: |
+      [
+        {
+          "targets": ["node-exporter.{{ monitoring_domain }}:{{ monitoring_ports.node_exporter }}"],
+          "labels": {
+            "job": "node-exporter",
+            "instance": "monitoring-server",
+            "role": "monitoring"
+          }
+        }
+      ]
+    dest: "{{ monitoring_home_dir }}/prometheus/targets.d/node-exporter.json"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  notify: reload prometheus
+  tags: ['monitoring', 'phase5-fqdn', 'prometheus-targets', 'node-exporter']
+
+- name: Generate FQDN-based cAdvisor targets
+  copy:
+    content: |
+      [
+        {
+          "targets": ["cadvisor.{{ monitoring_domain }}:{{ monitoring_ports.cadvisor }}"],
+          "labels": {
+            "job": "cadvisor",
+            "instance": "jenkins-containers",
+            "role": "container-metrics"
+          }
+        }
+      ]
+    dest: "{{ monitoring_home_dir }}/prometheus/targets.d/cadvisor.json"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  notify: reload prometheus
+  tags: ['monitoring', 'phase5-fqdn', 'prometheus-targets', 'cadvisor']
+
+- name: Generate FQDN-based Loki targets
+  copy:
+    content: |
+      [
+        {
+          "targets": ["loki.{{ monitoring_domain }}:{{ monitoring_ports.loki }}"],
+          "labels": {
+            "job": "loki",
+            "instance": "log-aggregation",
+            "role": "logging"
+          }
+        }
+      ]
+    dest: "{{ monitoring_home_dir }}/prometheus/targets.d/loki.json"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  notify: reload prometheus
+  tags: ['monitoring', 'phase5-fqdn', 'prometheus-targets', 'loki']
+
+- name: Generate FQDN-based Grafana targets
+  copy:
+    content: |
+      [
+        {
+          "targets": ["grafana.{{ monitoring_domain }}:{{ monitoring_ports.grafana }}"],
+          "labels": {
+            "job": "grafana",
+            "instance": "dashboards",
+            "role": "visualization"
+          }
+        }
+      ]
+    dest: "{{ monitoring_home_dir }}/prometheus/targets.d/grafana.json"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  notify: reload prometheus
+  tags: ['monitoring', 'phase5-fqdn', 'prometheus-targets', 'grafana']
+
+- name: Generate FQDN-based Alertmanager targets
+  copy:
+    content: |
+      [
+        {
+          "targets": ["alertmanager.{{ monitoring_domain }}:{{ monitoring_ports.alertmanager }}"],
+          "labels": {
+            "job": "alertmanager",
+            "instance": "alert-routing",
+            "role": "alerting"
+          }
+        }
+      ]
+    dest: "{{ monitoring_home_dir }}/prometheus/targets.d/alertmanager.json"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  notify: reload prometheus
+  tags: ['monitoring', 'phase5-fqdn', 'prometheus-targets', 'alertmanager']
+
+- name: Validate generated FQDN targets JSON format
+  shell: |
+    for target_file in {{ monitoring_home_dir }}/prometheus/targets.d/*.json; do
+      if [ -f "$target_file" ]; then
+        if python3 -m json.tool "$target_file" > /dev/null 2>&1; then
+          echo "✓ $(basename $target_file): VALID"
+        else
+          echo "✗ $(basename $target_file): INVALID JSON"
+          exit 1
+        fi
+      fi
+    done
+  changed_when: false
+  tags: ['monitoring', 'phase5-fqdn', 'prometheus-targets', 'validate']
+
+- name: Display FQDN targets configuration
+  debug:
+    msg: |
+      FQDN-Based Prometheus Targets Configuration:
+
+      Generated Target Files:
+      - jenkins-teams.json (Team-aware Jenkins targets)
+      - node-exporter.json (System metrics)
+      - cadvisor.json (Container metrics)
+      - loki.json (Log aggregation)
+      - grafana.json (Dashboard service)
+      - alertmanager.json (Alert routing)
+
+      Configuration Details:
+      - Infrastructure Domain: {{ monitoring_domain }}
+      - Targets Directory: {{ monitoring_home_dir }}/prometheus/targets.d/
+      - File Refresh Interval: 30s (via prometheus.yml file_sd_configs)
+
+      Team-Specific Targets:
+      {% for team in jenkins_teams %}
+      - jenkins-{{ team.name }}-{{ team.active_environment }}.{{ monitoring_domain }}:{{ team.ports.web }}
+      {% endfor %}
+
+      Next Step: Verify FQDN resolution and Prometheus reload
+  tags: ['monitoring', 'phase5-fqdn', 'prometheus-targets', 'display']

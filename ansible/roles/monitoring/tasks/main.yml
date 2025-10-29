@@ -201,6 +201,20 @@
   tags: ['monitoring', 'phase4-dashboards', 'phase2-dashboards', 'grafonnet']
 
 # =============================================================================
+# PHASE 5.7: FQDN MIGRATION & CONSISTENCY (Production Improvements)
+# =============================================================================
+# Migrate monitoring from IP-based to FQDN-based infrastructure addressing
+# Ensures consistency across all monitoring targets and Jenkins VMs
+# Enables per-team monitoring isolation in subsequent phases
+
+- name: Phase 5.7 - FQDN Migration and Consistency
+  import_tasks: phase5-fqdn-migration/main.yml
+  when:
+    - monitoring_fqdn_migration_enabled | default(true)
+    - inventory_hostname == monitoring_server_host
+  tags: ['monitoring', 'phase5-fqdn', 'fqdn-migration']
+
+# =============================================================================
 # PHASE 6: VERIFICATION
 # =============================================================================
 - name: Phase 6 - Post-Deployment Verification
