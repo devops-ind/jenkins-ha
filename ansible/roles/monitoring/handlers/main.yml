@@ -1,16 +1,5 @@
 ---
 # Handlers for monitoring role
-- name: restart monitoring service
-  systemd:
-    name: monitoring
-    state: restarted
-    enabled: yes
-  listen: "restart monitoring"
-
-- name: reload systemd
-  systemd:
-    daemon_reload: yes
-  listen: "reload systemd"
 
 - name: restart prometheus
   community.docker.docker_container:
