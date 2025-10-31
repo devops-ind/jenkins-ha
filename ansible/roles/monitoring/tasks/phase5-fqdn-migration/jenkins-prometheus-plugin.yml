@@ -6,12 +6,12 @@
 
 - name: Check Jenkins Prometheus plugin installation
   shell: |
-    docker exec jenkins-{{ item.name }}-{{ item.active_environment }} \
+    docker exec jenkins-{{ item.team_name }}-{{ item.active_environment }} \
       grep -r "org.jenkinsci.plugins.prometheus" /var/jenkins_home/plugins/ 2>/dev/null || echo "NOT_FOUND"
   register: prometheus_plugin_check
   loop: "{{ jenkins_teams }}"
   loop_control:
-    label: "{{ item.name }}-{{ item.active_environment }}"
+    label: "{{ item.team_name }}-{{ item.active_environment }}"
   changed_when: false
   failed_when: false
   tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin', 'check']
@@ -21,17 +21,17 @@
     msg: |
       Jenkins Prometheus Plugin Status:
       {% for item in prometheus_plugin_check.results %}
-      - Team: {{ item.item.name }} ({{ item.item.active_environment }})
+      - Team: {{ item.item.team_name }} ({{ item.item.active_environment }})
         Status: {% if 'NOT_FOUND' not in item.stdout %}INSTALLED{% else %}MISSING - Will be installed{% endif %}
       {% endfor %}
   tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin', 'display']
 
 - name: Check if Jenkins container is running
-  shell: "docker ps --format '{{ \"{{\" }}.Names{{ \"}}\" }}' | grep -q '^jenkins-{{ item.item.name }}-{{ item.item.active_environment }}$' && echo 'running' || echo 'stopped'"
+  shell: "docker ps --format '{{ \"{{\" }}.Names{{ \"}}\" }}' | grep -q '^jenkins-{{ item.item.team_name }}-{{ item.item.active_environment }}$' && echo 'running' || echo 'stopped'"
   register: jenkins_container_status
   loop: "{{ prometheus_plugin_check.results }}"
   loop_control:
-    label: "{{ item.item.name }}"
+    label: "{{ item.item.team_name }}"
   when: "'NOT_FOUND' in item.stdout"
   changed_when: false
   failed_when: false
@@ -41,17 +41,17 @@
   block:
     - name: Create plugins directory
       community.docker.docker_container_exec:
-        container: "jenkins-{{ item.item.name }}-{{ item.item.active_environment }}"
+        container: "jenkins-{{ item.item.team_name }}-{{ item.item.active_environment }}"
         command: "mkdir -p /var/jenkins_home/plugins"
       loop: "{{ jenkins_container_status.results }}"
       loop_control:
-        label: "{{ item.item.item.name }}"
+        label: "{{ item.item.item.team_name }}"
       when: "'running' in item.stdout"
       tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin', 'install']
 
     - name: Download and install Prometheus plugin
       shell: |
-        JENKINS_CONTAINER="jenkins-{{ item.item.name }}-{{ item.item.active_environment }}"
+        JENKINS_CONTAINER="jenkins-{{ item.item.team_name }}-{{ item.item.active_environment }}"
         PLUGIN_VERSION="2.5.3"
         PLUGIN_URL="https://updates.jenkins.io/download/plugins/prometheus/${PLUGIN_VERSION}/prometheus.hpi"
 
@@ -60,7 +60,7 @@
       register: plugin_install
       loop: "{{ prometheus_plugin_check.results }}"
       loop_control:
-        label: "{{ item.item.name }}"
+        label: "{{ item.item.team_name }}"
       when: "'NOT_FOUND' in item.stdout and item.status | default('') != 'FAILED'"
       failed_when: plugin_install.rc != 0
       tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin', 'install']
@@ -68,13 +68,13 @@
 
 - name: Restart Jenkins containers to load Prometheus plugin
   community.docker.docker_container:
-    name: "jenkins-{{ item.item.name }}-{{ item.item.active_environment }}"
+    name: "jenkins-{{ item.item.team_name }}-{{ item.item.active_environment }}"
     state: started
     restart: yes
   register: jenkins_restart
   loop: "{{ prometheus_plugin_check.results }}"
   loop_control:
-    label: "{{ item.item.name }}"
+    label: "{{ item.item.team_name }}"
   when: "'NOT_FOUND' in item.stdout"
   tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin', 'restart']
 
@@ -90,7 +90,7 @@
   until: jenkins_ready is succeeded
   loop: "{{ prometheus_plugin_check.results }}"
   loop_control:
-    label: "{{ item.item.name }}"
+    label: "{{ item.item.team_name }}"
   when: "'NOT_FOUND' in item.stdout"
   tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin', 'wait']
 
@@ -106,7 +106,7 @@
   until: prometheus_metrics is succeeded
   loop: "{{ prometheus_plugin_check.results }}"
   loop_control:
-    label: "{{ item.item.name }}"
+    label: "{{ item.item.team_name }}"
   failed_when: false
   tags: ['monitoring', 'phase5-fqdn', 'jenkins-plugin', 'verify']
 
@@ -115,7 +115,7 @@
     msg: |
       Jenkins Prometheus Plugin Installation Summary:
       {% for item in prometheus_metrics.results %}
-      - Team: {{ item.item.item.name }} ({{ item.item.item.active_environment }})
+      - Team: {{ item.item.item.team_name }} ({{ item.item.item.active_environment }})
         Metrics Endpoint: {% if item.status == 200 %}ACTIVE (accessible at /prometheus/){% elif item.status == 403 %}INSTALLED (403 = auth required, plugin working){% else %}ERROR (status: {{ item.status }}){% endif %}
       {% endfor %}
 

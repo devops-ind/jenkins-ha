@@ -12,12 +12,12 @@
     body_format: json
     body:
       title: "{{ item.display_name }}"
-      description: "Dashboards for {{ item.display_name }} (Team: {{ item.name }})"
-      tags: ["team", "{{ item.name }}", "auto-generated"]
+      description: "Dashboards for {{ item.display_name }} (Team: {{ item.team_name }})"
+      tags: ["team", "{{ item.team_name }}", "auto-generated"]
   register: grafana_folder_response
   loop: "{{ jenkins_teams }}"
   loop_control:
-    label: "{{ item.name }}"
+    label: "{{ item.team_name }}"
   when: grafana_enabled | default(true)
   tags: ['monitoring', 'phase6-team-isolation', 'grafana', 'folders']
 
@@ -31,7 +31,7 @@
       {% for item in grafana_folder_response.results %}
       {% if item.json is defined and item.json.id is defined %}
       team_folder_ids:
-        {{ item.item.name }}: {{ item.json.id }}  # {{ item.item.display_name }}
+        {{ item.item.team_name }}: {{ item.json.id }}  # {{ item.item.display_name }}
       {% endif %}
       {% endfor %}
     dest: "{{ monitoring_home_dir }}/reports/grafana-team-folders-{{ ansible_date_time.date }}.yml"
@@ -47,7 +47,7 @@
       Grafana Per-Team Folders Created:
 
       {% for item in grafana_folder_response.results %}
-      - Team: {{ item.item.display_name }} ({{ item.item.name }})
+      - Team: {{ item.item.display_name }} ({{ item.item.team_name }})
         Folder ID: {{ item.json.id | default('N/A') }}
         URL: http://{{ grafana_host }}:{{ grafana_port }}/dashboards/f/{{ item.json.uid | default('') }}/{{ item.item.display_name | lower | replace(' ', '-') }}
       {% endfor %}

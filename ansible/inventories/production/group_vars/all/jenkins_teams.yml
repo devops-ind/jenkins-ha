@@ -6,7 +6,7 @@
 
 jenkins_teams:
   # DevOps Team - Default team
-  - name: "devops"
+  - team_name: "devops"
     display_name: "DevOps Team"
     description: "Core DevOps operations and infrastructure"
     blue_green_enabled: true
@@ -42,7 +42,7 @@ jenkins_teams:
         description: "Shared common DSL templates and utilities"
 
   # Marketing Analytics Team
-  - name: "ma"
+  - team_name: "ma"
     display_name: "Marketing Analytics"
     description: "Marketing analytics and metrics team"
     blue_green_enabled: true
@@ -72,7 +72,7 @@ jenkins_teams:
         description: "Marketing Analytics team job definitions"
 
   # Business Analytics Team
-  - name: "ba"
+  - team_name: "ba"
     display_name: "Business Analytics"
     description: "Business analytics and reporting team"
     blue_green_enabled: true
@@ -102,7 +102,7 @@ jenkins_teams:
         description: "Business Analytics team job definitions"
 
   # Test/QA Team
-  - name: "tw"
+  - team_name: "tw"
     display_name: "Test/QA"
     description: "Testing, QA, and quality assurance team"
     blue_green_enabled: true

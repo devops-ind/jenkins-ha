@@ -23,11 +23,11 @@
   tags: ['monitoring', 'phase5-fqdn', 'validate', 'dns']
 
 - name: Check Jenkins team FQDNs are resolvable
-  command: "getent hosts jenkins-{{ item.name }}-{{ item.active_environment }}.{{ monitoring_domain }}"
+  command: "getent hosts jenkins-{{ item.team_name }}-{{ item.active_environment }}.{{ monitoring_domain }}"
   register: jenkins_fqdn_resolution
   loop: "{{ jenkins_teams }}"
   loop_control:
-    label: "{{ item.name }}"
+    label: "{{ item.team_name }}"
   failed_when: jenkins_fqdn_resolution.rc not in [0, 2]
   changed_when: false
   tags: ['monitoring', 'phase5-fqdn', 'validate', 'dns']
@@ -44,7 +44,7 @@
 
       Jenkins Teams:
       {% for team in jenkins_teams %}
-      - jenkins-{{ team.name }}-{{ team.active_environment }}.{{ monitoring_domain }}: ACTIVE
+      - jenkins-{{ team.team_name }}-{{ team.active_environment }}.{{ monitoring_domain }}: ACTIVE
       {% endfor %}
   tags: ['monitoring', 'phase5-fqdn', 'validate', 'display']
   when: fqdn_resolution is defined
@@ -66,7 +66,7 @@
 
       Jenkins Teams (Active Environments):
       {% for team in jenkins_teams %}
-      - jenkins-{{ team.name }}-{{ team.active_environment }}.{{ monitoring_domain }}
+      - jenkins-{{ team.team_name }}-{{ team.active_environment }}.{{ monitoring_domain }}
       {% endfor %}
 
       Agents (Deployed on all VMs):

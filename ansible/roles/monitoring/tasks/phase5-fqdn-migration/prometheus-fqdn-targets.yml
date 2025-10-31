@@ -29,12 +29,12 @@
       [
         {% for team in jenkins_teams %}
         {
-          "targets": ["jenkins-{{ team.name }}-{{ team.active_environment }}.{{ monitoring_domain }}:{{ team.ports.web }}"],
+          "targets": ["jenkins-{{ team.team_name }}-{{ team.active_environment }}.{{ monitoring_domain }}:{{ team.ports.web }}"],
           "labels": {
-            "job": "jenkins-{{ team.name }}",
-            "team": "{{ team.name }}",
+            "job": "jenkins-{{ team.team_name }}",
+            "team": "{{ team.team_name }}",
             "environment": "{{ team.active_environment }}",
-            "instance": "jenkins-{{ team.name }}"
+            "instance": "jenkins-{{ team.team_name }}"
           }
         }{{ "," if not loop.last else "" }}
         {% endfor %}
@@ -181,7 +181,7 @@
 
       Team-Specific Targets:
       {% for team in jenkins_teams %}
-      - jenkins-{{ team.name }}-{{ team.active_environment }}.{{ monitoring_domain }}:{{ team.ports.web }}
+      - jenkins-{{ team.team_name }}-{{ team.active_environment }}.{{ monitoring_domain }}:{{ team.ports.web }}
       {% endfor %}
 
       Next Step: Verify FQDN resolution and Prometheus reload
