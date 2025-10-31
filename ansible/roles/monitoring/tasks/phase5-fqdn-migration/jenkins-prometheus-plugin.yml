@@ -52,8 +52,8 @@
     - name: Download and install Prometheus plugin
       shell: |
         JENKINS_CONTAINER="jenkins-{{ item.item.name }}-{{ item.item.active_environment }}"
-        PLUGIN_VERSION="2.0.8"
-        PLUGIN_URL="https://repo.jenkins-ci.org/releases/org/jenkinsci/plugins/prometheus/${PLUGIN_VERSION}/prometheus-${PLUGIN_VERSION}.hpi"
+        PLUGIN_VERSION="2.5.3"
+        PLUGIN_URL="https://updates.jenkins.io/download/plugins/prometheus/${PLUGIN_VERSION}/prometheus.hpi"
 
         docker exec "${JENKINS_CONTAINER}" curl -fsSL -o /var/jenkins_home/plugins/prometheus.hpi "${PLUGIN_URL}"
         echo "Prometheus plugin installed"
