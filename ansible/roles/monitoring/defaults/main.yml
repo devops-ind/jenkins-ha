@@ -100,6 +100,10 @@ jira_cloud_token: "{{ vault_jira_cloud_token | default('') }}"
 # Enhanced dashboard configuration
 jenkins_enhanced_dashboards_enabled: true
 
+# Dashboard Deployment Control Flags
+dashboard_jinja2_enabled: true   # Enable Jinja2 template-based dashboards (Phase 3)
+dashboard_grafonnet_enabled: "{{ grafonnet_enabled | default(true) }}"  # Enable Grafonnet dashboards (Phase 5.5)
+
 # Centralized dashboard configuration registry
 grafana_dashboards:
   # Core dashboards - infrastructure-wide
@@ -236,7 +240,10 @@ dashboard_deployment:
   enhanced_enabled: "{{ jenkins_enhanced_dashboards_enabled | default(true) }}"
   update_mode: "always"  # Dashboard update behavior: always, skip_existing, update_only
   validation_strict: false  # Temporarily disabled during testing
-  
+
+  # Jinja2 templating controls (Phase 3)
+  jinja2_enabled: "{{ dashboard_jinja2_enabled | default(true) }}"
+
   # Team-specific dashboard generation
   generate_team_specific: true
   keep_global_dashboards: true  # Option to keep original multi-team dashboards
@@ -336,7 +343,7 @@ monitoring_directories:
   - "{{ monitoring_home_dir }}/grafana"
   - "{{ monitoring_home_dir }}/grafana/data"
   - "{{ monitoring_home_dir }}/grafana/dashboards"
-  - "{{ monitoring_home_dir }}/grafana/dashboards/generated"  # Grafonnet-generated dashboards (Phase 2 Modernization)
+  - "{{ monitoring_home_dir }}/grafana/dashboards-generated"  # Grafonnet-generated dashboards (Phase 5.5 Modernization - separate directory)
   - "{{ monitoring_home_dir }}/grafana/provisioning"
   - "{{ monitoring_home_dir }}/grafana/provisioning/dashboards"
   - "{{ monitoring_home_dir }}/grafana/provisioning/datasources"
@@ -435,7 +442,7 @@ prometheus_reload_retry_count: 3
 prometheus_reload_retry_delay: 2
 
 # =============================================================================
-# PHASE 2 MODERNIZATION: DASHBOARD-AS-CODE WITH GRAFONNET
+# PHASE 5.5 MODERNIZATION: DASHBOARD-AS-CODE WITH GRAFONNET
 # =============================================================================
 # Enable/disable Dashboard-as-Code with Grafonnet
 grafonnet_enabled: true
@@ -443,8 +450,11 @@ grafonnet_enabled: true
 # Grafonnet project directory (where Jsonnet source files live)
 grafonnet_project_dir: "/opt/grafonnet"
 
-# Grafonnet output directory (where compiled JSON dashboards are generated)
-grafonnet_output_dir: "{{ monitoring_home_dir }}/grafana/dashboards/generated"
+# Grafonnet output directory (SEPARATE from Jinja2 dashboards to avoid conflicts)
+grafonnet_output_dir: "{{ monitoring_home_dir }}/grafana/dashboards-generated"
+
+# Mount path inside Grafana container for Grafonnet dashboards
+grafonnet_container_mount: "/var/lib/grafana/dashboards-generated"
 
 # Grafonnet backup retention
 grafonnet_backup_retention_days: 30

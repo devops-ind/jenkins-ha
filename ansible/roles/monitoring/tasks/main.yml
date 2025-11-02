@@ -166,39 +166,32 @@
   tags: ['monitoring', 'phase4', 'servers', 'alertmanager']
 
 # =============================================================================
-# PHASE 5: CONFIGURATION
+# PHASE 5.5: GRAFONNET DASHBOARD-AS-CODE (OPTIONAL MODERNIZATION)
 # =============================================================================
-- name: Phase 5 - Deploy Dashboards and Datasources
-  import_tasks: phase4-configuration/dashboards.yml
-  when: inventory_hostname == monitoring_server_host
-  tags: ['monitoring', 'phase5', 'configuration', 'dashboards']
-
-# =============================================================================
-# PHASE 5.5: MODERNIZATION - DASHBOARD-AS-CODE (Phase 2 Modern)
-# =============================================================================
-# Generate dashboards from Grafonnet source files (modern Dashboard-as-Code approach)
-# Runs after traditional dashboard deployment
+# Generate dashboards from Grafonnet Jsonnet source files
+# Separate optional track for Dashboard-as-Code modernization
+# Output to separate directory to avoid conflicts with Jinja2 templates
 
 - name: Phase 5.5 - Setup Grafonnet Environment
   import_tasks: phase4-dashboards/setup-grafonnet.yml
   when:
     - grafonnet_enabled | default(true)
     - inventory_hostname == monitoring_server_host
-  tags: ['monitoring', 'phase4-dashboards', 'phase2-dashboards', 'grafonnet']
+  tags: ['monitoring', 'phase5.5', 'grafonnet', 'setup']
 
 - name: Phase 5.5 - Generate Dashboards from Grafonnet
   import_tasks: phase4-dashboards/generate-dashboards.yml
   when:
     - grafonnet_enabled | default(true)
     - inventory_hostname == monitoring_server_host
-  tags: ['monitoring', 'phase4-dashboards', 'phase2-dashboards', 'grafonnet']
+  tags: ['monitoring', 'phase5.5', 'grafonnet', 'generate']
 
 - name: Phase 5.5 - Test and Validate Grafonnet Dashboards
   import_tasks: phase4-dashboards/test-dashboards.yml
   when:
     - grafonnet_enabled | default(true)
     - inventory_hostname == monitoring_server_host
-  tags: ['monitoring', 'phase4-dashboards', 'phase2-dashboards', 'grafonnet']
+  tags: ['monitoring', 'phase5.5', 'grafonnet', 'test']
 
 # =============================================================================
 # PHASE 5.7: FQDN MIGRATION & CONSISTENCY (Production Improvements)

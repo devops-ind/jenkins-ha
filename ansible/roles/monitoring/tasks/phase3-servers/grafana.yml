@@ -123,6 +123,7 @@
   loop_control:
     label: "{{ item.id }} ({{ item.category }})"
   notify: restart grafana
+  when: dashboard_deployment.jinja2_enabled | default(true)
 
 - name: Display dashboard deployment summary
   debug:
@@ -167,7 +168,9 @@
   loop_control:
     label: "{{ item.id }} (Team: {{ item.team_name }})"
   notify: restart grafana
-  when: dashboard_deployment.team_folder_organization | default(true)
+  when:
+    - dashboard_deployment.team_folder_organization | default(true)
+    - dashboard_deployment.jinja2_enabled | default(true)
 
 - name: Deploy Grafana container
   community.docker.docker_container:
@@ -181,6 +184,7 @@
       - "{{ monitoring_home_dir }}/grafana/data:/var/lib/grafana"
       - "{{ monitoring_home_dir }}/grafana/provisioning:/etc/grafana/provisioning"
       - "{{ monitoring_home_dir }}/grafana/dashboards:/var/lib/grafana/dashboards"
+      - "{{ monitoring_home_dir }}/grafana/dashboards-generated:/var/lib/grafana/dashboards-generated"
       - "{{ monitoring_home_dir }}/grafana/plugins:/var/lib/grafana/plugins"
     env:
       GF_SECURITY_ADMIN_USER: "{{ grafana_admin_user }}"
