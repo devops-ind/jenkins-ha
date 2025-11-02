@@ -50,7 +50,7 @@
           "base_template": "{{ dashboard_id }}",
           "team_name": "{{ team.team_name }}",
           "team_environment": "{{ team.active_environment | default('blue') }}",
-          "title": "{{ config.title }}{{ dashboard_deployment.team_specific_suffix }}",
+          "title": "{{ config.title }} - {{ team.team_name | title }} Team",
           "template_file": "{{ config.template_file }}",
           "category": "{{ config.category }}-team-specific",
           "priority": {{ config.priority }}

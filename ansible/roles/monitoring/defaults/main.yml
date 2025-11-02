@@ -239,7 +239,6 @@ dashboard_deployment:
   
   # Team-specific dashboard generation
   generate_team_specific: true
-  team_specific_suffix: " - {{ team_name | title }} Team"
   keep_global_dashboards: true  # Option to keep original multi-team dashboards
   team_folder_organization: true  # Organize by team folders in Grafana
   
