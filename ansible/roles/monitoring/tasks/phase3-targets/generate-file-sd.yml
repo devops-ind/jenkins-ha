@@ -21,6 +21,11 @@
     mode: '0755'
   tags: ['monitoring', 'phase1-file-sd', 'targets']
 
+- name: Validate team configuration for file-sd targets
+  set_fact:
+    prometheus_teams_validated: "{{ jenkins_teams if (jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0) else [] }}"
+  tags: ['monitoring', 'phase1-file-sd', 'phase3-targets', 'targets']
+
 - name: Generate Jenkins team targets in file-sd format
   copy:
     content: |
@@ -50,6 +55,7 @@
     team_effective_port: "{{ team_web_port | int + (100 if (team_bg_enabled and team_active_env == 'green') else 0) }}"
   loop: "{{ prometheus_teams_validated }}"
   loop_control:
+    loop_var: team
     label: "jenkins-{{ team.team_name }}.json"
   when: prometheus_teams_validated | length > 0
   notify: reload prometheus
