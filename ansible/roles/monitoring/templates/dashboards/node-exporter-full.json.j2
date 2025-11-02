@@ -1730,7 +1730,7 @@
             "expr": "rate(node_network_receive_bytes_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])*8",
             "format": "time_series",
             "intervalFactor": 1,
-            "legendFormat": "Rx {{device}}",
+            "legendFormat": "Rx {% raw %}{{device}}{% endraw %}",
             "range": true,
             "refId": "A",
             "step": 240
@@ -1740,7 +1740,7 @@
             "expr": "rate(node_network_transmit_bytes_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])*8",
             "format": "time_series",
             "intervalFactor": 1,
-            "legendFormat": "Tx {{device}} ",
+            "legendFormat": "Tx {% raw %}{{device}}{% endraw %} ",
             "range": true,
             "refId": "B",
             "step": 240
@@ -2779,7 +2779,7 @@
                 "expr": "rate(node_network_receive_bytes_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])*8",
                 "format": "time_series",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Rx in",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Rx in",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -2789,7 +2789,7 @@
                 "expr": "rate(node_network_transmit_bytes_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])*8",
                 "format": "time_series",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Tx out",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Tx out",
                 "range": true,
                 "refId": "B",
                 "step": 240
@@ -2900,7 +2900,7 @@
                 "expr": "(rate(node_network_receive_bytes_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])\n / ignoring(speed) node_network_speed_bytes{instance=\"$node\",job=\"$job\", speed!=\"-1\"}) * 100",
                 "format": "time_series",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Rx in",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Rx in",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -2911,7 +2911,7 @@
                 "format": "time_series",
                 "hide": false,
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Tx out",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Tx out",
                 "range": true,
                 "refId": "B",
                 "step": 240
@@ -3021,7 +3021,7 @@
                 "editorMode": "code",
                 "expr": "irate(node_disk_reads_completed_total{instance=\"$node\",job=\"$job\",device=~\"$diskdevices\"}[$__rate_interval])",
                 "intervalFactor": 4,
-                "legendFormat": "{{device}} - Read",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Read",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -3030,7 +3030,7 @@
                 "editorMode": "code",
                 "expr": "irate(node_disk_writes_completed_total{instance=\"$node\",job=\"$job\",device=~\"$diskdevices\"}[$__rate_interval])",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Write",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Write",
                 "range": true,
                 "refId": "B",
                 "step": 240
@@ -3142,7 +3142,7 @@
                 "format": "time_series",
                 "hide": false,
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Read",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Read",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -3153,7 +3153,7 @@
                 "format": "time_series",
                 "hide": false,
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Write",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Write",
                 "range": true,
                 "refId": "B",
                 "step": 240
@@ -3476,7 +3476,7 @@
                 "hide": false,
                 "interval": "",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}}",
+                "legendFormat": "{% raw %}{{device}}{% endraw %}",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -9573,7 +9573,7 @@
                 "editorMode": "code",
                 "expr": "irate(node_disk_reads_completed_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Read",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Read",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -9582,7 +9582,7 @@
                 "editorMode": "code",
                 "expr": "irate(node_disk_writes_completed_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Write",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Write",
                 "range": true,
                 "refId": "B",
                 "step": 240
@@ -9708,7 +9708,7 @@
                 "expr": "irate(node_disk_read_bytes_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "format": "time_series",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Read",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Read",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -9720,7 +9720,7 @@
                 "format": "time_series",
                 "instant": false,
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Write",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Write",
                 "range": true,
                 "refId": "B",
                 "step": 240
@@ -9847,7 +9847,7 @@
                 "hide": false,
                 "interval": "",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Read",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Read",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -9858,7 +9858,7 @@
                 "hide": false,
                 "interval": "",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Write",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Write",
                 "range": true,
                 "refId": "B",
                 "step": 240
@@ -9973,7 +9973,7 @@
                 "expr": "irate(node_disk_io_time_weighted_seconds_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "interval": "",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}}",
+                "legendFormat": "{% raw %}{{device}}{% endraw %}",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -10098,7 +10098,7 @@
                 "editorMode": "code",
                 "expr": "irate(node_disk_reads_merged_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Read",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Read",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -10107,7 +10107,7 @@
                 "editorMode": "code",
                 "expr": "irate(node_disk_writes_merged_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Write",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Write",
                 "range": true,
                 "refId": "B",
                 "step": 240
@@ -10222,7 +10222,7 @@
                 "expr": "irate(node_disk_io_time_seconds_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "interval": "",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - General IO",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - General IO",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -10232,7 +10232,7 @@
                 "expr": "irate(node_disk_discard_time_seconds_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "interval": "",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Discard/TRIM",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Discard/TRIM",
                 "range": true,
                 "refId": "B",
                 "step": 240
@@ -10243,7 +10243,7 @@
                 "hide": false,
                 "interval": "",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Flush (write cache)",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Flush (write cache)",
                 "range": true,
                 "refId": "C",
                 "step": 240
@@ -10357,7 +10357,7 @@
                 "expr": "irate(node_disk_discards_completed_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "interval": "",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Discards completed",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Discards completed",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -10367,7 +10367,7 @@
                 "expr": "irate(node_disk_discards_merged_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "interval": "",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Discards merged",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Discards merged",
                 "range": true,
                 "refId": "B",
                 "step": 240
@@ -10378,7 +10378,7 @@
                 "hide": false,
                 "interval": "",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Flush",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Flush",
                 "range": true,
                 "refId": "C",
                 "step": 240
@@ -10492,7 +10492,7 @@
                 "expr": "irate(node_disk_discarded_sectors_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "interval": "",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}}",
+                "legendFormat": "{% raw %}{{device}}{% endraw %}",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -10607,7 +10607,7 @@
                 "expr": "node_disk_io_now{instance=\"$node\",job=\"$job\"}",
                 "interval": "",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}}",
+                "legendFormat": "{% raw %}{{device}}{% endraw %}",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -11198,7 +11198,7 @@
                 "format": "time_series",
                 "interval": "",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Rx in",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Rx in",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -11209,7 +11209,7 @@
                 "format": "time_series",
                 "interval": "",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Tx out",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Tx out",
                 "range": true,
                 "refId": "B",
                 "step": 240
@@ -11321,7 +11321,7 @@
                 "expr": "rate(node_network_receive_errs_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "format": "time_series",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Rx in",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Rx in",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -11331,7 +11331,7 @@
                 "expr": "rate(node_network_transmit_errs_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "format": "time_series",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Tx out",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Tx out",
                 "range": true,
                 "refId": "B",
                 "step": 240
@@ -11443,7 +11443,7 @@
                 "expr": "rate(node_network_receive_drop_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "format": "time_series",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Rx in",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Rx in",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -11453,7 +11453,7 @@
                 "expr": "rate(node_network_transmit_drop_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "format": "time_series",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Tx out",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Tx out",
                 "range": true,
                 "refId": "B",
                 "step": 240
@@ -11565,7 +11565,7 @@
                 "expr": "rate(node_network_receive_compressed_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "format": "time_series",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Rx in",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Rx in",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -11575,7 +11575,7 @@
                 "expr": "rate(node_network_transmit_compressed_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "format": "time_series",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Tx out",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Tx out",
                 "range": true,
                 "refId": "B",
                 "step": 240
@@ -11687,7 +11687,7 @@
                 "expr": "rate(node_network_receive_multicast_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "format": "time_series",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Rx in",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Rx in",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -11799,7 +11799,7 @@
                 "expr": "rate(node_network_receive_nohandler_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "format": "time_series",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Rx in",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Rx in",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -11912,7 +11912,7 @@
                 "format": "time_series",
                 "hide": false,
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Rx in",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Rx in",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -12024,7 +12024,7 @@
                 "expr": "rate(node_network_receive_fifo_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "format": "time_series",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Rx in",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Rx in",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -12034,7 +12034,7 @@
                 "expr": "rate(node_network_transmit_fifo_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "format": "time_series",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Tx out",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Tx out",
                 "range": true,
                 "refId": "B",
                 "step": 240
@@ -12146,7 +12146,7 @@
                 "expr": "rate(node_network_transmit_colls_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "format": "time_series",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Tx out",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Tx out",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -12245,7 +12245,7 @@
                 "expr": "rate(node_network_transmit_carrier_total{instance=\"$node\",job=\"$job\"}[$__rate_interval])",
                 "format": "time_series",
                 "intervalFactor": 1,
-                "legendFormat": "{{device}} - Tx out",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Tx out",
                 "range": true,
                 "refId": "A",
                 "step": 240
@@ -12593,7 +12593,7 @@
                 "expr": "node_network_carrier{instance=\"$node\",job=\"$job\"}",
                 "format": "time_series",
                 "instant": false,
-                "legendFormat": "{{device}} - Physical link",
+                "legendFormat": "{% raw %}{{device}}{% endraw %} - Physical link",
                 "refId": "B"
               }
             ],
