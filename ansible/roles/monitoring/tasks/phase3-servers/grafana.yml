@@ -51,6 +51,7 @@
           "team_name": "{{ team.team_name }}",
           "team_environment": "{{ team.active_environment | default('blue') }}",
           "title": "{{ config.title }} - {{ team.team_name | title }} Team",
+          "name": "{{ config.template_file }}",
           "template_file": "{{ config.template_file }}",
           "category": "{{ config.category }}-team-specific",
           "priority": {{ config.priority }}
