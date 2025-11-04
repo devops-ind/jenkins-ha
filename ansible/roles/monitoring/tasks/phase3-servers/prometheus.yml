@@ -52,6 +52,7 @@
       - "{{ monitoring_home_dir }}/prometheus/config:/etc/prometheus"
       - "{{ monitoring_home_dir }}/prometheus/data:/prometheus"
       - "{{ monitoring_home_dir }}/prometheus/rules:/etc/prometheus/rules"
+      - "{{ monitoring_home_dir }}/prometheus/targets.d:/etc/prometheus/targets.d"
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'

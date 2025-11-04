@@ -68,14 +68,53 @@
   when: loki_enabled | default(true)
   tags: ['monitoring', 'verification', 'health']
 
+- name: Force handlers to execute (reload Prometheus configuration)
+  meta: flush_handlers
+  tags: ['monitoring', 'verification', 'targets']
+
+- name: Wait for Prometheus to discover targets
+  pause:
+    seconds: 15
+    prompt: "Waiting for Prometheus to discover file-sd targets..."
+  tags: ['monitoring', 'verification', 'targets']
+
 - name: Verify Prometheus has targets
   uri:
     url: "http://{{ prometheus_host }}:{{ prometheus_port }}/api/v1/targets"
     method: GET
     return_content: yes
   register: prometheus_targets_check
+  retries: 6
+  delay: 10
+  until: >
+    prometheus_targets_check.json.data.activeTargets | default([]) | length > 0
   failed_when: >
     prometheus_targets_check.json.data.activeTargets | default([]) | length == 0
+  tags: ['monitoring', 'verification', 'targets']
+
+- name: Display discovered Prometheus targets
+  debug:
+    msg: |
+      ========================================================
+      ✅ Prometheus Target Discovery Successful
+      ========================================================
+      Active Targets: {{ prometheus_targets_check.json.data.activeTargets | length }}
+      Dropped Targets: {{ prometheus_targets_check.json.data.droppedTargets | length }}
+
+      📊 Discovered Targets by Job:
+      {% for target in prometheus_targets_check.json.data.activeTargets %}
+      • {{ target.labels.job }}: {{ target.scrapeUrl }} ({{ target.health }})
+        └─ Last Scrape: {{ target.lastScrape | default('N/A') }}
+      {% endfor %}
+      {% if prometheus_targets_check.json.data.droppedTargets | length > 0 %}
+
+      ⚠️ Dropped Targets:
+      {% for target in prometheus_targets_check.json.data.droppedTargets %}
+      • {{ target.discoveredLabels.__address__ }} ({{ target.discoveredLabels.job }})
+      {% endfor %}
+      {% endif %}
+      ========================================================
+  when: prometheus_targets_check.json.data.activeTargets | length > 0
   tags: ['monitoring', 'verification', 'targets']
 
 - name: Display monitoring access information
