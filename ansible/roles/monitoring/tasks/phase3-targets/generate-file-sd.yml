@@ -10,6 +10,7 @@
     owner: "{{ monitoring_user }}"
     group: "{{ monitoring_group }}"
     mode: '0755'
+  when: inventory_hostname == monitoring_server_host
   tags: ['monitoring', 'phase1-file-sd', 'targets']
 
 - name: Create Prometheus targets backup directory
@@ -19,11 +20,13 @@
     owner: "{{ monitoring_user }}"
     group: "{{ monitoring_group }}"
     mode: '0755'
+  when: inventory_hostname == monitoring_server_host
   tags: ['monitoring', 'phase1-file-sd', 'targets']
 
 - name: Validate team configuration for file-sd targets
   set_fact:
     prometheus_teams_validated: "{{ jenkins_teams if (jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0) else [] }}"
+  when: inventory_hostname == monitoring_server_host
   tags: ['monitoring', 'phase1-file-sd', 'phase3-targets', 'targets']
 
 - name: Generate Jenkins team targets in file-sd format
@@ -57,7 +60,9 @@
   loop_control:
     loop_var: team
     label: "jenkins-{{ team.team_name }}.json"
-  when: prometheus_teams_validated | length > 0
+  when:
+    - inventory_hostname == monitoring_server_host
+    - prometheus_teams_validated | length > 0
   notify: reload prometheus
   tags: ['monitoring', 'phase1-file-sd', 'targets']
 
@@ -84,7 +89,9 @@
     mode: '0644'
   vars:
     monitoring_jenkins_hosts: "{{ groups['jenkins_masters'] | default(['localhost']) }}"
-  when: prometheus_teams_validated | length == 0
+  when:
+    - inventory_hostname == monitoring_server_host
+    - prometheus_teams_validated | length == 0
   notify: reload prometheus
   tags: ['monitoring', 'phase1-file-sd', 'targets']
 
@@ -116,6 +123,7 @@
     owner: "{{ monitoring_user }}"
     group: "{{ monitoring_group }}"
     mode: '0644'
+  when: inventory_hostname == monitoring_server_host
   notify: reload prometheus
   tags: ['monitoring', 'phase1-file-sd', 'targets']
 
@@ -146,7 +154,9 @@
     owner: "{{ monitoring_user }}"
     group: "{{ monitoring_group }}"
     mode: '0644'
-  when: cadvisor_enabled | default(true)
+  when:
+    - inventory_hostname == monitoring_server_host
+    - cadvisor_enabled | default(true)
   notify: reload prometheus
   tags: ['monitoring', 'phase1-file-sd', 'targets']
 
@@ -166,7 +176,9 @@
     owner: "{{ monitoring_user }}"
     group: "{{ monitoring_group }}"
     mode: '0644'
-  when: loki_enabled | default(true)
+  when:
+    - inventory_hostname == monitoring_server_host
+    - loki_enabled | default(true)
   notify: reload prometheus
   tags: ['monitoring', 'phase1-file-sd', 'targets']
 
@@ -198,7 +210,9 @@
     owner: "{{ monitoring_user }}"
     group: "{{ monitoring_group }}"
     mode: '0644'
-  when: promtail_enabled | default(true)
+  when:
+    - inventory_hostname == monitoring_server_host
+    - promtail_enabled | default(true)
   notify: reload prometheus
   tags: ['monitoring', 'phase1-file-sd', 'targets']
 
@@ -218,7 +232,9 @@
     owner: "{{ monitoring_user }}"
     group: "{{ monitoring_group }}"
     mode: '0644'
-  when: grafana_enabled | default(true)
+  when:
+    - inventory_hostname == monitoring_server_host
+    - grafana_enabled | default(true)
   notify: reload prometheus
   tags: ['monitoring', 'phase1-file-sd', 'targets']
 
@@ -244,6 +260,7 @@
     fi
   args:
     executable: /bin/bash
+  when: inventory_hostname == monitoring_server_host
   changed_when: false
   tags: ['monitoring', 'phase1-file-sd', 'targets', 'backup']
 
@@ -281,4 +298,5 @@
 
       Next Step: Prometheus will reload configuration to use file_sd_configs
       ========================================================
+  when: inventory_hostname == monitoring_server_host
   tags: ['monitoring', 'phase1-file-sd', 'targets']

@@ -90,7 +90,25 @@
   when: promtail_enabled | default(true)
   tags: ['monitoring', 'agents', 'promtail', 'verify']
 
+- name: Generate Promtail Prometheus scrape targets
+  set_fact:
+    prometheus_promtail_targets: "{% set targets = [] %}{% for host in monitoring_target_hosts %}{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{% set _ = targets.append(hostvars[host]['host_fqdn'] + ':' + (promtail_port | string)) %}{% else %}{% set _ = targets.append(hostvars[host]['ansible_default_ipv4']['address'] + ':' + (promtail_port | string)) %}{% endif %}{% endfor %}{{ targets }}"
+  when: promtail_enabled | default(true)
+  tags: ['monitoring', 'agents', 'promtail', 'targets']
+
 - name: Display Promtail deployment summary
   debug:
-    msg: "Promtail deployed to {{ monitoring_target_hosts | length }} hosts. Shipping logs to http://{{ loki_host }}:{{ loki_port }}/loki/api/v1/push"
+    msg: |
+      ==========================================================
+      Promtail Deployment Complete
+      ==========================================================
+      Deployed to hosts: {{ monitoring_target_hosts | length }}
+      Prometheus scrape targets: {{ prometheus_promtail_targets | default([]) | length }}
+      Loki URL: http://{{ loki_host }}:{{ loki_port }}/loki/api/v1/push
+
+      Verification URLs:
+      {% for host in monitoring_target_hosts %}
+      - http://{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{{ hostvars[host]['host_fqdn'] }}{% else %}{{ hostvars[host]['ansible_default_ipv4']['address'] }}{% endif %}:{{ promtail_port }}/ready
+      {% endfor %}
+      ==========================================================
   tags: ['monitoring', 'agents', 'promtail', 'summary']
