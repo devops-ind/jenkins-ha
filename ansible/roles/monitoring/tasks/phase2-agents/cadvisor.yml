@@ -71,16 +71,7 @@
 
 - name: Generate cAdvisor Prometheus scrape targets
   set_fact:
-    prometheus_cadvisor_targets: >-
-      {% set targets = [] %}
-      {% for host in monitoring_target_hosts %}
-        {% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}
-          {% set _ = targets.append(hostvars[host]['host_fqdn'] + ':' + (cadvisor_port | string)) %}
-        {% else %}
-          {% set _ = targets.append(hostvars[host]['ansible_default_ipv4']['address'] + ':' + (cadvisor_port | string)) %}
-        {% endif %}
-      {% endfor %}
-      {{ targets }}
+    prometheus_cadvisor_targets: "{% set targets = [] %}{% for host in monitoring_target_hosts %}{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{% set _ = targets.append(hostvars[host]['host_fqdn'] + ':' + (cadvisor_port | string)) %}{% else %}{% set _ = targets.append(hostvars[host]['ansible_default_ipv4']['address'] + ':' + (cadvisor_port | string)) %}{% endif %}{% endfor %}{{ targets }}"
   when: cadvisor_enabled | default(true)
   tags: ['monitoring', 'agents', 'cadvisor', 'targets']
 

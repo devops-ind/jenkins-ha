@@ -22,18 +22,7 @@ monitoring_use_fqdn: true  # Toggle: true = FQDN-based, false = IP-based (for mi
 monitoring_fqdn_suffix: "internal.local"  # Default domain suffix if host_fqdn not in inventory
 
 # Smart Addressing: FQDN-first with IP fallback
-monitoring_server_address: >-
-  {% if monitoring_use_fqdn and (hostvars[inventory_hostname]['monitoring_fqdn'] is defined) %}
-  {{ hostvars[inventory_hostname]['monitoring_fqdn'] }}
-  {% elif monitoring_use_fqdn and (hostvars[inventory_hostname]['host_fqdn'] is defined) %}
-  {{ hostvars[inventory_hostname]['host_fqdn'] }}
-  {% elif monitoring_use_fqdn and (inventory_hostname | regex_search('\.')) %}
-  {{ inventory_hostname }}
-  {% elif monitoring_use_fqdn %}
-  {{ inventory_hostname }}.{{ monitoring_fqdn_suffix }}
-  {% else %}
-  {{ ansible_default_ipv4.address | default('localhost') }}
-  {% endif %}
+monitoring_server_address: "{% if monitoring_use_fqdn and (hostvars[inventory_hostname]['monitoring_fqdn'] is defined) %}{{ hostvars[inventory_hostname]['monitoring_fqdn'] }}{% elif monitoring_use_fqdn and (hostvars[inventory_hostname]['host_fqdn'] is defined) %}{{ hostvars[inventory_hostname]['host_fqdn'] }}{% elif monitoring_use_fqdn and (inventory_hostname | regex_search('\.')) %}{{ inventory_hostname }}{% elif monitoring_use_fqdn %}{{ inventory_hostname }}.{{ monitoring_fqdn_suffix }}{% else %}{{ ansible_default_ipv4.address | default('localhost') }}{% endif %}"
 
 prometheus_host: "{{ monitoring_server_address }}"
 grafana_host: "{{ monitoring_server_address }}"
@@ -56,12 +45,7 @@ monitoring_deployment_type: "{{ 'separate' if (groups['monitoring'] is defined a
 
 # Target host configuration (NEW - for unified agent deployment)
 # Unified list of ALL hosts where agents should be deployed
-monitoring_target_hosts: >-
-  {% if monitoring_deployment_type == 'separate' %}
-  {{ (groups['monitoring'] | default([]) + groups['jenkins_masters'] | default([])) | unique }}
-  {% else %}
-  {{ groups['monitoring'] | default(['localhost']) }}
-  {% endif %}
+monitoring_target_hosts: "{% if monitoring_deployment_type == 'separate' %}{{ (groups['monitoring'] | default([]) + groups['jenkins_masters'] | default([])) | unique }}{% else %}{{ groups['monitoring'] | default(['localhost']) }}{% endif %}"
 
 # Server deployment host (single host where servers run)
 monitoring_server_host: "{{ groups['monitoring'][0] if groups['monitoring'] is defined and groups['monitoring'] | length > 0 else 'localhost' }}"
