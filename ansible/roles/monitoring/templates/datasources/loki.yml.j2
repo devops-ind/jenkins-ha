@@ -26,10 +26,10 @@ datasources:
           matcherRegex: "job=([a-zA-Z0-9_-]+)"
           url: "/explore?orgId=1&left=[\"now-1h\",\"now\",\"Loki\",{\"expr\":\"{job=\\\"${__value.raw}\\\"}\"}]"
           
-        # Extract error patterns
+        # Extract error patterns (RE2-compatible regex)
         - name: "Error Context"
-          matcherRegex: "(?i)(error|exception|failed).*?(\\w+Error|\\w+Exception)"
-          url: "/explore?orgId=1&left=[\"now-1h\",\"now\",\"Loki\",{\"expr\":\"{} |~ \\\"${__value.raw}\\\"\"}]"
+          matcherRegex: "(?i)(error|exception|failed)"
+          url: "/explore?orgId=1&left=[\"now-1h\",\"now\",\"Loki\",{\"expr\":\"{} |~ \\\"(?i)(error|exception|failed)\\\"\"}]"
           
     # Alert configuration for Loki
     alerting:
