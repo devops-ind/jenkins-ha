@@ -208,11 +208,11 @@
         "targets": [
           {
 {% if dashboard_team is defined %}
-            "expr": "{job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"(?i)(?:error|exception|failed|failure)\"",
+            "expr": "{job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"(?i:error|exception|failed|failure)\"",
             "refId": "A",
             "legendFormat": "{{ dashboard_team | title }} Errors"
 {% else %}
-            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)(?:error|exception|failed|failure)\"",
+            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i:error|exception|failed|failure)\"",
             "refId": "A",
             "legendFormat": "Error Logs"
 {% endif %}
@@ -499,17 +499,17 @@
         "datasource": "Loki",
         "targets": [
           {
-            "expr": "{job=\"auth\"} |~ \"(?i)(?:failed|successful|login|logout|authentication)\"",
+            "expr": "{job=\"auth\"} |~ \"(?i:failed|successful|login|logout|authentication)\"",
             "refId": "A",
             "legendFormat": "Security Events"
           },
           {
 {% if dashboard_team is defined %}
-            "expr": "{job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"(?i)(?:login|logout|authentication|security|unauthorized)\"",
+            "expr": "{job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"(?i:login|logout|authentication|security|unauthorized)\"",
             "refId": "B",
             "legendFormat": "{{ dashboard_team | title }} Security"
 {% else %}
-            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)(?:login|logout|authentication|security|unauthorized)\"",
+            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i:login|logout|authentication|security|unauthorized)\"",
             "refId": "B",
             "legendFormat": "Jenkins Security"
 {% endif %}
