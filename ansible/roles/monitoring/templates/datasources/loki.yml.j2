@@ -28,8 +28,8 @@ datasources:
           
         # Extract error patterns (RE2-compatible regex)
         - name: "Error Context"
-          matcherRegex: "(?i)(error|exception|failed)"
-          url: "/explore?orgId=1&left=[\"now-1h\",\"now\",\"Loki\",{\"expr\":\"{} |~ \\\"(?i)(error|exception|failed)\\\"\"}]"
+          matcherRegex: "(?i)(?:error|exception|failed)"
+          url: "/explore?orgId=1&left=[\"now-1h\",\"now\",\"Loki\",{\"expr\":\"{} |~ \\\"(?i)(?:error|exception|failed)\\\"\"}]"
           
     # Alert configuration for Loki
     alerting:

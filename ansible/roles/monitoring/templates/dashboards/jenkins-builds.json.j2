@@ -239,11 +239,11 @@
         "targets": [
           {
 {% if dashboard_team is defined %}
-            "expr": "{job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"(?i)(success|successful|completed|finished)\" | line_format \"{{ '{{' }}.timestamp{{ '}}' }} [{{ '{{' }}.container_name{{ '}}' }}] {{ '{{' }}.output{{ '}}' }}\"",
+            "expr": "{job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"(?i)(?:success|successful|completed|finished)\" | line_format \"{{ '{{' }}.timestamp{{ '}}' }} [{{ '{{' }}.container_name{{ '}}' }}] {{ '{{' }}.output{{ '}}' }}\"",
             "refId": "A",
             "legendFormat": "{{ dashboard_team | title }} Success Logs"
 {% else %}
-            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)(success|successful|completed|finished)\" | line_format \"{{ '{{' }}.timestamp{{ '}}' }} [{{ '{{' }}.team{{ '}}' }}] {{ '{{' }}.output{{ '}}' }}\"",
+            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)(?:success|successful|completed|finished)\" | line_format \"{{ '{{' }}.timestamp{{ '}}' }} [{{ '{{' }}.team{{ '}}' }}] {{ '{{' }}.output{{ '}}' }}\"",
             "refId": "A",
             "legendFormat": "Success Logs"
 {% endif %}
@@ -274,11 +274,11 @@
         "targets": [
           {
 {% if dashboard_team is defined %}
-            "expr": "{job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"(?i)(error|exception|failed|failure|abort)\" | line_format \"{{ '{{' }}.timestamp{{ '}}' }} [{{ '{{' }}.container_name{{ '}}' }}] {{ '{{' }}.output{{ '}}' }}\"",
+            "expr": "{job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"(?i)(?:error|exception|failed|failure|abort)\" | line_format \"{{ '{{' }}.timestamp{{ '}}' }} [{{ '{{' }}.container_name{{ '}}' }}] {{ '{{' }}.output{{ '}}' }}\"",
             "refId": "A",
             "legendFormat": "{{ dashboard_team | title }} Failure Logs"
 {% else %}
-            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)(error|exception|failed|failure|abort)\" | line_format \"{{ '{{' }}.timestamp{{ '}}' }} [{{ '{{' }}.team{{ '}}' }}] {{ '{{' }}.output{{ '}}' }}\"",
+            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)(?:error|exception|failed|failure|abort)\" | line_format \"{{ '{{' }}.timestamp{{ '}}' }} [{{ '{{' }}.team{{ '}}' }}] {{ '{{' }}.output{{ '}}' }}\"",
             "refId": "A",
             "legendFormat": "Failure Logs"
 {% endif %}
@@ -326,12 +326,12 @@
           },
           {
 {% if dashboard_team is defined %}
-            "expr": "rate(count_over_time({job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"(?i)(error|exception|failed)\" [1m])[5m:])",
+            "expr": "rate(count_over_time({job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"(?i)(?:error|exception|failed)\" [1m])[5m:])",
             "legendFormat": "{{ dashboard_team | title }} Error Log Rate",
             "refId": "B",
             "datasource": "Loki"
 {% else %}
-            "expr": "rate(count_over_time({job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)(error|exception|failed)\" [1m])[5m:])",
+            "expr": "rate(count_over_time({job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)(?:error|exception|failed)\" [1m])[5m:])",
             "legendFormat": "{{ '{{' }}team{{ '}}' }} Error Log Rate",
             "refId": "B",
             "datasource": "Loki"
