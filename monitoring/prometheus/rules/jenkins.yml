@@ -92,7 +92,9 @@ groups:
 
   - name: jenkins.infrastructure
     rules:
-      # Jenkins Master Availability - Updated for dynamic team targets
+      # Jenkins Master Availability - Updated for active environment monitoring only
+      # Only alerts when ACTIVELY MONITORED Jenkins targets are down
+      # Inactive blue-green environments are not monitored, so they won't trigger alerts
       - alert: JenkinsMasterDown
         expr: up{job=~"jenkins-.*|jenkins|jenkins-default"} == 0
         for: 2m
@@ -100,10 +102,13 @@ groups:
           severity: critical
           service: jenkins
           component: master
+          team: "{{ $labels.team }}"
+          environment: "{{ $labels.environment }}"
         annotations:
-          summary: "Jenkins Master instance {{ $labels.instance }} is down"
-          description: "Jenkins Master {{ $labels.instance }} has been down for more than 2 minutes. High Availability may be compromised."
+          summary: "Jenkins Master instance {{ $labels.instance }} ({{ $labels.team }}-{{ $labels.environment }}) is down"
+          description: "Jenkins Master {{ $labels.instance }} for team {{ $labels.team }} ({{ $labels.environment }} environment) has been down for more than 2 minutes. This is the ACTIVE environment for this team. High Availability may be compromised."
           runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/master-down"
+          note: "Only actively monitored environments trigger this alert. Inactive blue-green environments are not monitored."
 
       - alert: JenkinsAllMastersDown
         expr: count(up{job=~"jenkins-.*|jenkins|jenkins-default"} == 1) == 0

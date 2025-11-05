@@ -85,6 +85,9 @@ ansible-playbook ansible/site.yml --tags validation -e validation_mode=strict
 # Security compliance scan
 /usr/local/bin/jenkins-security-scan.sh --all
 
+# Validate Prometheus targets (only active environments monitored)
+ansible-playbook ansible/site.yml --tags monitoring,targets,validation
+
 # SSL certificate validation (NEW)
 ansible-playbook ansible/site.yml --tags ssl --check
 
@@ -1115,6 +1118,7 @@ Required inventory groups for proper deployment:
 - **Comprehensive Grafana Dashboards**: 26-panel dashboard with DORA metrics, SLI tracking, deployment success rates, and blue-green status
 - **Multi-layer Health Checks**: Jenkins health checks integrated with monitoring stack and automated rollback triggers
 - **Blue-green Environment Monitoring**: Enhanced health monitoring with pre-switch validation and rollback automation
+- **Active Environment Monitoring Only**: **NEW** - Prometheus monitors ONLY the active blue/green environment per team, preventing false alerts from inactive environments. Includes automatic stale target cleanup, validation of active-only targets, and environment-aware alerting
 - **HAProxy Advanced Monitoring**: Statistics, health checks, and SLI integration for load balancer monitoring
 - **Per-team Security Metrics**: Team-specific dashboards with security compliance and vulnerability tracking
 - **Container Security Monitoring**: Real-time security monitoring with resource usage, compliance, and vulnerability alerts
