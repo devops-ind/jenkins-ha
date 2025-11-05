@@ -20,7 +20,7 @@
     group: "{{ monitoring_group }}"
     mode: '0755'
 
-- name: Create Grafana provisioning configuration
+- name: Create Grafana provisioning configuration (core datasources only)
   template:
     src: "{{ item }}.j2"
     dest: "{{ monitoring_home_dir }}/grafana/provisioning/{{ item }}"
@@ -30,8 +30,6 @@
   loop:
     - datasources/prometheus.yml
     - datasources/loki.yml
-    - datasources/github-datasource.yml
-    - datasources/jira-datasource.yml
     - dashboards/dashboard.yml
     - plugins/plugins.yml
   notify: restart grafana
@@ -193,6 +191,10 @@
       GF_USERS_ALLOW_SIGN_UP: "{{ grafana_allow_sign_up | lower }}"
       GF_USERS_DEFAULT_THEME: "dark"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: "/var/lib/grafana/dashboards/jenkins-overview.json"
+      # Disable features that require SSL connections to grafana.com
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: "true"
       # Note: GF_INSTALL_PLUGINS removed - plugins installed post-deployment to avoid SSL issues
     networks:
       - name: "{{ monitoring_docker_network }}"
@@ -235,3 +237,38 @@
   when:
     - grafana_enabled | default(true)
     - (github_plugin_install.changed | default(false)) or (jira_plugin_install.changed | default(false))
+
+- name: Wait for Grafana to be ready after plugin installation
+  uri:
+    url: "http://localhost:{{ grafana_port }}/api/health"
+    status_code: 200
+  register: grafana_health_post_plugin
+  until: grafana_health_post_plugin.status == 200
+  retries: 30
+  delay: 2
+  when: grafana_enabled | default(true)
+
+- name: Provision GitHub datasource configuration after plugin installation
+  template:
+    src: datasources/github-datasource.yml.j2
+    dest: "{{ monitoring_home_dir }}/grafana/provisioning/datasources/github-datasource.yml"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  when: grafana_enabled | default(true)
+
+- name: Provision Jira datasource configuration after plugin installation
+  template:
+    src: datasources/jira-datasource.yml.j2
+    dest: "{{ monitoring_home_dir }}/grafana/provisioning/datasources/jira-datasource.yml"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  when: grafana_enabled | default(true)
+
+- name: Restart Grafana to load datasource configurations
+  community.docker.docker_container:
+    name: grafana-{{ deployment_environment | default('local') }}
+    state: started
+    restart: true
+  when: grafana_enabled | default(true)
