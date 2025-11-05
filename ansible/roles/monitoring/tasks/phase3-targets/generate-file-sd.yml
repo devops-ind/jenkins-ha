@@ -23,66 +23,32 @@
   when: inventory_hostname == monitoring_server_host
   tags: ['monitoring', 'phase1-file-sd', 'targets']
 
-- name: Backup and clean stale Jenkins target files before regeneration
-  shell: |
-    set -e
-    BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
-
-    # Backup existing Jenkins target files
-    if compgen -G "{{ monitoring_home_dir }}/prometheus/targets.d/jenkins-*.json" > /dev/null; then
-      for file in {{ monitoring_home_dir }}/prometheus/targets.d/jenkins-*.json; do
-        if [ -f "$file" ]; then
-          mkdir -p "{{ monitoring_home_dir }}/prometheus/targets.d/.backups"
-          cp "$file" "{{ monitoring_home_dir }}/prometheus/targets.d/.backups/$(basename $file)-${BACKUP_DATE}"
-        fi
-      done
-
-      # Remove old Jenkins target files to prevent monitoring inactive environments
-      rm -f {{ monitoring_home_dir }}/prometheus/targets.d/jenkins-*.json
-      echo "Cleaned stale Jenkins target files"
-    else
-      echo "No existing Jenkins target files to clean"
-    fi
-
-    # Keep only last N backup versions
-    find "{{ monitoring_home_dir }}/prometheus/targets.d/.backups" -type f -name "jenkins-*.json-*" | \
-      sort -r | tail -n +{{ prometheus_targets_backup_versions | default(10) + 1 }} | xargs -r rm
-  args:
-    executable: /bin/bash
-  when: inventory_hostname == monitoring_server_host
-  changed_when: true
-  register: cleanup_result
-  tags: ['monitoring', 'phase1-file-sd', 'targets', 'cleanup']
-
-- name: Display cleanup results
-  debug:
-    msg: "{{ cleanup_result.stdout_lines }}"
-  when:
-    - inventory_hostname == monitoring_server_host
-    - cleanup_result.stdout_lines is defined
-  tags: ['monitoring', 'phase1-file-sd', 'targets', 'cleanup']
-
 - name: Validate team configuration for file-sd targets
   set_fact:
     prometheus_teams_validated: "{{ jenkins_teams if (jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0) else [] }}"
   when: inventory_hostname == monitoring_server_host
   tags: ['monitoring', 'phase1-file-sd', 'phase3-targets', 'targets']
 
-- name: Generate Jenkins team targets in file-sd format
+- name: Generate Jenkins team targets for BOTH blue and green environments in file-sd format
   copy:
     content: |
       [
       {% for host in monitoring_jenkins_hosts %}
+      {% for env in ['blue', 'green'] %}
+      {% set env_port = team_web_port if env == 'blue' else (team_web_port | int + 100) %}
         {
-          "targets": ["{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{{ hostvars[host]['host_fqdn'] }}{% else %}{{ hostvars[host]['ansible_default_ipv4']['address'] }}{% endif %}:{{ team_effective_port }}"],
+          "targets": ["{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{{ hostvars[host]['host_fqdn'] }}{% else %}{{ hostvars[host]['ansible_default_ipv4']['address'] }}{% endif %}:{{ env_port }}"],
           "labels": {
             "job": "jenkins-{{ team.team_name }}",
             "team": "{{ team.team_name }}",
-            "environment": "{{ team.active_environment | default('blue') }}",
+            "environment": "{{ env }}",
+            "active_environment": "{{ team_active_env }}",
+            "is_active": "{{ 'true' if env == team_active_env else 'false' }}",
             "deployment_mode": "{{ deployment_mode | default('local') }}",
-            "blue_green_enabled": "{{ team.blue_green_enabled | default(false) }}"
+            "blue_green_enabled": "{{ team_bg_enabled }}"
           }
-        }{% if not loop.last %},{% endif %}
+        }{% if not (loop.last and loop.index0 == 1) %},{% endif %}
+      {% endfor %}
       {% endfor %}
       ]
     dest: "{{ monitoring_home_dir }}/prometheus/targets.d/jenkins-{{ team.team_name }}.json"
@@ -94,11 +60,10 @@
     team_web_port: "{{ team.ports.web | default(8080) | int }}"
     team_active_env: "{{ team.active_environment | default('blue') }}"
     team_bg_enabled: "{{ team.blue_green_enabled | default(true) }}"
-    team_effective_port: "{{ team_web_port | int + (100 if (team_bg_enabled and team_active_env == 'green') else 0) }}"
   loop: "{{ prometheus_teams_validated }}"
   loop_control:
     loop_var: team
-    label: "jenkins-{{ team.team_name }}.json"
+    label: "jenkins-{{ team.team_name }}.json (both blue and green)"
   when:
     - inventory_hostname == monitoring_server_host
     - prometheus_teams_validated | length > 0
@@ -303,7 +268,7 @@
   changed_when: false
   tags: ['monitoring', 'phase1-file-sd', 'targets', 'backup']
 
-- name: Validate generated targets contain only active environments
+- name: Validate generated targets contain BOTH blue and green environments with is_active labels
   shell: |
     set -e
     VALIDATION_PASSED=true
@@ -312,35 +277,52 @@
     {% for team in prometheus_teams_validated %}
     {% set team_active_env = team.active_environment | default('blue') %}
     {% set team_web_port = team.ports.web | default(8080) %}
-    {% set team_bg_enabled = team.blue_green_enabled | default(true) %}
-    {% if team_bg_enabled and team_active_env == 'green' %}
-    {% set expected_port = team_web_port | int + 100 %}
-    {% else %}
-    {% set expected_port = team_web_port %}
-    {% endif %}
-    {% set inactive_port = (team_web_port | int + 100) if team_active_env == 'blue' else team_web_port %}
+    {% set blue_port = team_web_port %}
+    {% set green_port = team_web_port | int + 100 %}
 
-    # Validate team {{ team.team_name }}: active={{ team_active_env }}, expected_port={{ expected_port }}
+    # Validate team {{ team.team_name }}: active={{ team_active_env }}
     TARGET_FILE="{{ monitoring_home_dir }}/prometheus/targets.d/jenkins-{{ team.team_name }}.json"
     if [ -f "$TARGET_FILE" ]; then
-      # Check for expected active environment port
-      if ! grep -q ":{{ expected_port }}" "$TARGET_FILE"; then
+      # Check for BOTH blue and green environment ports
+      if ! grep -q ":{{ blue_port }}" "$TARGET_FILE"; then
         VALIDATION_PASSED=false
-        VALIDATION_ERRORS="${VALIDATION_ERRORS}\n❌ Team {{ team.team_name }}: Missing expected port {{ expected_port }} ({{ team_active_env }} environment)"
+        VALIDATION_ERRORS="${VALIDATION_ERRORS}\n❌ Team {{ team.team_name }}: Missing blue environment port {{ blue_port }}"
       fi
 
-      # Check for unexpected inactive environment port
-      {% if team_bg_enabled %}
-      if grep -q ":{{ inactive_port }}" "$TARGET_FILE"; then
+      if ! grep -q ":{{ green_port }}" "$TARGET_FILE"; then
         VALIDATION_PASSED=false
-        VALIDATION_ERRORS="${VALIDATION_ERRORS}\n❌ Team {{ team.team_name }}: Found inactive port {{ inactive_port }} (should only monitor {{ team_active_env }})"
+        VALIDATION_ERRORS="${VALIDATION_ERRORS}\n❌ Team {{ team.team_name }}: Missing green environment port {{ green_port }}"
       fi
-      {% endif %}
 
-      # Verify environment label matches active environment
-      if ! grep -q "\"environment\": \"{{ team_active_env }}\"" "$TARGET_FILE"; then
+      # Verify BOTH environment labels present
+      if ! grep -q "\"environment\": \"blue\"" "$TARGET_FILE"; then
         VALIDATION_PASSED=false
-        VALIDATION_ERRORS="${VALIDATION_ERRORS}\n❌ Team {{ team.team_name }}: Environment label mismatch (expected {{ team_active_env }})"
+        VALIDATION_ERRORS="${VALIDATION_ERRORS}\n❌ Team {{ team.team_name }}: Missing blue environment label"
+      fi
+
+      if ! grep -q "\"environment\": \"green\"" "$TARGET_FILE"; then
+        VALIDATION_PASSED=false
+        VALIDATION_ERRORS="${VALIDATION_ERRORS}\n❌ Team {{ team.team_name }}: Missing green environment label"
+      fi
+
+      # Verify active_environment label matches team configuration
+      if ! grep -q "\"active_environment\": \"{{ team_active_env }}\"" "$TARGET_FILE"; then
+        VALIDATION_PASSED=false
+        VALIDATION_ERRORS="${VALIDATION_ERRORS}\n❌ Team {{ team.team_name }}: active_environment label mismatch (expected {{ team_active_env }})"
+      fi
+
+      # Verify is_active labels (one true, one false)
+      ACTIVE_COUNT=$(grep -c "\"is_active\": \"true\"" "$TARGET_FILE" || true)
+      PASSIVE_COUNT=$(grep -c "\"is_active\": \"false\"" "$TARGET_FILE" || true)
+
+      if [ "$ACTIVE_COUNT" -ne 1 ]; then
+        VALIDATION_PASSED=false
+        VALIDATION_ERRORS="${VALIDATION_ERRORS}\n❌ Team {{ team.team_name }}: Expected 1 active target, found $ACTIVE_COUNT"
+      fi
+
+      if [ "$PASSIVE_COUNT" -ne 1 ]; then
+        VALIDATION_PASSED=false
+        VALIDATION_ERRORS="${VALIDATION_ERRORS}\n❌ Team {{ team.team_name }}: Expected 1 passive target, found $PASSIVE_COUNT"
       fi
     else
       VALIDATION_PASSED=false
@@ -349,7 +331,7 @@
     {% endfor %}
 
     if [ "$VALIDATION_PASSED" = "true" ]; then
-      echo "✅ Validation PASSED: All targets contain only active environments"
+      echo "✅ Validation PASSED: All targets contain both blue and green environments with correct is_active labels"
       exit 0
     else
       echo "❌ Validation FAILED: Issues detected in generated targets"
@@ -384,7 +366,7 @@
 
       Generated Target Files:
       {% for team in prometheus_teams_validated %}
-      • jenkins-{{ team.team_name }}.json ({{ team.active_environment }} environment only)
+      • jenkins-{{ team.team_name }}.json (BOTH blue and green environments)
       {% endfor %}
       {% if prometheus_teams_validated | length == 0 %}
       • jenkins-default.json
@@ -403,21 +385,30 @@
       • grafana.json
       {% endif %}
 
-      🎯 Active Environment Monitoring:
+      🎯 Both-Environment Monitoring Strategy:
       {% for team in prometheus_teams_validated %}
       {% set team_web_port = team.ports.web | default(8080) %}
       {% set team_active_env = team.active_environment | default('blue') %}
-      {% set team_bg_enabled = team.blue_green_enabled | default(true) %}
-      {% if team_bg_enabled and team_active_env == 'green' %}
-      {% set active_port = team_web_port | int + 100 %}
-      {% else %}
-      {% set active_port = team_web_port %}
-      {% endif %}
-      • {{ team.team_name }}: {{ team_active_env }} (port {{ active_port }})
+      {% set team_passive_env = 'green' if team_active_env == 'blue' else 'blue' %}
+      {% set blue_port = team_web_port %}
+      {% set green_port = team_web_port | int + 100 %}
+      • {{ team.team_name }}:
+        - Active: {{ team_active_env }} (port {% if team_active_env == 'blue' %}{{ blue_port }}{% else %}{{ green_port }}{% endif %}) ← Critical alerts
+        - Passive: {{ team_passive_env }} (port {% if team_passive_env == 'blue' %}{{ blue_port }}{% else %}{{ green_port }}{% endif %}) ← Info alerts only
       {% endfor %}
 
-      ⚠️  Inactive environments are NOT monitored (resource-optimized deployment)
-      ✅ Stale target cleanup ensures no false alerts from inactive environments
+      ✅ BOTH blue and green environments monitored for complete visibility
+      ✅ Critical alerts ONLY for active environment (is_active="true")
+      ✅ Informational alerts for passive environment issues
+      ✅ Pre-switch validation enabled: verify passive health before switching
+      ✅ Zero false alerts: passive environment monitored but alerts suppressed
+
+      Benefits:
+      • Complete infrastructure visibility (no blind spots)
+      • Safe blue-green switches with pre-validation
+      • Faster incident response with full context
+      • Better troubleshooting with metrics from both environments
+      • Continuous metrics history across environment switches
 
       Backup Retention: {{ prometheus_targets_backup_versions | default(10) }} versions
       Backup Location: {{ monitoring_home_dir }}/prometheus/targets.d/.backups/
