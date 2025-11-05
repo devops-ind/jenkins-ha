@@ -234,7 +234,7 @@ scrape_configs:
           expression: 'Duration:\s+(?:(?P<hours>\d+)\s*hr\s*)?(?:(?P<minutes>\d+)\s*min\s*)?(?:(?P<seconds>\d+)\s*sec)?'
       - template:
           source: duration_seconds
-          template: {% raw %}'{{ if .hours }}{{ mul .hours 3600 }}{{ else }}0{{ end }}{{ if .minutes }}{{ add (mul .minutes 60) }}{{ else }}{{ end }}{{ if .seconds }}{{ add .seconds }}{{ else }}{{ end }}'{% endraw %}
+          template: {% raw %}'{{ add (add (mul (or .hours "0") 3600) (mul (or .minutes "0") 60)) (or .seconds "0") }}'{% endraw %}
       - labels:
           duration_seconds:
       # Extract error messages for failed builds
