@@ -1412,7 +1412,7 @@
         },
         "targets": [
           {
-            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)(docker\.sock|volume|mount|permission)\" | line_format \"{{ '{{' }}.timestamp{{ '}}' }} [{{ '{{' }}.team{{ '}}' }}-{{ '{{' }}.container_name{{ '}}' }}] {{ '{{' }}.output{{ '}}' }}\"",
+            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)(docker\\\\.sock|volume|mount|permission)\" | line_format \"{{ '{{' }}.timestamp{{ '}}' }} [{{ '{{' }}.team{{ '}}' }}-{{ '{{' }}.container_name{{ '}}' }}] {{ '{{' }}.output{{ '}}' }}\"",
             "refId": "A",
             "legendFormat": "Docker Socket & Volume Logs"
           }

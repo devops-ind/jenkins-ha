@@ -2,10 +2,10 @@
   "dashboard": {
     "id": null,
 {% if dashboard_team is defined %}
-    "title": "{{ dashboard_title_override | default('Jenkins Overview - ' + dashboard_team | title + ' Team') }}",
+    "title": "{% if dashboard_title_override is defined and dashboard_title_override %}{{ dashboard_title_override }}{% else %}Jenkins Overview - {{ dashboard_team | title }} Team{% endif %}",
     "tags": ["jenkins", "overview", "team-specific", "{{ dashboard_team }}", "{{ team_environment | default('blue') }}", "{{ deployment_mode | default('local') }}"],
 {% else %}
-    "title": "Jenkins Overview - {{ deployment_mode | default('local') | title }}",
+    "title": "{% if dashboard_title_override is defined and dashboard_title_override %}{{ dashboard_title_override }}{% else %}Jenkins Overview - {{ deployment_mode | default('local') | title }}{% endif %}",
     "tags": ["jenkins", "overview", "multi-team", "{{ deployment_mode | default('local') }}"],
 {% endif %}
     "style": "dark",

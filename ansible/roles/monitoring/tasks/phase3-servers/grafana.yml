@@ -117,9 +117,7 @@
     mode: '0644'
   vars:
     # Global dashboard variables (no team-specific filtering)
-    dashboard_team: "{{ omit }}"
-    team_environment: "{{ omit }}"
-    dashboard_title_override: "{{ item.title | default(omit) }}"
+    dashboard_title_override: "{{ item.title }}"
   loop: "{{ sorted_enabled_dashboards | rejectattr('category', 'match', '.*-team-specific') | list }}"
   loop_control:
     label: "{{ item.id }} ({{ item.category }})"
@@ -162,9 +160,9 @@
     mode: '0644'
   vars:
     # Team-specific template variables
-    dashboard_team: "{{ item.team_name | default(omit) }}"
-    team_environment: "{{ item.team_environment | default(omit) }}"
-    dashboard_title_override: "{{ item.title | default(omit) }}"
+    dashboard_team: "{{ item.team_name }}"
+    team_environment: "{{ item.team_environment }}"
+    dashboard_title_override: "{{ item.title }}"
   loop: "{{ sorted_enabled_dashboards | selectattr('category', 'match', '.*-team-specific') | list }}"
   loop_control:
     label: "{{ item.id }} (Team: {{ item.team_name }})"
