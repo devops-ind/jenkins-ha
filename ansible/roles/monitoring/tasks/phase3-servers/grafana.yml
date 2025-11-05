@@ -193,8 +193,45 @@
       GF_USERS_ALLOW_SIGN_UP: "{{ grafana_allow_sign_up | lower }}"
       GF_USERS_DEFAULT_THEME: "dark"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: "/var/lib/grafana/dashboards/jenkins-overview.json"
-      GF_INSTALL_PLUGINS: "grafana-github-datasource,grafana-jira-datasource"
+      # Note: GF_INSTALL_PLUGINS removed - plugins installed post-deployment to avoid SSL issues
     networks:
       - name: "{{ monitoring_docker_network }}"
     user: "{{ monitoring_uid }}:{{ monitoring_gid }}"
   when: grafana_enabled | default(true)
+
+- name: Wait for Grafana to be ready
+  uri:
+    url: "http://localhost:{{ grafana_port }}/api/health"
+    status_code: 200
+  register: grafana_health
+  until: grafana_health.status == 200
+  retries: 30
+  delay: 2
+  when: grafana_enabled | default(true)
+
+- name: Install GitHub datasource plugin with insecure flag
+  community.docker.docker_container_exec:
+    container: grafana-{{ deployment_environment | default('local') }}
+    command: grafana-cli --insecure plugins install grafana-github-datasource
+  register: github_plugin_install
+  failed_when: false
+  changed_when: github_plugin_install.rc == 0
+  when: grafana_enabled | default(true)
+
+- name: Install Jira datasource plugin with insecure flag
+  community.docker.docker_container_exec:
+    container: grafana-{{ deployment_environment | default('local') }}
+    command: grafana-cli --insecure plugins install grafana-jira-datasource
+  register: jira_plugin_install
+  failed_when: false
+  changed_when: jira_plugin_install.rc == 0
+  when: grafana_enabled | default(true)
+
+- name: Restart Grafana to load plugins
+  community.docker.docker_container:
+    name: grafana-{{ deployment_environment | default('local') }}
+    state: started
+    restart: true
+  when:
+    - grafana_enabled | default(true)
+    - (github_plugin_install.changed | default(false)) or (jira_plugin_install.changed | default(false))
