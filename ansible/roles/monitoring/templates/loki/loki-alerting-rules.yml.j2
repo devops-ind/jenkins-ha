@@ -66,7 +66,7 @@ groups:
       # Warning: High error rate in build logs
       - alert: JenkinsErrorRateHigh
         expr: |
-          sum(rate({job="jenkins-job-logs"} |~ "(?i:error|exception|fatal)" [5m])) by (team, job_name) > 2
+          sum(rate({job="jenkins-job-logs"} |~ "(?i)error|exception|fatal" [5m])) by (team, job_name) > 2
         for: 5m
         labels:
           severity: warning
@@ -93,7 +93,7 @@ groups:
       # Info: Specific error patterns detected
       - alert: JenkinsTestFailureDetected
         expr: |
-          sum(count_over_time({job="jenkins-job-logs"} |~ "(?i:test.*fail|assertion.*fail|junit.*fail)" [5m])) by (team, job_name) > 0
+          sum(count_over_time({job="jenkins-job-logs"} |~ "(?i)test.*fail|assertion.*fail|junit.*fail" [5m])) by (team, job_name) > 0
         for: 2m
         labels:
           severity: info
@@ -112,11 +112,11 @@ groups:
 
 
             Review test results and fix failing tests
-          loki_query: "{job=\"jenkins-job-logs\", team=\"{% raw %}{{ $labels.team }}{% endraw %}\", job_name=\"{% raw %}{{ $labels.job_name }}{% endraw %}\"} |~ \"(?i:test.*fail)\""
+          loki_query: "{job=\"jenkins-job-logs\", team=\"{% raw %}{{ $labels.team }}{% endraw %}\", job_name=\"{% raw %}{{ $labels.job_name }}{% endraw %}\"} |~ \"(?i)test.*fail\""
 
       - alert: JenkinsDependencyError
         expr: |
-          sum(count_over_time({job="jenkins-job-logs"} |~ "(?i:dependency.*error|could not resolve|artifact.*not found|package.*not found)" [10m])) by (team, job_name) > 0
+          sum(count_over_time({job="jenkins-job-logs"} |~ "(?i)dependency.*error|could not resolve|artifact.*not found|package.*not found" [10m])) by (team, job_name) > 0
         for: 3m
         labels:
           severity: warning
@@ -139,7 +139,7 @@ groups:
             - Missing dependencies in repositories
             - Version conflicts
             - Repository configuration issues
-          loki_query: "{job=\"jenkins-job-logs\", team=\"{% raw %}{{ $labels.team }}{% endraw %}\", job_name=\"{% raw %}{{ $labels.job_name }}{% endraw %}\"} |~ \"(?i:dependency.*error)\""
+          loki_query: "{job=\"jenkins-job-logs\", team=\"{% raw %}{{ $labels.team }}{% endraw %}\", job_name=\"{% raw %}{{ $labels.job_name }}{% endraw %}\"} |~ \"(?i)dependency.*error\""
 
   - name: jenkins_build_performance
     interval: 5m
@@ -258,7 +258,7 @@ groups:
       # Critical: Security-related errors
       - alert: JenkinsSecurityError
         expr: |
-          sum(count_over_time({job="jenkins-job-logs"} |~ "(?i:security.*error|authentication.*fail|authorization.*fail|access.*denied|permission.*denied)" [10m])) by (team, job_name) > 0
+          sum(count_over_time({job="jenkins-job-logs"} |~ "(?i)security.*error|authentication.*fail|authorization.*fail|access.*denied|permission.*denied" [10m])) by (team, job_name) > 0
         for: 5m
         labels:
           severity: critical
@@ -281,13 +281,13 @@ groups:
             - Check Jenkins security settings
             - Verify credentials and permissions
             - Consider security audit
-          loki_query: "{job=\"jenkins-job-logs\", team=\"{% raw %}{{ $labels.team }}{% endraw %}\", job_name=\"{% raw %}{{ $labels.job_name }}{% endraw %}\"} |~ \"(?i:security.*error)\""
+          loki_query: "{job=\"jenkins-job-logs\", team=\"{% raw %}{{ $labels.team }}{% endraw %}\", job_name=\"{% raw %}{{ $labels.job_name }}{% endraw %}\"} |~ \"(?i)security.*error\""
           severity_level: "P1"
 
       # Warning: Credential-related warnings
       - alert: JenkinsCredentialWarning
         expr: |
-          sum(count_over_time({job="jenkins-job-logs"} |~ "(?i:credential.*expire|credential.*invalid|token.*expire)" [1h])) by (team, job_name) > 0
+          sum(count_over_time({job="jenkins-job-logs"} |~ "(?i)credential.*expire|credential.*invalid|token.*expire" [1h])) by (team, job_name) > 0
         for: 10m
         labels:
           severity: warning
@@ -304,4 +304,4 @@ groups:
 
 
             Action: Review and update credentials before they expire
-          loki_query: "{job=\"jenkins-job-logs\", team=\"{% raw %}{{ $labels.team }}{% endraw %}\", job_name=\"{% raw %}{{ $labels.job_name }}{% endraw %}\"} |~ \"(?i:credential.*expire)\""
+          loki_query: "{job=\"jenkins-job-logs\", team=\"{% raw %}{{ $labels.team }}{% endraw %}\", job_name=\"{% raw %}{{ $labels.job_name }}{% endraw %}\"} |~ \"(?i)credential.*expire\""
