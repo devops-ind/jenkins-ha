@@ -1207,7 +1207,7 @@
         },
         "targets": [
           {
-            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)provisioning|launching|agent.*start|container.*creat\"",
+            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"provisioning|launching|agent.*start|container.*creat\"",
             "refId": "A",
             "legendFormat": "Agent Provisioning"
           }
@@ -1243,7 +1243,7 @@
         },
         "targets": [
           {
-            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)agent.*error|agent.*fail|container.*exit|launch.*fail|timeout|connection.*refused\"",
+            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"}  |~ \"(agent.*error|agent.*fail|container.*exit|launch.*fail|timeout|connection.*refused)\"",
             "refId": "A",
             "legendFormat": "Agent Errors"
           }
@@ -1279,7 +1279,7 @@
         },
         "targets": [
           {
-            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)container|docker\" |~ \"(?i)start|stop|kill|remove|create|exit\" | line_format \"{{ '{{' }}.timestamp{{ '}}' }} [{{ '{{' }}.team{{ '}}' }}] {{ '{{' }}.output{{ '}}' }}\"",
+            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"container|docker\" |~ \"start|stop|kill|remove|create|exit\" | line_format \"{{ '{{' }}.timestamp{{ '}}' }} [{{ '{{' }}.team{{ '}}' }}] {{ '{{' }}.output{{ '}}' }}\"",
             "refId": "A",
             "legendFormat": "Container Lifecycle"
           }
@@ -1312,7 +1312,7 @@
             "refId": "A"
           },
           {
-            "expr": "rate(count_over_time({job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)agent.*error|fail\" [1m])[5m:])",
+            "expr": "rate(count_over_time({job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"agent.*error|fail\" [1m])[5m:])",
             "legendFormat": "{{ '{{' }}team{{ '}}' }} Error Log Rate",
             "refId": "B",
             "datasource": "Loki"
@@ -1383,7 +1383,7 @@
         },
         "targets": [
           {
-            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)maven|python|nodejs|dind\" | line_format \"{{ '{{' }}.timestamp{{ '}}' }} [{{ '{{' }}.team{{ '}}' }}] {{ '{{' }}.output{{ '}}' }}\"",
+            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"maven|python|nodejs|dind\" | line_format \"{{ '{{' }}.timestamp{{ '}}' }} [{{ '{{' }}.team{{ '}}' }}] {{ '{{' }}.output{{ '}}' }}\"",
             "refId": "A",
             "legendFormat": "Agent Type Logs"
           }
@@ -1412,7 +1412,7 @@
         },
         "targets": [
           {
-            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)docker\\\\.sock|volume|mount|permission\" | line_format \"{{ '{{' }}.timestamp{{ '}}' }} [{{ '{{' }}.team{{ '}}' }}-{{ '{{' }}.container_name{{ '}}' }}] {{ '{{' }}.output{{ '}}' }}\"",
+            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"docker\\\\.sock|volume|mount|permission\" | line_format \"{{ '{{' }}.timestamp{{ '}}' }} [{{ '{{' }}.team{{ '}}' }}-{{ '{{' }}.container_name{{ '}}' }}] {{ '{{' }}.output{{ '}}' }}\"",
             "refId": "A",
             "legendFormat": "Docker Socket & Volume Logs"
           }

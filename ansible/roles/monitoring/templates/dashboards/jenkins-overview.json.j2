@@ -208,11 +208,11 @@
         "targets": [
           {
 {% if dashboard_team is defined %}
-            "expr": "{job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"(?i)error|exception|failed|failure\"",
+            "expr": "{job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"(error|exception|failed|failure)\"",
             "refId": "A",
             "legendFormat": "{{ dashboard_team | title }} Errors"
 {% else %}
-            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)error|exception|failed|failure\"",
+            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(error|exception|failed|failure)\"",
             "refId": "A",
             "legendFormat": "Error Logs"
 {% endif %}
@@ -366,33 +366,33 @@
         "targets": [
           {
 {% if dashboard_team is defined %}
-            "expr": "count_over_time({job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"(?i)error\" [5m])",
+            "expr": "count_over_time({job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"error\" [5m])",
             "legendFormat": "{{ dashboard_team | title }} Errors",
             "refId": "A"
 {% else %}
-            "expr": "count_over_time({job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)error\" [5m])",
+            "expr": "count_over_time({job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"error\" [5m])",
             "legendFormat": "Errors",
             "refId": "A"
 {% endif %}
           },
           {
 {% if dashboard_team is defined %}
-            "expr": "count_over_time({job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"(?i)warn\" [5m])",
+            "expr": "count_over_time({job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"warn\" [5m])",
             "legendFormat": "{{ dashboard_team | title }} Warnings",
             "refId": "B"
 {% else %}
-            "expr": "count_over_time({job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)warn\" [5m])",
+            "expr": "count_over_time({job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"warn\" [5m])",
             "legendFormat": "Warnings",
             "refId": "B"
 {% endif %}
           },
           {
 {% if dashboard_team is defined %}
-            "expr": "count_over_time({job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"(?i)info\" [5m])",
+            "expr": "count_over_time({job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"info\" [5m])",
             "legendFormat": "{{ dashboard_team | title }} Info",
             "refId": "C"
 {% else %}
-            "expr": "count_over_time({job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)info\" [5m])",
+            "expr": "count_over_time({job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"info\" [5m])",
             "legendFormat": "Info",
             "refId": "C"
 {% endif %}
@@ -499,17 +499,17 @@
         "datasource": "Loki",
         "targets": [
           {
-            "expr": "{job=\"auth\"} |~ \"(?i)failed|successful|login|logout|authentication\"",
+            "expr": "{job=\"auth\"} |~ \"failed|successful|login|logout|authentication\"",
             "refId": "A",
             "legendFormat": "Security Events"
           },
           {
 {% if dashboard_team is defined %}
-            "expr": "{job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"(?i)login|logout|authentication|security|unauthorized\"",
+            "expr": "{job=\"jenkins\", team=\"{{ dashboard_team }}\", environment=\"{{ team_environment | default('blue') }}\"} |~ \"login|logout|authentication|security|unauthorized\"",
             "refId": "B",
             "legendFormat": "{{ dashboard_team | title }} Security"
 {% else %}
-            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"(?i)login|logout|authentication|security|unauthorized\"",
+            "expr": "{job=\"jenkins\", team=~\"$jenkins_team\"} |~ \"login|logout|authentication|security|unauthorized\"",
             "refId": "B",
             "legendFormat": "Jenkins Security"
 {% endif %}

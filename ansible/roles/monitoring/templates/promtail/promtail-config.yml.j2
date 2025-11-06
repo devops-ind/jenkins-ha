@@ -243,7 +243,7 @@ scrape_configs:
           selector: '{job="jenkins-job-logs", build_result="FAILURE"}'
           stages:
             - regex:
-                expression: '(?i)(?P<error_type>ERROR|EXCEPTION|FATAL|BUILD\s+FAIL)'
+                expression: '(?P<error_type>ERROR|EXCEPTION|FATAL|BUILD\s+FAIL)'
             - labels:
                 error_type:
       # Generate Prometheus metrics from logs
