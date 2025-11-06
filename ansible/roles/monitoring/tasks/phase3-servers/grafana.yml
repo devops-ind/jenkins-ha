@@ -161,6 +161,8 @@
   vars:
     # Team-specific template variables
     dashboard_team: "{{ item.team_name }}"
+    team_name: "{{ item.team_name }}"
+    team_specific: true
     team_environment: "{{ item.team_environment }}"
     dashboard_title_override: "{{ item.title if item.title is defined and item.title else (item.id | replace('-', ' ') | title + ' - ' + item.team_name | title + ' Team') }}"
   loop: "{{ sorted_enabled_dashboards | selectattr('category', 'match', '.*-team-specific') | list }}"
