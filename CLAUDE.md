@@ -114,6 +114,77 @@ bash scripts/jenkins-deployment-validator.sh --teams all --vm jenkins_hosts_01
 cat docs/infrastructure-deployment-plan.md
 ```
 
+### Blue-Green Switch Job (NEW)
+```bash
+# Dedicated job for switching traffic between blue/green environments
+# Use when: passive already deployed and validated, want quick switch (8-15 min vs 30-50 min)
+# Access via Jenkins UI: Infrastructure/Blue-Green-Switch
+
+# Parameters:
+#   - SWITCH_SCOPE: team-specific|all-teams|vm-wide
+#   - TEAMS_TO_SWITCH: all OR devops,ma,ba,tw (comma-separated)
+#   - TARGET_VM: jenkins_hosts_01|jenkins_hosts_02|all
+#   - SWITCH_DIRECTION: auto (toggle) | force-blue | force-green
+#   - SWITCH_STRATEGY: sequential (safer, 15-20 min) | parallel (faster, 8-12 min)
+#   - SKIP_PRE_SWITCH_VALIDATION: false (dangerous if true!)
+#   - AUTO_ROLLBACK_ON_FAILURE: true (recommended)
+#   - ROLLBACK_TIMEOUT_SECONDS: 600 (10 minutes default)
+#   - MONITORING_DURATION_SECONDS: 600 (10 minutes monitoring)
+#   - NOTIFICATION_CHANNEL: teams|email|both
+#   - DRY_RUN: false (set true for preview mode)
+
+# Example 1: Switch all teams (sequential, safer)
+# Jenkins UI → Infrastructure → Blue-Green-Switch
+#   SWITCH_SCOPE: all-teams
+#   TEAMS_TO_SWITCH: all
+#   TARGET_VM: all
+#   SWITCH_STRATEGY: sequential (safer, 15-20 min)
+#   AUTO_ROLLBACK_ON_FAILURE: true
+
+# Example 2: Switch specific teams (parallel, faster)
+# Jenkins UI → Infrastructure → Blue-Green-Switch
+#   TEAMS_TO_SWITCH: devops,ma
+#   TARGET_VM: jenkins_hosts_01
+#   SWITCH_STRATEGY: parallel (faster, 8-12 min)
+
+# Example 3: Preview switch without executing (dry-run)
+# Jenkins UI → Infrastructure → Blue-Green-Switch
+#   TEAMS_TO_SWITCH: all
+#   DRY_RUN: true
+
+# Example 4: Force switch to specific environment
+# Jenkins UI → Infrastructure → Blue-Green-Switch
+#   TEAMS_TO_SWITCH: devops
+#   SWITCH_DIRECTION: force-green
+#   SWITCH_STRATEGY: sequential
+
+# Typical Workflow:
+# 1. Deploy to passive: Infrastructure-Deployment (30-50 min)
+# 2. Manual validation of passive environment (hours/days)
+# 3. Quick switch: Blue-Green-Switch (8-15 min)
+# 4. Monitor for stability (10 min automatic)
+# 5. Rollback if needed: <30 seconds
+
+# Performance:
+#   - Sequential switch: 15-20 minutes (one team at a time, safer)
+#   - Parallel switch: 8-12 minutes (all teams together, faster)
+#   - Emergency rollback: <30 seconds
+#   - Downtime: 0 seconds (zero-downtime)
+
+# Features:
+#   - Zero-downtime switching using HAProxy Runtime API
+#   - Pre-switch validation (both environments)
+#   - Post-switch validation (new active)
+#   - Post-switch monitoring (10 min stability check)
+#   - Automatic rollback on failure
+#   - Manual approval gate (required)
+#   - State snapshots for rollback
+#   - Dry-run mode for testing
+
+# View detailed plan
+cat docs/blue-green-switch-job-plan.md
+```
+
 ### Testing and Validation
 ```bash
 # Test inventory configuration

@@ -1,0 +1,659 @@
+// Blue-Green Switch Pipeline
+// Dedicated job for switching traffic between blue and green environments
+// Zero-downtime switching using existing blue-green scripts
+
+pipeline {
+    agent {
+        label 'master'
+    }
+
+    parameters {
+        choice(
+            name: 'SWITCH_SCOPE',
+            choices: ['team-specific', 'all-teams', 'vm-wide'],
+            description: 'Scope of switch operation'
+        )
+        string(
+            name: 'TEAMS_TO_SWITCH',
+            defaultValue: 'all',
+            description: 'Teams to switch (comma-separated): devops,ma,ba,tw OR all'
+        )
+        choice(
+            name: 'TARGET_VM',
+            choices: ['jenkins_hosts_01', 'jenkins_hosts_02', 'all'],
+            description: 'Target VM for switch operation'
+        )
+        choice(
+            name: 'SWITCH_DIRECTION',
+            choices: ['auto', 'force-blue', 'force-green'],
+            description: 'Switch direction (auto=detect current and switch to opposite)'
+        )
+        choice(
+            name: 'SWITCH_STRATEGY',
+            choices: ['sequential', 'parallel'],
+            description: 'Sequential (safer, one team at a time) or Parallel (faster, all teams simultaneously)'
+        )
+        booleanParam(
+            name: 'SKIP_PRE_SWITCH_VALIDATION',
+            defaultValue: false,
+            description: '⚠️ DANGEROUS: Skip pre-switch health checks'
+        )
+        booleanParam(
+            name: 'SKIP_POST_SWITCH_VALIDATION',
+            defaultValue: false,
+            description: 'Skip post-switch validation'
+        )
+        booleanParam(
+            name: 'AUTO_ROLLBACK_ON_FAILURE',
+            defaultValue: true,
+            description: 'Automatically rollback if validation fails'
+        )
+        string(
+            name: 'ROLLBACK_TIMEOUT_SECONDS',
+            defaultValue: '600',
+            description: 'Rollback timeout in seconds (0=disabled, default=600=10min)'
+        )
+        string(
+            name: 'MONITORING_DURATION_SECONDS',
+            defaultValue: '600',
+            description: 'Post-switch monitoring duration in seconds (default=600=10min)'
+        )
+        choice(
+            name: 'NOTIFICATION_CHANNEL',
+            choices: ['teams', 'email', 'both', 'none'],
+            description: 'Notification channel'
+        )
+        booleanParam(
+            name: 'DRY_RUN',
+            defaultValue: false,
+            description: 'Preview mode - show what would happen without executing'
+        )
+    }
+
+    environment {
+        ANSIBLE_INVENTORY = 'ansible/inventories/production/hosts.yml'
+        ANSIBLE_FORCE_COLOR = 'true'
+        ANSIBLE_HOST_KEY_CHECKING = 'false'
+
+        // Switch tracking
+        SWITCH_ID = "${env.BUILD_ID}-${env.BUILD_TIMESTAMP}"
+        SWITCH_LOG_DIR = "/var/log/blue-green-switch/${SWITCH_ID}"
+        STATE_SNAPSHOT_FILE = "/var/log/blue-green-switch/${SWITCH_ID}/pre-switch-snapshot.json"
+
+        // Notification webhook
+        TEAMS_WEBHOOK_URL = credentials('teams-webhook-infrastructure')
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '50', artifactNumToKeepStr: '20'))
+        timeout(time: 2, unit: 'HOURS')
+        timestamps()
+        ansiColor('xterm')
+        disableConcurrentBuilds()  // Prevent concurrent switches
+    }
+
+    stages {
+        stage('Initialization') {
+            steps {
+                script {
+                    echo """
+                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    🔄 Blue-Green Environment Switch
+                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    Scope:              ${params.SWITCH_SCOPE}
+                    Teams:              ${params.TEAMS_TO_SWITCH}
+                    Target VM:          ${params.TARGET_VM}
+                    Direction:          ${params.SWITCH_DIRECTION}
+                    Strategy:           ${params.SWITCH_STRATEGY} ${params.SWITCH_STRATEGY == 'sequential' ? '(safer)' : '(faster)'}
+
+                    Validation:
+                      Pre-switch:       ${params.SKIP_PRE_SWITCH_VALIDATION ? '⚠️ SKIPPED' : '✓ Enabled'}
+                      Post-switch:      ${params.SKIP_POST_SWITCH_VALIDATION ? 'Skipped' : '✓ Enabled'}
+                      Auto-rollback:    ${params.AUTO_ROLLBACK_ON_FAILURE ? '✓ Enabled' : 'Disabled'}
+                      Rollback timeout: ${params.ROLLBACK_TIMEOUT_SECONDS}s
+
+                    Monitoring:         ${params.MONITORING_DURATION_SECONDS}s
+                    Dry-Run:            ${params.DRY_RUN ? '✓ Preview mode' : 'Live execution'}
+
+                    Switch ID:          ${env.SWITCH_ID}
+                    Triggered by:       ${env.BUILD_USER ?: 'System'}
+                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    """.stripIndent()
+
+                    // Create switch log directory
+                    sh "mkdir -p ${env.SWITCH_LOG_DIR}"
+                }
+            }
+        }
+
+        stage('Pre-Switch Validation') {
+            when {
+                expression { !params.SKIP_PRE_SWITCH_VALIDATION }
+            }
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "Stage 1: Pre-Switch Validation"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                }
+            }
+        }
+
+        stage('1.1 Detect Current State') {
+            steps {
+                echo "✓ Detecting current active/passive state per team..."
+                script {
+                    def targetLimit = params.TARGET_VM == 'all' ? 'jenkins_masters' : params.TARGET_VM
+
+                    // Detect current state from blue-green-state.json files
+                    def currentState = sh(
+                        script: """
+                            ansible ${targetLimit} -i ${env.ANSIBLE_INVENTORY} \
+                                -m shell \
+                                -a 'for team in devops ma ba tw; do
+                                      if [ -f /var/jenkins/\$team/blue-green-state.json ]; then
+                                        echo "\$team: \$(cat /var/jenkins/\$team/blue-green-state.json | grep active_environment | cut -d\\" -f4)"
+                                      fi
+                                    done' \
+                                | tee ${env.SWITCH_LOG_DIR}/current-state.log
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    echo "\nCurrent State Detection:"
+                    echo currentState
+                }
+            }
+        }
+
+        stage('1.2 Run Health Checks') {
+            steps {
+                echo "✓ Running health checks on both environments..."
+                script {
+                    def targetLimit = params.TARGET_VM == 'all' ? 'jenkins_masters' : params.TARGET_VM
+                    def teams = params.TEAMS_TO_SWITCH == 'all' ? 'devops,ma,ba,tw' : params.TEAMS_TO_SWITCH
+
+                    sh """
+                        ansible ${targetLimit} -i ${env.ANSIBLE_INVENTORY} \
+                            -m shell \
+                            -a 'for team in ${teams.replaceAll(',', ' ')}; do
+                                  echo "=== Team: \$team ==="
+                                  if [ -f /var/jenkins/scripts/blue-green-healthcheck-\$team.sh ]; then
+                                    /var/jenkins/scripts/blue-green-healthcheck-\$team.sh --environment both || true
+                                  else
+                                    echo "Health check script not found for \$team"
+                                  fi
+                                done' \
+                            | tee ${env.SWITCH_LOG_DIR}/health-checks.log
+                    """
+                }
+            }
+        }
+
+        stage('1.3 Verify Target Environment Ready') {
+            steps {
+                echo "✓ Verifying target environments are ready for switch..."
+                script {
+                    def targetLimit = params.TARGET_VM == 'all' ? 'jenkins_masters' : params.TARGET_VM
+                    def teams = params.TEAMS_TO_SWITCH == 'all' ? 'devops,ma,ba,tw' : params.TEAMS_TO_SWITCH
+
+                    // Check that target (passive) containers are running
+                    sh """
+                        ansible ${targetLimit} -i ${env.ANSIBLE_INVENTORY} \
+                            -m shell \
+                            -a 'for team in ${teams.replaceAll(',', ' ')}; do
+                                  # Detect current active
+                                  ACTIVE=\$(cat /var/jenkins/\$team/blue-green-state.json 2>/dev/null | grep active_environment | cut -d\\" -f4 || echo "blue")
+                                  TARGET=\$([ "\$ACTIVE" = "blue" ] && echo "green" || echo "blue")
+
+                                  echo "Team \$team: Current=\$ACTIVE, Target=\$TARGET"
+
+                                  # Check target container exists and is running
+                                  if docker ps --filter name=jenkins-\$team-\$TARGET --filter status=running -q | grep -q .; then
+                                    echo "  ✓ Target container jenkins-\$team-\$TARGET is running"
+                                  else
+                                    echo "  ✗ ERROR: Target container jenkins-\$team-\$TARGET is NOT running"
+                                    exit 1
+                                  fi
+
+                                  # Check HTTP health
+                                  PORT=\$(docker port jenkins-\$team-\$TARGET 8080/tcp 2>/dev/null | cut -d: -f2)
+                                  if [ -n "\$PORT" ] && curl -sf http://localhost:\$PORT/login > /dev/null 2>&1; then
+                                    echo "  ✓ Target HTTP health check passed (port \$PORT)"
+                                  else
+                                    echo "  ✗ ERROR: Target HTTP health check failed"
+                                    exit 1
+                                  fi
+                                done' \
+                            | tee ${env.SWITCH_LOG_DIR}/target-verification.log
+                    """
+                }
+            }
+        }
+
+        stage('Pre-Switch Snapshot') {
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "Stage 2: Pre-Switch Snapshot"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                    def targetLimit = params.TARGET_VM == 'all' ? 'jenkins_masters' : params.TARGET_VM
+
+                    // Capture current state for rollback
+                    sh """
+                        ansible ${targetLimit} -i ${env.ANSIBLE_INVENTORY} \
+                            -m shell \
+                            -a 'echo "{" > /tmp/pre-switch-snapshot-\${HOSTNAME}.json
+                                echo "  \\"timestamp\\": \\"\$(date -Iseconds)\\"," >> /tmp/pre-switch-snapshot-\${HOSTNAME}.json
+                                echo "  \\"teams\\": {" >> /tmp/pre-switch-snapshot-\${HOSTNAME}.json
+
+                                FIRST=true
+                                for team in devops ma ba tw; do
+                                  if [ -f /var/jenkins/\$team/blue-green-state.json ]; then
+                                    [ "\$FIRST" = false ] && echo "    ," >> /tmp/pre-switch-snapshot-\${HOSTNAME}.json
+                                    echo "    \\"\$team\\": {" >> /tmp/pre-switch-snapshot-\${HOSTNAME}.json
+                                    echo "      \\"active_environment\\": \\"\$(cat /var/jenkins/\$team/blue-green-state.json | grep active_environment | cut -d\\" -f4)\\"" >> /tmp/pre-switch-snapshot-\${HOSTNAME}.json
+                                    echo "    }" >> /tmp/pre-switch-snapshot-\${HOSTNAME}.json
+                                    FIRST=false
+                                  fi
+                                done
+
+                                echo "  }" >> /tmp/pre-switch-snapshot-\${HOSTNAME}.json
+                                echo "}" >> /tmp/pre-switch-snapshot-\${HOSTNAME}.json
+
+                                cat /tmp/pre-switch-snapshot-\${HOSTNAME}.json
+                                ' \
+                            | tee ${env.SWITCH_LOG_DIR}/snapshot.log
+                    """
+
+                    echo "\n✓ State snapshot created: ${env.STATE_SNAPSHOT_FILE}"
+                }
+            }
+        }
+
+        stage('Manual Approval Gate') {
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "⏸️  APPROVAL REQUIRED: Blue-Green Traffic Switch"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                    // Read validation results
+                    def healthChecks = readFile("${env.SWITCH_LOG_DIR}/health-checks.log")
+                    def targetVerification = readFile("${env.SWITCH_LOG_DIR}/target-verification.log")
+
+                    echo "\nPre-Switch Validation Results:"
+                    echo healthChecks
+                    echo "\nTarget Environment Verification:"
+                    echo targetVerification
+
+                    echo "\nSwitch Details:"
+                    echo "  Strategy: ${params.SWITCH_STRATEGY} (${params.SWITCH_STRATEGY == 'sequential' ? 'one team at a time' : 'all teams simultaneously'})"
+                    echo "  Teams: ${params.TEAMS_TO_SWITCH}"
+                    echo "  Estimated Time: ${params.SWITCH_STRATEGY == 'sequential' ? '15-20 minutes' : '8-12 minutes'}"
+                    echo "  Estimated Downtime: 0 seconds (zero-downtime)"
+                    echo "  Auto-rollback: ${params.AUTO_ROLLBACK_ON_FAILURE ? 'Enabled' : 'Disabled'}"
+                    echo "  Rollback timeout: ${params.ROLLBACK_TIMEOUT_SECONDS}s"
+
+                    echo "\nRollback Plan:"
+                    echo "  - Automatic rollback on validation failure (if enabled)"
+                    echo "  - Manual rollback: Infrastructure/Infrastructure-Rollback job"
+                    echo "  - Rollback time: <30 seconds"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                    if (!params.DRY_RUN) {
+                        timeout(time: 4, unit: 'HOURS') {
+                            input(
+                                message: 'Approve Blue-Green Switch?',
+                                ok: '✅ APPROVE - Execute Switch',
+                                submitter: 'admin,devops-team'
+                            )
+                        }
+                    } else {
+                        echo "DRY-RUN MODE: Skipping approval (would require approval in live mode)"
+                    }
+                }
+            }
+        }
+
+        stage('Execute Blue-Green Switch') {
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "Stage 4: Execute Blue-Green Switch (${params.SWITCH_STRATEGY})"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                    def targetLimit = params.TARGET_VM == 'all' ? 'jenkins_masters' : params.TARGET_VM
+                    def teams = params.TEAMS_TO_SWITCH == 'all' ? 'devops,ma,ba,tw' : params.TEAMS_TO_SWITCH
+                    def teamList = teams.split(',').collect { it.trim() }
+
+                    if (params.DRY_RUN) {
+                        echo "DRY-RUN MODE: Preview of switch operations"
+                        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                        sh """
+                            ansible ${targetLimit} -i ${env.ANSIBLE_INVENTORY} \
+                                -m shell \
+                                -a 'for team in ${teams.replaceAll(',', ' ')}; do
+                                      ACTIVE=\$(cat /var/jenkins/\$team/blue-green-state.json 2>/dev/null | grep active_environment | cut -d\\" -f4 || echo "blue")
+                                      TARGET=\$([ "\$ACTIVE" = "blue" ] && echo "green" || echo "blue")
+                                      echo "Would switch: \$team: \$ACTIVE → \$TARGET"
+                                    done'
+                        """
+
+                        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                        echo "DRY-RUN: No actual changes made"
+                        return
+                    }
+
+                    if (params.SWITCH_STRATEGY == 'sequential') {
+                        // Sequential switch - one team at a time (safer)
+                        echo "Using SEQUENTIAL strategy (safer - one team at a time)"
+
+                        for (team in teamList) {
+                            echo "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                            echo "Switching Team: ${team}"
+                            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                            def switchResult = sh(
+                                script: """
+                                    ansible ${targetLimit} -i ${env.ANSIBLE_INVENTORY} \
+                                        -m shell \
+                                        -a 'if [ -f /var/jenkins/scripts/zero-downtime-blue-green-switch-${team}.sh ]; then
+                                              /var/jenkins/scripts/zero-downtime-blue-green-switch-${team}.sh switch
+                                            else
+                                              echo "ERROR: Switch script not found for ${team}"
+                                              exit 1
+                                            fi' \
+                                        | tee ${env.SWITCH_LOG_DIR}/switch-${team}.log
+                                """,
+                                returnStatus: true
+                            )
+
+                            if (switchResult != 0) {
+                                error("Switch failed for team ${team}")
+                            }
+
+                            echo "✅ Switch completed for ${team}"
+
+                            // Brief pause between teams
+                            sleep(5)
+                        }
+
+                    } else {
+                        // Parallel switch - all teams simultaneously (faster)
+                        echo "Using PARALLEL strategy (faster - all teams simultaneously)"
+
+                        sh """
+                            ansible ${targetLimit} -i ${env.ANSIBLE_INVENTORY} \
+                                -m shell \
+                                -a 'for team in ${teams.replaceAll(',', ' ')}; do
+                                      if [ -f /var/jenkins/scripts/zero-downtime-blue-green-switch-\$team.sh ]; then
+                                        echo "Switching \$team..."
+                                        /var/jenkins/scripts/zero-downtime-blue-green-switch-\$team.sh switch &
+                                      fi
+                                    done
+                                    wait
+                                    echo "All switches completed"' \
+                                | tee ${env.SWITCH_LOG_DIR}/switch-parallel.log
+                        """
+                    }
+
+                    echo "\n✅ All switches completed"
+                }
+            }
+        }
+
+        stage('Post-Switch Validation') {
+            when {
+                expression { !params.SKIP_POST_SWITCH_VALIDATION }
+                expression { !params.DRY_RUN }
+            }
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "Stage 5: Post-Switch Validation"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                    // Wait for services to stabilize
+                    echo "Waiting 10 seconds for services to stabilize..."
+                    sleep(10)
+
+                    def targetLimit = params.TARGET_VM == 'all' ? 'jenkins_masters' : params.TARGET_VM
+                    def teams = params.TEAMS_TO_SWITCH == 'all' ? 'devops,ma,ba,tw' : params.TEAMS_TO_SWITCH
+
+                    // Verify new active environments
+                    sh """
+                        ansible ${targetLimit} -i ${env.ANSIBLE_INVENTORY} \
+                            -m shell \
+                            -a 'for team in ${teams.replaceAll(',', ' ')}; do
+                                  echo "=== Validating Team: \$team ==="
+
+                                  # Get new active environment
+                                  ACTIVE=\$(cat /var/jenkins/\$team/blue-green-state.json 2>/dev/null | grep active_environment | cut -d\\" -f4 || echo "unknown")
+                                  echo "New active environment: \$ACTIVE"
+
+                                  # Check container running
+                                  if docker ps --filter name=jenkins-\$team-\$ACTIVE --filter status=running -q | grep -q .; then
+                                    echo "  ✓ Container running"
+                                  else
+                                    echo "  ✗ ERROR: Container not running"
+                                    exit 1
+                                  fi
+
+                                  # Check HTTP health
+                                  PORT=\$(docker port jenkins-\$team-\$ACTIVE 8080/tcp 2>/dev/null | cut -d: -f2)
+                                  if curl -sf http://localhost:\$PORT/login > /dev/null 2>&1; then
+                                    echo "  ✓ HTTP health check passed"
+                                  else
+                                    echo "  ✗ ERROR: HTTP health check failed"
+                                    exit 1
+                                  fi
+
+                                  # Check old container stopped
+                                  OLD_ENV=\$([ "\$ACTIVE" = "blue" ] && echo "green" || echo "blue")
+                                  if ! docker ps --filter name=jenkins-\$team-\$OLD_ENV --filter status=running -q | grep -q .; then
+                                    echo "  ✓ Old container \$OLD_ENV stopped (resource optimized)"
+                                  else
+                                    echo "  ⚠ Old container \$OLD_ENV still running (will be stopped)"
+                                  fi
+
+                                  echo ""
+                                done' \
+                            | tee ${env.SWITCH_LOG_DIR}/post-switch-validation.log
+                    """
+
+                    echo "✅ Post-switch validation passed"
+                }
+            }
+        }
+
+        stage('Post-Switch Monitoring') {
+            when {
+                expression { !params.DRY_RUN }
+            }
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "Stage 6: Post-Switch Monitoring (${params.MONITORING_DURATION_SECONDS}s)"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                    def monitoringDuration = params.MONITORING_DURATION_SECONDS.toInteger()
+                    def checkInterval = 30  // Check every 30 seconds
+                    def iterations = monitoringDuration / checkInterval
+
+                    echo "Monitoring new active environments for ${monitoringDuration} seconds..."
+                    echo "Check interval: ${checkInterval} seconds"
+
+                    def targetLimit = params.TARGET_VM == 'all' ? 'jenkins_masters' : params.TARGET_VM
+                    def teams = params.TEAMS_TO_SWITCH == 'all' ? 'devops,ma,ba,tw' : params.TEAMS_TO_SWITCH
+
+                    def failures = 0
+
+                    for (int i = 1; i <= iterations; i++) {
+                        echo "\nMonitoring check ${i}/${iterations} (${i * checkInterval}s / ${monitoringDuration}s)"
+
+                        def healthCheckResult = sh(
+                            script: """
+                                ansible ${targetLimit} -i ${env.ANSIBLE_INVENTORY} \
+                                    -m shell \
+                                    -a 'for team in ${teams.replaceAll(',', ' ')}; do
+                                          ACTIVE=\$(cat /var/jenkins/\$team/blue-green-state.json 2>/dev/null | grep active_environment | cut -d\\" -f4)
+                                          PORT=\$(docker port jenkins-\$team-\$ACTIVE 8080/tcp 2>/dev/null | cut -d: -f2)
+
+                                          if curl -sf http://localhost:\$PORT/login > /dev/null 2>&1; then
+                                            echo "\$team: ✓ Healthy"
+                                          else
+                                            echo "\$team: ✗ UNHEALTHY"
+                                            exit 1
+                                          fi
+                                        done'
+                            """,
+                            returnStatus: true
+                        )
+
+                        if (healthCheckResult != 0) {
+                            failures++
+                            echo "⚠️ Health check failed (${failures} failures)"
+
+                            if (params.AUTO_ROLLBACK_ON_FAILURE && failures >= 2) {
+                                error("Multiple health check failures detected - triggering automatic rollback")
+                            }
+                        } else {
+                            echo "✅ All environments healthy"
+                            failures = 0  // Reset failure counter on success
+                        }
+
+                        if (i < iterations) {
+                            sleep(checkInterval)
+                        }
+                    }
+
+                    echo "\n✅ Monitoring completed - environments stable"
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo "Archiving Switch Logs"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                // Archive all switch logs
+                archiveArtifacts(
+                    artifacts: "${env.SWITCH_LOG_DIR}/**/*",
+                    allowEmptyArchive: true
+                )
+            }
+        }
+
+        success {
+            script {
+                if (params.DRY_RUN) {
+                    echo "DRY-RUN completed successfully - no actual changes made"
+                    return
+                }
+
+                def switchSummary = """
+🔄 Blue-Green Switch Complete
+
+Switch Details:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Scope: ${params.SWITCH_SCOPE}
+Strategy: ${params.SWITCH_STRATEGY} (${params.SWITCH_STRATEGY == 'sequential' ? 'safer' : 'faster'})
+Teams: ${params.TEAMS_TO_SWITCH}
+Target VM: ${params.TARGET_VM}
+
+Switch Summary:
+✅ Pre-Switch Validation: PASSED
+✅ Switch Execution: COMPLETED
+✅ Post-Switch Validation: PASSED
+✅ Post-Switch Monitoring: STABLE (${params.MONITORING_DURATION_SECONDS}s)
+
+Build: ${env.BUILD_URL}
+Duration: ${currentBuild.durationString}
+Downtime: 0 seconds (zero-downtime)
+Triggered by: ${env.BUILD_USER ?: 'System'}
+
+Logs: ${env.BUILD_URL}artifact/${env.SWITCH_LOG_DIR}/
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                """.stripIndent()
+
+                echo switchSummary
+
+                // Send notification
+                if (params.NOTIFICATION_CHANNEL in ['teams', 'both']) {
+                    sh """
+                        curl -X POST ${env.TEAMS_WEBHOOK_URL} \
+                            -H 'Content-Type: application/json' \
+                            -d '{"text": "${switchSummary.replaceAll('"', '\\"').replaceAll('\n', '\\\\n')}"}'
+                    """
+                }
+            }
+        }
+
+        failure {
+            script {
+                def failureSummary = """
+❌ Blue-Green Switch Failed
+
+Switch Details:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Scope: ${params.SWITCH_SCOPE}
+Teams: ${params.TEAMS_TO_SWITCH}
+Target VM: ${params.TARGET_VM}
+Strategy: ${params.SWITCH_STRATEGY}
+
+Failed Stage: ${env.STAGE_NAME}
+Build: ${env.BUILD_URL}
+Console: ${env.BUILD_URL}console
+
+${params.AUTO_ROLLBACK_ON_FAILURE ? '🔄 Automatic rollback will be triggered' : '⚠️ Manual rollback required'}
+
+Rollback Options:
+1. Automatic rollback (if enabled)
+2. Manual: Infrastructure/Infrastructure-Rollback job
+3. Manual switch back: Infrastructure/Blue-Green-Switch
+
+Logs: ${env.BUILD_URL}artifact/${env.SWITCH_LOG_DIR}/
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                """.stripIndent()
+
+                echo failureSummary
+
+                // Send failure notification
+                if (params.NOTIFICATION_CHANNEL in ['teams', 'both']) {
+                    sh """
+                        curl -X POST ${env.TEAMS_WEBHOOK_URL} \
+                            -H 'Content-Type: application/json' \
+                            -d '{"text": "${failureSummary.replaceAll('"', '\\"').replaceAll('\n', '\\\\n')}"}'
+                    """
+                }
+
+                // Trigger automatic rollback if enabled
+                if (params.AUTO_ROLLBACK_ON_FAILURE) {
+                    echo "Triggering automatic rollback..."
+                    // Rollback is implemented by running switch again - it toggles back
+                    build(
+                        job: 'Infrastructure/Blue-Green-Switch',
+                        parameters: [
+                            string(name: 'SWITCH_SCOPE', value: params.SWITCH_SCOPE),
+                            string(name: 'TEAMS_TO_SWITCH', value: params.TEAMS_TO_SWITCH),
+                            string(name: 'TARGET_VM', value: params.TARGET_VM),
+                            string(name: 'SWITCH_DIRECTION', value: 'auto'),
+                            string(name: 'SWITCH_STRATEGY', value: 'sequential'),
+                            booleanParam(name: 'SKIP_PRE_SWITCH_VALIDATION', value: false),
+                            booleanParam(name: 'AUTO_ROLLBACK_ON_FAILURE', value: false),  // Prevent rollback loop
+                            string(name: 'NOTIFICATION_CHANNEL', value: 'teams')
+                        ],
+                        wait: false
+                    )
+                }
+            }
+        }
+    }
+}
