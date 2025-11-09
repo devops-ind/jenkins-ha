@@ -79,6 +79,31 @@ pipeline {
     }
 
     stages {
+        stage('Checkout Code') {
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "📦 Checking out Ansible repository..."
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                }
+
+                checkout scm
+
+                script {
+                    // Verify repository contents
+                    sh '''
+                        echo "Repository contents:"
+                        ls -la
+                        echo ""
+                        echo "Ansible directory:"
+                        ls -la ansible/
+                        echo ""
+                        echo "✅ Repository checked out successfully"
+                    '''
+                }
+            }
+        }
+
         stage('Initialization') {
             steps {
                 script {

@@ -30,6 +30,29 @@ pipeline {
     }
 
     stages {
+        stage('Checkout Code') {
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "📦 Checking out Ansible repository..."
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                }
+
+                checkout scm
+
+                script {
+                    // Verify repository contents
+                    sh '''
+                        echo "✅ Repository checked out successfully"
+                        echo ""
+                        echo "Verifying Ansible playbooks..."
+                        ls -la ansible/
+                        ls -la ansible/playbooks/blue-green-switch.yml
+                    '''
+                }
+            }
+        }
+
         stage('Validate Rollback Request') {
             steps {
                 script {
@@ -48,10 +71,6 @@ pipeline {
                     Build: #${env.BUILD_NUMBER}
                     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                     """
-
-                    // Verify ansible repository is available
-                    sh 'ls -la ansible/'
-                    sh 'ls -la ansible/playbooks/blue-green-switch.yml'
                 }
             }
         }

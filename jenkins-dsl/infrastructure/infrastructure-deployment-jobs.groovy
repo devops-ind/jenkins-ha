@@ -62,7 +62,7 @@ pipelineJob('Infrastructure/Infrastructure-Deployment') {
                 }
             }
             scriptPath('pipelines/Jenkinsfile.infrastructure-deployment')
-            lightweight(true)
+            lightweight(false)  // Full repository checkout required for ansible code
         }
     }
 
@@ -111,7 +111,7 @@ pipelineJob('Infrastructure/Infrastructure-Rollback') {
                 }
             }
             scriptPath('pipelines/Jenkinsfile.infrastructure-rollback')
-            lightweight(true)
+            lightweight(false)  // Full repository checkout required for ansible code
         }
     }
 
@@ -185,7 +185,7 @@ pipelineJob('Infrastructure/Blue-Green-Switch') {
                 }
             }
             scriptPath('pipelines/Jenkinsfile.blue-green-switch')
-            lightweight(true)
+            lightweight(false)  // Full repository checkout required for ansible code
         }
     }
 
