@@ -16,7 +16,7 @@
         owner: "{{ jenkins_user }}"
         group: "{{ jenkins_user }}"
         mode: '0644'
-      loop: "{{ jenkins_teams_config }}"
+      loop: "{{ jenkins_teams_filtered }}"
       loop_control:
         label: "{{ item.team_name }}"
       vars:
@@ -37,7 +37,7 @@
           {'template': 'health-monitor.sh.j2', 'name': 'health-monitor'}
         ] -%}
         {%- set result = [] -%}
-        {%- for team in jenkins_teams_config -%}
+        {%- for team in jenkins_teams_filtered -%}
           {%- for script in script_templates -%}
             {%- set _ = result.append(team | combine({'template': script.template, 'name': script.name})) -%}
           {%- endfor -%}
@@ -69,7 +69,7 @@
       until: jenkins_web_health.status in [200, 403]
       retries: 5
       delay: 5
-      loop: "{{ jenkins_teams_config }}"
+      loop: "{{ jenkins_teams_filtered }}"
       loop_control:
         label: "{{ item.team_name }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web }}{% else %}{{ item.ports.web + 100 }}{% endif %}"
 
@@ -79,13 +79,13 @@
           ====================================================
           Jenkins Deployment Status (Streamlined)
           ====================================================
-          Teams deployed: {{ jenkins_teams_config | length }}
-          Web interface tests: {{ jenkins_web_health.results | selectattr('status', 'defined') | selectattr('status', 'in', [200, 403]) | list | length }}/{{ jenkins_teams_config | length }} successful
-          Blue-green scripts: {{ jenkins_teams_config | length * 4 }} created
+          Teams deployed: {{ jenkins_teams_filtered | length }}
+          Web interface tests: {{ jenkins_web_health.results | selectattr('status', 'defined') | selectattr('status', 'in', [200, 403]) | list | length }}/{{ jenkins_teams_filtered | length }} successful
+          Blue-green scripts: {{ jenkins_teams_filtered | length * 4 }} created
           Resource optimization: Active-only containers (50% savings)
-          
+
           Team Summary:
-          {% for team in jenkins_teams_config %}
+          {% for team in jenkins_teams_filtered %}
           • {{ team.team_name }}: {{ team.active_environment | upper }} environment
             URL: http://{{ jenkins_verification_host }}:{% if team.active_environment | default('blue') == 'blue' %}{{ team.ports.web }}{% else %}{{ team.ports.web + 100 }}{% endif %}
             Scripts: /var/jenkins/scripts/*-{{ team.team_name }}.sh
@@ -116,12 +116,12 @@
       Jenkins Blue-Green Deployment Complete
       ====================================
       Deployment Mode: Resource-optimized (50% savings)
-      Teams configured: {{ jenkins_teams_config | length }}
-      Management scripts: {{ jenkins_teams_config | length * 4 }}
+      Teams deployed: {{ jenkins_teams_filtered | length }}
+      Management scripts: {{ jenkins_teams_filtered | length * 4 }}
       Health verification: Essential tests only
-      
+
       Zero-downtime switching available:
-      {% for team in jenkins_teams_config %}
+      {% for team in jenkins_teams_filtered %}
       /var/jenkins/scripts/zero-downtime-blue-green-switch-{{ team.team_name }}.sh switch
       {% endfor %}
       ====================================
