@@ -20,11 +20,11 @@
           {%- if deployment_mode | default('production') == 'local' -%}
           localhost
           {%- elif ansible_virtualization_type is defined and ansible_virtualization_type == 'docker' -%}
-          {{ ansible_default_ipv4.address | default('localhost') }}
+          {{ jenkins_master_host_ip | default('localhost') }}
           {%- elif jenkins_verification_host is defined and jenkins_verification_host != '' -%}
           {{ jenkins_verification_host }}
           {%- else -%}
-          {{ ansible_default_ipv4.address | default('localhost') }}
+          {{ jenkins_master_host_ip | default('localhost') }}
           {%- endif -%}
           
     - name: Display resolved verification host
@@ -81,7 +81,7 @@
       
     - name: Test direct container accessibility (internal port)
       uri:
-        url: "http://{{ ansible_default_ipv4.address }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web }}{% else %}{{ item.ports.web + 100 }}{% endif %}/login"
+        url: "http://{{ jenkins_master_host_ip }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web }}{% else %}{{ item.ports.web + 100 }}{% endif %}/login"
         method: GET
         status_code: [200, 403]
         timeout: 10
@@ -91,7 +91,7 @@
       delay: 5
       loop: "{{ jenkins_teams_config }}"
       loop_control:
-        label: "{{ item.team_name }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web }}{% else %}{{ item.ports.web + 100 }}{% endif %}@{{ ansible_default_ipv4.address }}"
+        label: "{{ item.team_name }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web }}{% else %}{{ item.ports.web + 100 }}{% endif %}@{{ jenkins_master_host_ip }}"
       failed_when: false
       
     - name: Test Jenkins web interface with resolved host
@@ -137,10 +137,10 @@
            selectattr('status', 'defined') | selectattr('status', 'in', [200, 403]) | list | length) > 0
         fail_msg: |
           ❌ ENHANCED HEALTH CHECK FAILED ❌
-          
+
           No Jenkins instances are responding to HTTP requests.
-          
-          Direct Container Test Results ({{ ansible_default_ipv4.address }}):
+
+          Direct Container Test Results ({{ jenkins_master_host_ip }}):
           {% for result in direct_container_test.results | default([]) %}
           • {{ jenkins_teams_config[loop.index0].team_name }} ({{ jenkins_teams_config[loop.index0].active_environment | default('blue') }}):{% if result.status is defined and result.status in [200, 403] %} ✅ {{ result.status }}{% else %} ❌ FAILED{% endif %}
           {% endfor %}

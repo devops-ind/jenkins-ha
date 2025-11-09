@@ -12,7 +12,7 @@ AGENT_PORT="{{ item.ports.agent }}"
 JENKINS_HOME="{{ jenkins_home_dir }}"
 STATE_FILE="${JENKINS_HOME}/${TEAM_NAME}/blue-green-state.json"
 HAPROXY_API="/usr/local/bin/haproxy-runtime-api.sh"
-HOST_IP="{{ ansible_default_ipv4.address }}"
+HOST_IP="{{ jenkins_master_host_ip }}"
 
 # Colors for output
 RED='\033[0;31m'

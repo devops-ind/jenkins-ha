@@ -14,10 +14,27 @@ jenkins_verification_host: >-
     localhost
   {%- elif hostvars[inventory_hostname]['ansible_host'] is defined -%}
     {{ hostvars[inventory_hostname]['ansible_host'] }}
-  {%- elif ansible_default_ipv4.address is defined -%}
+  {%- elif ansible_default_ipv4 is defined and ansible_default_ipv4.address is defined -%}
     {{ ansible_default_ipv4.address }}
+  {%- elif ansible_all_ipv4_addresses is defined and ansible_all_ipv4_addresses | length > 0 -%}
+    {{ ansible_all_ipv4_addresses[0] }}
   {%- else -%}
     localhost
+  {%- endif -%}
+
+# Host IP address for Jenkins containers and scripts (vars override)
+# Uses cascading fallback to handle various deployment scenarios
+jenkins_master_host_ip: >-
+  {%- if hostvars[inventory_hostname]['ansible_host'] is defined -%}
+  {{ hostvars[inventory_hostname]['ansible_host'] }}
+  {%- elif ansible_default_ipv4 is defined and ansible_default_ipv4.address is defined -%}
+  {{ ansible_default_ipv4.address }}
+  {%- elif ansible_all_ipv4_addresses is defined and ansible_all_ipv4_addresses | length > 0 -%}
+  {{ ansible_all_ipv4_addresses[0] }}
+  {%- elif host_fqdn is defined -%}
+  {{ host_fqdn }}
+  {%- else -%}
+  127.0.0.1
   {%- endif -%}
 
 # ====================================

@@ -127,7 +127,7 @@
     - name: Check port availability for all teams
       wait_for:
         port: "{{ item.port }}"
-        host: "{{ ansible_default_ipv4.address }}"
+        host: "{{ jenkins_master_host_ip }}"
         state: stopped
         timeout: 3
       loop: >-

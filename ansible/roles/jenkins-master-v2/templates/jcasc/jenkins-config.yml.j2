@@ -191,12 +191,12 @@ jenkins:
           - key: "JENKINS_ENVIRONMENT"
             value: "{{ current_env }}"
           - key: "JENKINS_URL"
-            value: "http://{{ ansible_default_ipv4.address }}:{{ team_config.ports.web }}"
+            value: "http://{{ jenkins_master_host_ip }}:{{ team_config.ports.web }}"
 
 # Jenkins Location Configuration (prevents unconfigured-jenkins-location URLs)
 unclassified:
   location:
-    url: "{% if deployment_mode | default('local') == 'production' %}{{ 'https://' if ssl_enabled | default(false) else 'http://' }}{{ jenkins_domain }}:{{ team_config.ports.web }}{% else %}http://{{ ansible_default_ipv4.address }}:{{ team_config.ports.web }}{% endif %}"
+    url: "{% if deployment_mode | default('local') == 'production' %}{{ 'https://' if ssl_enabled | default(false) else 'http://' }}{{ jenkins_domain }}:{{ team_config.ports.web }}{% else %}http://{{ jenkins_master_host_ip }}:{{ team_config.ports.web }}{% endif %}"
     adminAddress: "{{ jenkins_admin_email | default('admin@' + (jenkins_domain | default('localhost'))) }}"
 
 # Credentials Configuration

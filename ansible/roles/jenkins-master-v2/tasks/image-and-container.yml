@@ -235,7 +235,7 @@
 
     - name: Verify active containers are healthy before cleanup
       uri:
-        url: "http://{{ ansible_default_ipv4.address }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web }}{% else %}{{ item.ports.web + 100 }}{% endif %}/login"
+        url: "http://{{ jenkins_master_host_ip }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web }}{% else %}{{ item.ports.web + 100 }}{% endif %}/login"
         method: GET
         status_code: [200, 403]
         timeout: 30
