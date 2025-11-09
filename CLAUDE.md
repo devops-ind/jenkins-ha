@@ -68,6 +68,52 @@ ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml --
 ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml --tags backup
 ```
 
+### Infrastructure Deployment Jobs (NEW)
+```bash
+# Unified Jenkins job for deploying infrastructure components
+# Supports: Jenkins Masters, HAProxy, Monitoring
+# Features: Blue-green deployment, GlusterFS data recovery, validation, approval gates
+
+# Deploy Jenkins Masters with blue-green deployment
+# Access via Jenkins UI: Infrastructure/Infrastructure-Deployment
+# Parameters:
+#   - COMPONENT: jenkins-masters|haproxy|monitoring|all
+#   - TARGET_VM: jenkins_hosts_01|jenkins_hosts_02|monitoring|all
+#   - DEPLOY_TEAMS: all OR devops,ma,ba,tw (comma-separated)
+#   - TARGET_ENVIRONMENT: auto|blue|green
+#   - SKIP_DATA_RECOVERY: false (set true for fresh deployment)
+#   - SKIP_VALIDATION: false
+#   - DRY_RUN: false (set true for Ansible --check mode)
+#   - AUTO_SWITCH: false (set true to skip manual approval gate)
+
+# Example: Deploy all components to all VMs
+# Jenkins UI → Infrastructure → Infrastructure-Deployment
+#   COMPONENT: all
+#   TARGET_VM: all
+#   DEPLOY_TEAMS: all
+
+# Example: Deploy specific team to specific VM
+# Jenkins UI → Infrastructure → Infrastructure-Deployment
+#   COMPONENT: jenkins-masters
+#   TARGET_VM: jenkins_hosts_01
+#   DEPLOY_TEAMS: devops,ma
+
+# Example: Deploy only monitoring stack
+# Jenkins UI → Infrastructure → Infrastructure-Deployment
+#   COMPONENT: monitoring
+#   TARGET_VM: monitoring
+
+# Emergency rollback job
+# Access via Jenkins UI: Infrastructure/Infrastructure-Rollback
+# Switches back to previous active environment in <30 seconds
+
+# Manual validation script
+bash scripts/jenkins-deployment-validator.sh --teams all --vm jenkins_hosts_01
+
+# View comprehensive deployment plan
+cat docs/infrastructure-deployment-plan.md
+```
+
 ### Testing and Validation
 ```bash
 # Test inventory configuration

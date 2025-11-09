@@ -1,0 +1,55 @@
+---
+# Jenkins Data Recovery from GlusterFS
+# Copies latest data from GlusterFS sync layer to passive Jenkins Docker volumes
+
+- name: Recover Jenkins Data from GlusterFS
+  hosts: "{{ target_vm | default('jenkins_masters') }}"
+  become: yes
+  vars:
+    jenkins_teams_filtered: "{{ jenkins_teams_config if deploy_teams is not defined or deploy_teams == 'all' else (jenkins_teams_config | selectattr('team_name', 'in', deploy_teams.split(',') | map('trim') | list) | list) }}"
+
+  tasks:
+    - name: Display data recovery summary
+      debug:
+        msg: |
+          ====================================================
+          Jenkins Data Recovery from GlusterFS
+          ====================================================
+          Target VM: {{ inventory_hostname }}
+          Teams: {{ jenkins_teams_filtered | map(attribute='team_name') | join(', ') }}
+          ====================================================
+
+    - name: Determine passive environment for each team
+      set_fact:
+        team_passive_envs: >-
+          {{
+            jenkins_teams_filtered | map('dict2items') |
+            map('selectattr', 'key', 'equalto', 'active_environment') |
+            map('map', attribute='value') |
+            map('ternary', 'green', 'blue') | list
+          }}
+
+    - name: Run GlusterFS recovery script for each team
+      command: >
+        /usr/local/bin/jenkins-recover-from-gluster-{{ item.0.team_name }}.sh
+        {{ item.0.team_name }}
+        {{ 'green' if item.0.active_environment | default('blue') == 'blue' else 'blue' }}
+      loop: "{{ jenkins_teams_filtered | zip(range(jenkins_teams_filtered | length)) | list }}"
+      loop_control:
+        label: "{{ item.0.team_name }} - recovering to {{ 'green' if item.0.active_environment | default('blue') == 'blue' else 'blue' }}"
+      register: recovery_results
+      changed_when: "'Recovery complete' in recovery_results.stdout"
+      failed_when: recovery_results.rc != 0
+
+    - name: Display recovery results
+      debug:
+        msg: |
+          ====================================================
+          Data Recovery Results
+          ====================================================
+          {% for result in recovery_results.results %}
+          ✓ {{ result.item.0.team_name }}: {{ 'SUCCESS' if result.rc == 0 else 'FAILED' }}
+            Environment: {{ 'green' if result.item.0.active_environment | default('blue') == 'blue' else 'blue' }}
+            {{ result.stdout_lines | last | default('No output') }}
+          {% endfor %}
+          ====================================================

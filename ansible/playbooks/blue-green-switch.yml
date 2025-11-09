@@ -1,0 +1,60 @@
+---
+# Blue-Green Switch Playbook
+# Executes zero-downtime blue-green switch for Jenkins teams
+
+- name: Execute Blue-Green Switch
+  hosts: "{{ target_vm | default('jenkins_masters') }}"
+  become: yes
+  vars:
+    jenkins_teams_filtered: "{{ jenkins_teams_config if deploy_teams is not defined or deploy_teams == 'all' else (jenkins_teams_config | selectattr('team_name', 'in', deploy_teams.split(',') | map('trim') | list) | list) }}"
+
+  tasks:
+    - name: Display switch summary
+      debug:
+        msg: |
+          ====================================================
+          Blue-Green Switch Execution
+          ====================================================
+          Target VM: {{ inventory_hostname }}
+          Teams: {{ jenkins_teams_filtered | map(attribute='team_name') | join(', ') }}
+          Rollback Mode: {{ rollback_mode | default(false) }}
+          ====================================================
+
+    - name: Execute zero-downtime blue-green switch for each team
+      command: >
+        /var/jenkins/scripts/zero-downtime-blue-green-switch-{{ item.team_name }}.sh switch
+      loop: "{{ jenkins_teams_filtered }}"
+      loop_control:
+        label: "{{ item.team_name }}: {{ item.active_environment | default('blue') }} → {{ 'green' if item.active_environment | default('blue') == 'blue' else 'blue' }}"
+      register: switch_results
+      failed_when: switch_results.rc != 0
+
+    - name: Update HAProxy configuration for new active environments
+      import_role:
+        name: high-availability-v2
+      vars:
+        haproxy_effective_teams: "{{ jenkins_teams_filtered }}"
+      tags: haproxy
+
+    - name: Update Prometheus targets for new active environments
+      import_role:
+        name: monitoring
+        tasks_from: phase1-file-sd/generate-targets.yml
+      vars:
+        monitoring_teams: "{{ jenkins_teams_filtered }}"
+      tags: monitoring
+
+    - name: Display switch results
+      debug:
+        msg: |
+          ====================================================
+          Blue-Green Switch Results
+          ====================================================
+          {% for result in switch_results.results %}
+          ✓ {{ result.item.team_name }}: Switched {{ result.item.active_environment | default('blue') }} → {{ 'green' if result.item.active_environment | default('blue') == 'blue' else 'blue' }}
+            Traffic routing: Updated
+            HAProxy backend: {{ result.item.team_name }}-{{ 'green' if result.item.active_environment | default('blue') == 'blue' else 'blue' }}
+          {% endfor %}
+          ====================================================
+          Switch completed successfully
+          ====================================================

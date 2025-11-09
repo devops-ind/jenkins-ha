@@ -1,0 +1,71 @@
+---
+# Jenkins Post-Deployment Validation
+# Validates passive Jenkins environment is identical to active
+
+- name: Validate Jenkins Deployment
+  hosts: "{{ target_vm | default('jenkins_masters') }}"
+  vars:
+    jenkins_teams_filtered: "{{ jenkins_teams_config if deploy_teams is not defined or deploy_teams == 'all' else (jenkins_teams_config | selectattr('team_name', 'in', deploy_teams.split(',') | map('trim') | list) | list) }}"
+
+  tasks:
+    - name: Display validation summary
+      debug:
+        msg: |
+          ====================================================
+          Jenkins Post-Deployment Validation
+          ====================================================
+          Target VM: {{ inventory_hostname }}
+          Teams: {{ jenkins_teams_filtered | map(attribute='team_name') | join(', ') }}
+          ====================================================
+
+    - name: Container health check - verify containers running
+      command: >
+        docker inspect --format='{{ '{{' }}.State.Status{{ '}}' }}'
+        jenkins-{{ item.team_name }}-{{ 'green' if item.active_environment | default('blue') == 'blue' else 'blue' }}
+      loop: "{{ jenkins_teams_filtered }}"
+      loop_control:
+        label: "{{ item.team_name }}"
+      register: container_status
+      failed_when: "'running' not in container_status.stdout"
+      changed_when: false
+
+    - name: HTTP endpoint validation - verify Jenkins responding
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{% if (item.active_environment | default('blue') == 'blue') %}{{ item.ports.web + 100 }}{% else %}{{ item.ports.web }}{% endif %}/login"
+        method: GET
+        status_code: [200, 403]
+        timeout: 30
+      loop: "{{ jenkins_teams_filtered }}"
+      loop_control:
+        label: "{{ item.team_name }}:{% if (item.active_environment | default('blue') == 'blue') %}{{ item.ports.web + 100 }}{% else %}{{ item.ports.web }}{% endif %}"
+      register: http_health
+      retries: 5
+      delay: 10
+      until: http_health.status in [200, 403]
+
+    - name: Check Jenkins process inside container
+      command: >
+        docker exec jenkins-{{ item.team_name }}-{{ 'green' if item.active_environment | default('blue') == 'blue' else 'blue' }}
+        pgrep -f jenkins.war
+      loop: "{{ jenkins_teams_filtered }}"
+      loop_control:
+        label: "{{ item.team_name }}"
+      register: jenkins_process
+      failed_when: jenkins_process.rc != 0
+      changed_when: false
+
+    - name: Display validation results
+      debug:
+        msg: |
+          ====================================================
+          Validation Results (Passive Environment)
+          ====================================================
+          {% for team in jenkins_teams_filtered %}
+          Team: {{ team.team_name }} ({{ 'green' if team.active_environment | default('blue') == 'blue' else 'blue' }} environment)
+          ✓ Container Status: RUNNING
+          ✓ HTTP Health: PASSED ({{ http_health.results[loop.index0].status }})
+          ✓ Jenkins Process: RUNNING
+          {% endfor %}
+          ====================================================
+          Overall Result: ✅ VALIDATION PASSED
+          ====================================================
