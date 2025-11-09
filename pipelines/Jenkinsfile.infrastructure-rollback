@@ -1,0 +1,169 @@
+// Jenkinsfile for Infrastructure Rollback
+// Emergency rollback pipeline for infrastructure deployments
+
+pipeline {
+    agent { label 'python-agent' }
+
+    parameters {
+        choice(
+            name: 'TARGET_VM',
+            choices: ['jenkins_hosts_01', 'jenkins_hosts_02', 'all'],
+            description: 'Target VM for rollback'
+        )
+        string(
+            name: 'ROLLBACK_TEAMS',
+            defaultValue: 'all',
+            description: 'Teams to rollback (comma-separated) OR all'
+        )
+        string(
+            name: 'ROLLBACK_REASON',
+            defaultValue: '',
+            description: 'Reason for rollback (required)'
+        )
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '50', artifactNumToKeepStr: '20'))
+        disableConcurrentBuilds()
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+    }
+
+    stages {
+        stage('Validate Rollback Request') {
+            steps {
+                script {
+                    if (params.ROLLBACK_REASON.trim() == '') {
+                        error("Rollback reason is required!")
+                    }
+
+                    echo """
+                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    🔄 Infrastructure Rollback
+                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    Target VM: ${params.TARGET_VM}
+                    Teams: ${params.ROLLBACK_TEAMS}
+                    Reason: ${params.ROLLBACK_REASON}
+                    Triggered by: ${env.BUILD_USER_ID ?: 'Unknown'}
+                    Build: #${env.BUILD_NUMBER}
+                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    """
+
+                    // Verify ansible repository is available
+                    sh 'ls -la ansible/'
+                    sh 'ls -la ansible/playbooks/blue-green-switch.yml'
+                }
+            }
+        }
+
+        stage('Execute Rollback') {
+            steps {
+                script {
+                    def targetLimit = params.TARGET_VM == 'all' ? 'jenkins_masters' : params.TARGET_VM
+                    def extraVars = ""
+
+                    if (params.ROLLBACK_TEAMS != 'all') {
+                        extraVars = "-e 'deploy_teams=${params.ROLLBACK_TEAMS}'"
+                    }
+
+                    echo "Executing rollback for ${targetLimit} with teams: ${params.ROLLBACK_TEAMS}"
+                    echo "Rolling back to previous active environment..."
+
+                    sh """
+                        cd ${env.WORKSPACE}
+                        ansible-playbook -i ansible/inventories/production/hosts.yml \\
+                            ansible/playbooks/blue-green-switch.yml \\
+                            --limit ${targetLimit} \\
+                            ${extraVars} \\
+                            -e 'rollback_mode=true' \\
+                            -e 'rollback_reason="${params.ROLLBACK_REASON}"'
+                    """
+                }
+            }
+        }
+
+        stage('Verify Rollback') {
+            steps {
+                script {
+                    echo "Waiting 10 seconds for services to stabilize..."
+                    sleep(10)
+
+                    echo "Verifying Jenkins masters are accessible..."
+
+                    def targetLimit = params.TARGET_VM == 'all' ? 'jenkins_masters' : params.TARGET_VM
+
+                    sh """
+                        cd ${env.WORKSPACE}
+                        ansible ${targetLimit} -i ansible/inventories/production/hosts.yml \\
+                            -m uri \\
+                            -a 'url=http://localhost:8080/login status_code=200,403' \\
+                            -o
+                    """
+
+                    echo "✅ All Jenkins masters are responding correctly"
+                }
+            }
+        }
+
+        stage('Post-Rollback Status') {
+            steps {
+                script {
+                    def targetLimit = params.TARGET_VM == 'all' ? 'jenkins_masters' : params.TARGET_VM
+
+                    echo "Checking current environment status..."
+
+                    sh """
+                        cd ${env.WORKSPACE}
+                        ansible ${targetLimit} -i ansible/inventories/production/hosts.yml \\
+                            -m shell \\
+                            -a 'docker ps --filter "name=jenkins-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"' \\
+                            -o
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            script {
+                echo """
+                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                ✅ Rollback Completed Successfully
+                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                Target VM: ${params.TARGET_VM}
+                Teams: ${params.ROLLBACK_TEAMS}
+                Reason: ${params.ROLLBACK_REASON}
+                Duration: ${currentBuild.durationString}
+                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                """
+
+                // Send notification (Teams/Email integration can be added here)
+            }
+        }
+        failure {
+            script {
+                echo """
+                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                ❌ Rollback Failed - Manual Intervention Required!
+                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                Target VM: ${params.TARGET_VM}
+                Teams: ${params.ROLLBACK_TEAMS}
+                Reason: ${params.ROLLBACK_REASON}
+
+                URGENT: Contact DevOps team immediately!
+                Build logs: ${env.BUILD_URL}console
+                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                """
+
+                // Send critical notification (Teams/Email integration can be added here)
+            }
+        }
+        always {
+            script {
+                echo "Rollback operation completed at ${new Date()}"
+                echo "Build URL: ${env.BUILD_URL}"
+            }
+        }
+    }
+}

@@ -87,81 +87,36 @@ pipelineJob('Infrastructure/Infrastructure-Rollback') {
         stringParam('ROLLBACK_REASON', '', 'Reason for rollback (required)')
     }
 
+    properties {
+        buildDiscarder {
+            strategy {
+                logRotator {
+                    numToKeepStr('50')
+                    artifactNumToKeepStr('20')
+                }
+            }
+        }
+        disableConcurrentBuilds()
+    }
+
     definition {
-        cps {
-            script('''
-pipeline {
-    agent { label 'master' }
-
-    stages {
-        stage('Validate Rollback Request') {
-            steps {
-                script {
-                    if (params.ROLLBACK_REASON.trim() == '') {
-                        error("Rollback reason is required!")
+        cpsScm {
+            scm {
+                git {
+                    remote {
+                        url('${GIT_REPO_URL}')
+                        credentials('git-credentials')
                     }
-
-                    echo """
-                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                    🔄 Infrastructure Rollback
-                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                    Target VM: ${params.TARGET_VM}
-                    Teams: ${params.ROLLBACK_TEAMS}
-                    Reason: ${params.ROLLBACK_REASON}
-                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                    """
+                    branch('*/main')
                 }
             }
-        }
-
-        stage('Execute Rollback') {
-            steps {
-                script {
-                    def targetLimit = params.TARGET_VM == 'all' ? 'jenkins_masters' : params.TARGET_VM
-                    def extraVars = ""
-
-                    if (params.ROLLBACK_TEAMS != 'all') {
-                        extraVars = "-e 'deploy_teams=${params.ROLLBACK_TEAMS}'"
-                    }
-
-                    sh """
-                        ansible-playbook -i ansible/inventories/production/hosts.yml \\
-                            ansible/playbooks/blue-green-switch.yml \\
-                            --limit ${targetLimit} \\
-                            ${extraVars} \\
-                            -e 'rollback_mode=true'
-                    """
-                }
-            }
-        }
-
-        stage('Verify Rollback') {
-            steps {
-                script {
-                    sleep(10)
-
-                    sh """
-                        ansible jenkins_masters -i ansible/inventories/production/hosts.yml \\
-                            -m uri \\
-                            -a 'url=http://localhost:8080/login status_code=200,403'
-                    """
-                }
-            }
+            scriptPath('pipelines/Jenkinsfile.infrastructure-rollback')
+            lightweight(true)
         }
     }
 
-    post {
-        success {
-            echo "✅ Rollback completed successfully"
-        }
-        failure {
-            echo "❌ Rollback failed - manual intervention required!"
-        }
-    }
-}
-            '''.stripIndent())
-            sandbox(true)
-        }
+    triggers {
+        // No automatic triggers - manual execution only
     }
 }
 
