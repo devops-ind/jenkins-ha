@@ -9,14 +9,7 @@
   pre_tasks:
     - name: Load jenkins_teams configuration
       set_fact:
-        jenkins_teams: "{{ lookup('file', inventory_dir + '/group_vars/all/jenkins_teams.yml') | from_yaml | json_query('jenkins_teams') }}"
-      run_once: true
-      delegate_to: localhost
-      delegate_facts: true
-
-    - name: Set jenkins_teams_config for all hosts
-      set_fact:
-        jenkins_teams_config: "{{ hostvars['localhost']['jenkins_teams'] }}"
+        jenkins_teams_config: "{{ lookup('file', inventory_dir + '/group_vars/all/jenkins_teams.yml') | from_yaml | json_query('jenkins_teams') }}"
 
     - name: Resolve host IP address
       set_fact:
