@@ -58,7 +58,7 @@ pipelineJob('Infrastructure/Monitoring-Setup') {
                 }
             }
             scriptPath('pipelines/Jenkinsfile.monitoring')
-            lightweight(true)
+            lightweight(false)  // Full repository checkout required for ansible code
         }
     }
 }

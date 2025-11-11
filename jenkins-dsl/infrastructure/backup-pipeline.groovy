@@ -77,7 +77,7 @@ pipelineJob('Infrastructure/Backup-Pipeline') {
                 }
             }
             scriptPath('pipelines/Jenkinsfile.backup')
-            lightweight(true)
+            lightweight(false)  // Full repository checkout required for ansible code
         }
     }
 }

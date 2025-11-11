@@ -74,7 +74,7 @@ pipelineJob('Infrastructure/Image-Builder') {
                 }
             }
             scriptPath('pipelines/Jenkinsfile.image-builder')
-            lightweight(true)
+            lightweight(false)  // Full repository checkout required for ansible code
         }
     }
 }
