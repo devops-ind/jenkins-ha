@@ -5,6 +5,19 @@
 - name: Execute Blue-Green Switch
   hosts: "{{ target_vm | default('jenkins_masters') }}"
   become: yes
+
+  pre_tasks:
+    - name: Load jenkins_teams configuration
+      set_fact:
+        jenkins_teams: "{{ lookup('file', inventory_dir + '/group_vars/all/jenkins_teams.yml') | from_yaml | json_query('jenkins_teams') }}"
+      run_once: true
+      delegate_to: localhost
+      delegate_facts: true
+
+    - name: Set jenkins_teams_config for all hosts
+      set_fact:
+        jenkins_teams_config: "{{ hostvars['localhost']['jenkins_teams'] }}"
+
   vars:
     jenkins_teams_filtered: "{{ jenkins_teams_config if deploy_teams is not defined or deploy_teams == 'all' else (jenkins_teams_config | selectattr('team_name', 'in', deploy_teams.split(',') | map('trim') | list) | list) }}"
 

@@ -4,6 +4,33 @@
 
 - name: Validate Jenkins Deployment
   hosts: "{{ target_vm | default('jenkins_masters') }}"
+  gather_facts: yes
+
+  pre_tasks:
+    - name: Load jenkins_teams configuration
+      set_fact:
+        jenkins_teams: "{{ lookup('file', inventory_dir + '/group_vars/all/jenkins_teams.yml') | from_yaml | json_query('jenkins_teams') }}"
+      run_once: true
+      delegate_to: localhost
+      delegate_facts: true
+
+    - name: Set jenkins_teams_config for all hosts
+      set_fact:
+        jenkins_teams_config: "{{ hostvars['localhost']['jenkins_teams'] }}"
+
+    - name: Resolve host IP address
+      set_fact:
+        jenkins_host_ip: >-
+          {%- if ansible_host is defined -%}
+          {{ ansible_host }}
+          {%- elif ansible_default_ipv4 is defined and ansible_default_ipv4.address is defined -%}
+          {{ ansible_default_ipv4.address }}
+          {%- elif ansible_all_ipv4_addresses is defined and ansible_all_ipv4_addresses | length > 0 -%}
+          {{ ansible_all_ipv4_addresses[0] }}
+          {%- else -%}
+          127.0.0.1
+          {%- endif -%}
+
   vars:
     jenkins_teams_filtered: "{{ jenkins_teams_config if deploy_teams is not defined or deploy_teams == 'all' else (jenkins_teams_config | selectattr('team_name', 'in', deploy_teams.split(',') | map('trim') | list) | list) }}"
 
@@ -31,7 +58,7 @@
 
     - name: HTTP endpoint validation - verify Jenkins responding
       uri:
-        url: "http://{{ ansible_default_ipv4.address }}:{% if (item.active_environment | default('blue') == 'blue') %}{{ item.ports.web + 100 }}{% else %}{{ item.ports.web }}{% endif %}/login"
+        url: "http://{{ jenkins_host_ip }}:{% if (item.active_environment | default('blue') == 'blue') %}{{ item.ports.web + 100 }}{% else %}{{ item.ports.web }}{% endif %}/login"
         method: GET
         status_code: [200, 403]
         timeout: 30
