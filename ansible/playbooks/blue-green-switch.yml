@@ -19,11 +19,16 @@
       debug:
         msg: |
           ====================================================
-          Blue-Green Switch Execution
+          Blue-Green Switch Execution (ACTIVE → PASSIVE)
           ====================================================
           Target VM: {{ inventory_hostname }}
           Teams: {{ jenkins_teams_filtered | map(attribute='team_name') | join(', ') }}
           Rollback Mode: {{ rollback_mode | default(false) }}
+
+          Switch Direction: ACTIVE → PASSIVE (passive becomes new active)
+          {% for team in jenkins_teams_filtered %}
+          - {{ team.team_name }}: {{ team.active_environment | default('blue') }} (old active) → {{ 'green' if team.active_environment | default('blue') == 'blue' else 'blue' }} (new active)
+          {% endfor %}
           ====================================================
 
     - name: Execute zero-downtime blue-green switch for each team
@@ -31,7 +36,7 @@
         /var/jenkins/scripts/zero-downtime-blue-green-switch-{{ item.team_name }}.sh switch
       loop: "{{ jenkins_teams_filtered }}"
       loop_control:
-        label: "{{ item.team_name }}: {{ item.active_environment | default('blue') }} → {{ 'green' if item.active_environment | default('blue') == 'blue' else 'blue' }}"
+        label: "{{ item.team_name }} (switching: {{ item.active_environment | default('blue') }}→{{ 'green' if item.active_environment | default('blue') == 'blue' else 'blue' }})"
       register: switch_results
       failed_when: switch_results.rc != 0
 
@@ -57,10 +62,12 @@
           Blue-Green Switch Results
           ====================================================
           {% for result in switch_results.results %}
-          ✓ {{ result.item.team_name }}: Switched {{ result.item.active_environment | default('blue') }} → {{ 'green' if result.item.active_environment | default('blue') == 'blue' else 'blue' }}
-            Traffic routing: Updated
-            HAProxy backend: {{ result.item.team_name }}-{{ 'green' if result.item.active_environment | default('blue') == 'blue' else 'blue' }}
+          ✓ {{ result.item.team_name }}: SUCCESS
+            Old ACTIVE: {{ result.item.active_environment | default('blue') }}
+            New ACTIVE: {{ 'green' if result.item.active_environment | default('blue') == 'blue' else 'blue' }}
+            Traffic routing: Updated to new active
+            HAProxy backend: jenkins_backend_{{ result.item.team_name }}
           {% endfor %}
           ====================================================
-          Switch completed successfully
+          Switch completed successfully - Passive is now Active
           ====================================================

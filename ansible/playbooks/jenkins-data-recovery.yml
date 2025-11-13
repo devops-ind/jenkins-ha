@@ -19,30 +19,25 @@
       debug:
         msg: |
           ====================================================
-          Jenkins Data Recovery from GlusterFS
+          Jenkins Data Recovery from GlusterFS (to PASSIVE)
           ====================================================
           Target VM: {{ inventory_hostname }}
           Teams: {{ jenkins_teams_filtered | map(attribute='team_name') | join(', ') }}
+
+          Recovery Target: PASSIVE (newly deployed) environments
+          {% for team in jenkins_teams_filtered %}
+          - {{ team.team_name }}: active={{ team.active_environment | default('blue') }} → recovering to PASSIVE={{ 'green' if team.active_environment | default('blue') == 'blue' else 'blue' }}
+          {% endfor %}
           ====================================================
 
-    - name: Determine passive environment for each team
-      set_fact:
-        team_passive_envs: >-
-          {{
-            jenkins_teams_filtered | map('dict2items') |
-            map('selectattr', 'key', 'equalto', 'active_environment') |
-            map('map', attribute='value') |
-            map('ternary', 'green', 'blue') | list
-          }}
-
-    - name: Run GlusterFS recovery script for each team
+    - name: Run GlusterFS recovery script for each team to PASSIVE environment
       command: >
-        /usr/local/bin/jenkins-recover-from-gluster-{{ item.0.team_name }}.sh
-        {{ item.0.team_name }}
-        {{ 'green' if item.0.active_environment | default('blue') == 'blue' else 'blue' }}
-      loop: "{{ jenkins_teams_filtered | zip(range(jenkins_teams_filtered | length)) | list }}"
+        /usr/local/bin/jenkins-recover-from-gluster-{{ item.team_name }}.sh
+        {{ item.team_name }}
+        {{ 'green' if item.active_environment | default('blue') == 'blue' else 'blue' }}
+      loop: "{{ jenkins_teams_filtered }}"
       loop_control:
-        label: "{{ item.0.team_name }} - recovering to {{ 'green' if item.0.active_environment | default('blue') == 'blue' else 'blue' }}"
+        label: "{{ item.team_name }} (active={{ item.active_environment | default('blue') }}, recovering_to_passive={{ 'green' if item.active_environment | default('blue') == 'blue' else 'blue' }})"
       register: recovery_results
       changed_when: "'Recovery complete' in recovery_results.stdout"
       failed_when: recovery_results.rc != 0
@@ -51,11 +46,11 @@
       debug:
         msg: |
           ====================================================
-          Data Recovery Results
+          Data Recovery Results (PASSIVE environments)
           ====================================================
           {% for result in recovery_results.results %}
-          ✓ {{ result.item.0.team_name }}: {{ 'SUCCESS' if result.rc == 0 else 'FAILED' }}
-            Environment: {{ 'green' if result.item.0.active_environment | default('blue') == 'blue' else 'blue' }}
+          ✓ {{ result.item.team_name }}: {{ 'SUCCESS' if result.rc == 0 else 'FAILED' }}
+            Recovered to PASSIVE: {{ 'green' if result.item.active_environment | default('blue') == 'blue' else 'blue' }}
             {{ result.stdout_lines | last | default('No output') }}
           {% endfor %}
           ====================================================
