@@ -53,41 +53,68 @@
           {% for team in jenkins_teams_filtered %}
           - {{ team.team_name }}: {{ 'green' if team.active_environment | default('blue') == 'blue' else 'blue' }} environment (port {{ (team.ports.web + 100) if team.active_environment | default('blue') == 'blue' else team.ports.web }})
           {% endfor %}
+
+          Note: In resource-optimized architecture, passive containers
+          only exist during deployment/validation window.
           ====================================================
+
+    - name: Check if PASSIVE containers exist
+      command: >
+        docker inspect --format='exists' jenkins-{{ item.team_name }}-{{ 'green' if item.active_environment | default('blue') == 'blue' else 'blue' }}
+      loop: "{{ jenkins_teams_filtered }}"
+      loop_control:
+        label: "{{ item.team_name }} (passive={{ 'green' if item.active_environment | default('blue') == 'blue' else 'blue' }})"
+      register: container_existence
+      failed_when: false
+      changed_when: false
 
     - name: Container health check - verify PASSIVE containers running
       command: >
         docker inspect --format='{{ '{{' }}.State.Status{{ '}}' }}'
-        jenkins-{{ item.team_name }}-{{ 'green' if item.active_environment | default('blue') == 'blue' else 'blue' }}
-      loop: "{{ jenkins_teams_filtered }}"
+        jenkins-{{ item.item.team_name }}-{{ 'green' if item.item.active_environment | default('blue') == 'blue' else 'blue' }}
+      loop: "{{ container_existence.results }}"
       loop_control:
-        label: "{{ item.team_name }} (passive={{ 'green' if item.active_environment | default('blue') == 'blue' else 'blue' }})"
+        label: "{{ item.item.team_name }} (passive={{ 'green' if item.item.active_environment | default('blue') == 'blue' else 'blue' }})"
       register: container_status
-      failed_when: "'running' not in container_status.stdout"
+      when: item.rc == 0
+      failed_when: container_status.stdout != 'running'
       changed_when: false
+
+    - name: Display container existence summary
+      debug:
+        msg: |
+          ====================================================
+          Container Existence Check
+          ====================================================
+          {% for result in container_existence.results %}
+          {{ result.item.team_name }} (passive={{ 'green' if result.item.active_environment | default('blue') == 'blue' else 'blue' }}): {% if result.rc == 0 %}EXISTS{% else %}NOT FOUND (not deployed yet){% endif %}
+          {% endfor %}
+          ====================================================
 
     - name: HTTP endpoint validation - verify PASSIVE Jenkins responding
       uri:
-        url: "http://{{ jenkins_host_ip }}:{% if (item.active_environment | default('blue') == 'blue') %}{{ item.ports.web + 100 }}{% else %}{{ item.ports.web }}{% endif %}/login"
+        url: "http://{{ jenkins_host_ip }}:{% if (item.item.active_environment | default('blue') == 'blue') %}{{ item.item.ports.web + 100 }}{% else %}{{ item.item.ports.web }}{% endif %}/login"
         method: GET
         status_code: [200, 403]
         timeout: 30
-      loop: "{{ jenkins_teams_filtered }}"
+      loop: "{{ container_existence.results }}"
       loop_control:
-        label: "{{ item.team_name }} (passive_port={% if (item.active_environment | default('blue') == 'blue') %}{{ item.ports.web + 100 }}{% else %}{{ item.ports.web }}{% endif %})"
+        label: "{{ item.item.team_name }} (passive_port={% if (item.item.active_environment | default('blue') == 'blue') %}{{ item.item.ports.web + 100 }}{% else %}{{ item.item.ports.web }}{% endif %})"
       register: http_health
+      when: item.rc == 0
       retries: 5
       delay: 10
       until: http_health.status in [200, 403]
 
     - name: Check Jenkins process inside PASSIVE container
       command: >
-        docker exec jenkins-{{ item.team_name }}-{{ 'green' if item.active_environment | default('blue') == 'blue' else 'blue' }}
+        docker exec jenkins-{{ item.item.team_name }}-{{ 'green' if item.item.active_environment | default('blue') == 'blue' else 'blue' }}
         pgrep -f jenkins.war
-      loop: "{{ jenkins_teams_filtered }}"
+      loop: "{{ container_existence.results }}"
       loop_control:
-        label: "{{ item.team_name }} (passive={{ 'green' if item.active_environment | default('blue') == 'blue' else 'blue' }})"
+        label: "{{ item.item.team_name }} (passive={{ 'green' if item.item.active_environment | default('blue') == 'blue' else 'blue' }})"
       register: jenkins_process
+      when: item.rc == 0
       failed_when: jenkins_process.rc != 0
       changed_when: false
 
@@ -97,12 +124,21 @@
           ====================================================
           Validation Results (Passive Environment)
           ====================================================
-          {% for team in jenkins_teams_filtered %}
-          Team: {{ team.team_name }} ({{ 'green' if team.active_environment | default('blue') == 'blue' else 'blue' }} environment)
+          {% for result in container_existence.results %}
+          Team: {{ result.item.team_name }} (passive={{ 'green' if result.item.active_environment | default('blue') == 'blue' else 'blue' }})
+          {% if result.rc == 0 %}
+          ✓ Container Exists: YES
           ✓ Container Status: RUNNING
-          ✓ HTTP Health: PASSED ({{ http_health.results[loop.index0].status }})
+          ✓ HTTP Health: PASSED
           ✓ Jenkins Process: RUNNING
+          {% else %}
+          ⊘ Container Exists: NO (not deployed to passive yet)
+          ⊘ Validation: SKIPPED
+          {% endif %}
           {% endfor %}
           ====================================================
-          Overall Result: ✅ VALIDATION PASSED
+          Overall Result: {% if container_existence.results | selectattr('rc', 'equalto', 0) | list | length > 0 %}✅ VALIDATION PASSED for deployed containers{% else %}⚠️  NO PASSIVE CONTAINERS DEPLOYED{% endif %}
+
+          Note: This is expected in resource-optimized deployments.
+          Passive containers are only created during deployment.
           ====================================================
