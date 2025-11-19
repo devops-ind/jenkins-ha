@@ -27,6 +27,16 @@ vault_ad_service_password: ""
 vault_slack_webhook_url: ""
 vault_email_smtp_password: ""
 
+# Microsoft Teams webhooks (for local testing, use test channel webhooks)
+vault_teams_webhook_critical: ""
+vault_teams_webhook_warning: ""
+vault_teams_webhook_info: ""
+
+# Per-team Teams webhooks (optional for local)
+vault_teams_devops_webhook: ""
+vault_teams_dev_qa_webhook: ""
+vault_teams_infrastructure_webhook: ""
+
 # Certificate information (not used in local HTTP setup)
 vault_ssl_private_key: ""
 vault_ssl_certificate: ""

@@ -66,7 +66,7 @@ pipelineJob('Infrastructure/Health-Check') {
                 }
             }
             scriptPath('pipelines/Jenkinsfile.health-check')
-            lightweight(true)
+            lightweight(false)  // Full repository checkout required for ansible code
         }
     }
 }

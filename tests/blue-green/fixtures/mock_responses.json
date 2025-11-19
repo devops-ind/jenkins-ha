@@ -1,0 +1,353 @@
+{
+  "jenkins_api": {
+    "healthy_instance": {
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json",
+        "Server": "Jenkins/2.414.1"
+      },
+      "json": {
+        "mode": "NORMAL",
+        "nodeDescription": "Jenkins Controller",
+        "numExecutors": 2,
+        "jobs": [],
+        "primaryView": {
+          "name": "all",
+          "url": "http://localhost:8080/"
+        },
+        "useCrumbs": true,
+        "version": "2.414.1"
+      }
+    },
+    
+    "instance_with_builds": {
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "json": {
+        "jobs": [
+          {
+            "name": "test-job-1",
+            "url": "http://localhost:8080/job/test-job-1/",
+            "builds": [
+              {
+                "number": 1,
+                "url": "http://localhost:8080/job/test-job-1/1/",
+                "building": true,
+                "duration": 0,
+                "estimatedDuration": 30000
+              },
+              {
+                "number": 2,
+                "url": "http://localhost:8080/job/test-job-1/2/",
+                "building": false,
+                "duration": 25000,
+                "result": "SUCCESS"
+              }
+            ]
+          },
+          {
+            "name": "test-job-2",
+            "url": "http://localhost:8080/job/test-job-2/",
+            "builds": [
+              {
+                "number": 5,
+                "url": "http://localhost:8080/job/test-job-2/5/",
+                "building": false,
+                "duration": 45000,
+                "result": "FAILURE"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    
+    "unhealthy_instance": {
+      "status": 503,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "json": {
+        "message": "Jenkins is starting up",
+        "severity": "WARNING"
+      }
+    },
+    
+    "authentication_required": {
+      "status": 403,
+      "headers": {
+        "Content-Type": "text/html"
+      },
+      "text": "<html><head><title>Authentication required</title></head><body>Please log in</body></html>"
+    }
+  },
+  
+  "haproxy_stats": {
+    "healthy_backends": {
+      "status": 200,
+      "headers": {
+        "Content-Type": "text/plain"
+      },
+      "text": "# pxname,svname,qcur,qmax,scur,smax,slim,stot,bin,bout,dreq,dresp,ereq,econ,eresp,wretr,wredis,status,weight,act,bck,chkfail,chkdown,lastchg,downtime,qlimit,pid,iid,sid,throttle,lbtot,tracked,type,rate,rate_lim,rate_max,check_status,check_code,check_duration,hrsp_1xx,hrsp_2xx,hrsp_3xx,hrsp_4xx,hrsp_5xx,hrsp_other,hanafail,req_rate,req_rate_max,req_tot,cli_abrt,srv_abrt,comp_in,comp_out,comp_byp,comp_rsp,lastsess,last_chk,last_agt,qtime,ctime,rtime,ttime\njenkins_backend,jenkins-blue,0,0,0,0,1000,0,0,0,0,0,0,0,0,0,0,UP,1,1,0,0,0,1,0,0,1,2,1,0,0,0,2,0,0,0,L7OK,200,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,OK,,0,0,0,0\njenkins_backend,jenkins-green,0,0,0,0,1000,0,0,0,0,0,0,0,0,0,0,UP,1,1,1,0,0,2,0,0,1,2,2,0,0,0,2,0,0,0,L7OK,200,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,OK,,0,0,0,0"
+    },
+    
+    "backend_down": {
+      "status": 200,
+      "headers": {
+        "Content-Type": "text/plain"
+      },
+      "text": "# pxname,svname,qcur,qmax,scur,smax,slim,stot,bin,bout,dreq,dresp,ereq,econ,eresp,wretr,wredis,status,weight,act,bck,chkfail,chkdown,lastchg,downtime,qlimit,pid,iid,sid,throttle,lbtot,tracked,type,rate,rate_lim,rate_max,check_status,check_code,check_duration,hrsp_1xx,hrsp_2xx,hrsp_3xx,hrsp_4xx,hrsp_5xx,hrsp_other,hanafail,req_rate,req_rate_max,req_tot,cli_abrt,srv_abrt,comp_in,comp_out,comp_byp,comp_rsp,lastsess,last_chk,last_agt,qtime,ctime,rtime,ttime\njenkins_backend,jenkins-blue,0,0,0,0,1000,5,1234,5678,0,0,0,0,0,0,0,UP,1,1,0,0,0,300,0,0,1,2,1,0,5,0,2,0,0,2,L7OK,200,5,0,3,1,1,0,0,0,0,1,5,0,0,0,0,0,0,100,OK,,0,1,2,10\njenkins_backend,jenkins-green,0,0,0,0,1000,0,0,0,0,0,0,0,0,0,0,DOWN,1,1,1,3,1,60,60,0,1,2,2,0,0,0,2,0,0,0,L4TOUT,,2000,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1,Connection timed out,,0,0,0,0"
+    }
+  },
+  
+  "prometheus_metrics": {
+    "jenkins_metrics": {
+      "status": 200,
+      "headers": {
+        "Content-Type": "text/plain"
+      },
+      "text": "# HELP jenkins_builds_duration_milliseconds_summary Build times in milliseconds\n# TYPE jenkins_builds_duration_milliseconds_summary summary\njenkins_builds_duration_milliseconds_summary{instance=\"localhost:8080\",job=\"jenkins\",quantile=\"0.5\"} 15000\njenkins_builds_duration_milliseconds_summary{instance=\"localhost:8080\",job=\"jenkins\",quantile=\"0.95\"} 45000\njenkins_builds_duration_milliseconds_summary{instance=\"localhost:8080\",job=\"jenkins\",quantile=\"0.99\"} 60000\n# HELP jenkins_builds_success_build_count Number of successful builds\n# TYPE jenkins_builds_success_build_count counter\njenkins_builds_success_build_count{instance=\"localhost:8080\",job=\"jenkins\"} 125\n# HELP jenkins_builds_failed_build_count Number of failed builds\n# TYPE jenkins_builds_failed_build_count counter\njenkins_builds_failed_build_count{instance=\"localhost:8080\",job=\"jenkins\"} 8\n# HELP jenkins_queue_size Number of items in build queue\n# TYPE jenkins_queue_size gauge\njenkins_queue_size{instance=\"localhost:8080\",job=\"jenkins\"} 2\n# HELP jenkins_executor_in_use Number of executors in use\n# TYPE jenkins_executor_in_use gauge\njenkins_executor_in_use{instance=\"localhost:8080\",job=\"jenkins\"} 1\n# HELP jenkins_executor_available Number of available executors\n# TYPE jenkins_executor_available gauge\njenkins_executor_available{instance=\"localhost:8080\",job=\"jenkins\"} 3"
+    },
+    
+    "high_error_rate": {
+      "status": 200,
+      "headers": {
+        "Content-Type": "text/plain"
+      },
+      "text": "# HELP jenkins_http_requests_total Total HTTP requests\n# TYPE jenkins_http_requests_total counter\njenkins_http_requests_total{instance=\"localhost:8080\",job=\"jenkins\",status=\"200\"} 890\njenkins_http_requests_total{instance=\"localhost:8080\",job=\"jenkins\",status=\"404\"} 12\njenkins_http_requests_total{instance=\"localhost:8080\",job=\"jenkins\",status=\"500\"} 78\njenkins_http_requests_total{instance=\"localhost:8080\",job=\"jenkins\",status=\"503\"} 45\n# HELP jenkins_response_time_seconds HTTP response time in seconds\n# TYPE jenkins_response_time_seconds histogram\njenkins_response_time_seconds_bucket{instance=\"localhost:8080\",job=\"jenkins\",le=\"0.1\"} 200\njenkins_response_time_seconds_bucket{instance=\"localhost:8080\",job=\"jenkins\",le=\"0.5\"} 650\njenkins_response_time_seconds_bucket{instance=\"localhost:8080\",job=\"jenkins\",le=\"1.0\"} 850\njenkins_response_time_seconds_bucket{instance=\"localhost:8080\",job=\"jenkins\",le=\"5.0\"} 980\njenkins_response_time_seconds_bucket{instance=\"localhost:8080\",job=\"jenkins\",le=\"+Inf\"} 1000"
+    }
+  },
+  
+  "ssl_certificate": {
+    "valid_certificate": {
+      "subject": {
+        "common_name": "*.test.local",
+        "organization": "Jenkins HA Infrastructure"
+      },
+      "issuer": {
+        "common_name": "Jenkins HA Infrastructure",
+        "organization": "Jenkins HA Infrastructure"
+      },
+      "validity": {
+        "not_before": "2024-01-01T00:00:00Z",
+        "not_after": "2024-12-31T23:59:59Z"
+      },
+      "subject_alternative_names": [
+        "*.test.local",
+        "test.local",
+        "jenkins.test.local",
+        "devopsjenkins.test.local",
+        "qajenkins.test.local",
+        "prometheus.test.local",
+        "grafana.test.local",
+        "node-exporter.test.local"
+      ],
+      "key_usage": [
+        "digital_signature",
+        "key_encipherment",
+        "non_repudiation"
+      ],
+      "extended_key_usage": [
+        "server_auth",
+        "client_auth"
+      ]
+    },
+    
+    "expired_certificate": {
+      "subject": {
+        "common_name": "*.test.local",
+        "organization": "Jenkins HA Infrastructure"
+      },
+      "validity": {
+        "not_before": "2023-01-01T00:00:00Z",
+        "not_after": "2023-12-31T23:59:59Z"
+      },
+      "status": "expired",
+      "error": "Certificate has expired"
+    }
+  },
+  
+  "docker_api": {
+    "container_running": {
+      "Id": "abcd1234567890",
+      "Names": ["/jenkins-devops-blue"],
+      "Image": "jenkins-custom:latest",
+      "State": "running",
+      "Status": "Up 5 minutes",
+      "Ports": [
+        {
+          "IP": "0.0.0.0",
+          "PrivatePort": 8080,
+          "PublicPort": 8081,
+          "Type": "tcp"
+        },
+        {
+          "IP": "0.0.0.0",
+          "PrivatePort": 50000,
+          "PublicPort": 50001,
+          "Type": "tcp"
+        }
+      ],
+      "Labels": {
+        "team": "devops",
+        "environment": "blue",
+        "service": "jenkins"
+      }
+    },
+    
+    "container_stopped": {
+      "Id": "efgh5678901234",
+      "Names": ["/jenkins-qa-green"],
+      "Image": "jenkins-custom:latest",
+      "State": "exited",
+      "Status": "Exited (0) 2 minutes ago",
+      "Ports": [],
+      "Labels": {
+        "team": "qa",
+        "environment": "green",
+        "service": "jenkins"
+      }
+    },
+    
+    "container_error": {
+      "Id": "ijkl9012345678",
+      "Names": ["/jenkins-failed"],
+      "Image": "jenkins-custom:latest",
+      "State": "exited",
+      "Status": "Exited (1) 1 minute ago",
+      "Ports": [],
+      "Labels": {
+        "service": "jenkins"
+      }
+    }
+  },
+  
+  "ansible_responses": {
+    "playbook_success": {
+      "plays": [
+        {
+          "play": {
+            "name": "Blue-Green Deployment Test"
+          },
+          "tasks": [
+            {
+              "task": {
+                "name": "Deploy blue environment"
+              },
+              "result": {
+                "changed": true,
+                "msg": "Blue environment deployed successfully"
+              }
+            },
+            {
+              "task": {
+                "name": "Deploy green environment"
+              },
+              "result": {
+                "changed": true,
+                "msg": "Green environment deployed successfully"
+              }
+            },
+            {
+              "task": {
+                "name": "Switch to active environment"
+              },
+              "result": {
+                "changed": true,
+                "msg": "Switched to green environment"
+              }
+            }
+          ]
+        }
+      ],
+      "stats": {
+        "localhost": {
+          "ok": 5,
+          "changed": 3,
+          "unreachable": 0,
+          "failed": 0,
+          "skipped": 2,
+          "rescued": 0,
+          "ignored": 0
+        }
+      }
+    },
+    
+    "playbook_failure": {
+      "plays": [
+        {
+          "play": {
+            "name": "Blue-Green Deployment Test"
+          },
+          "tasks": [
+            {
+              "task": {
+                "name": "Pre-switch validation"
+              },
+              "result": {
+                "failed": true,
+                "msg": "Active builds detected - cannot switch environments"
+              }
+            }
+          ]
+        }
+      ],
+      "stats": {
+        "localhost": {
+          "ok": 2,
+          "changed": 0,
+          "unreachable": 0,
+          "failed": 1,
+          "skipped": 0,
+          "rescued": 0,
+          "ignored": 0
+        }
+      }
+    }
+  },
+  
+  "test_scenarios": {
+    "blue_green_switch_success": {
+      "description": "Successful blue-green environment switch",
+      "initial_state": {
+        "devops_environment": "blue",
+        "qa_environment": "green"
+      },
+      "switch_operation": {
+        "team": "devops",
+        "from_environment": "blue", 
+        "to_environment": "green"
+      },
+      "expected_result": {
+        "success": true,
+        "devops_environment": "green",
+        "qa_environment": "green",
+        "downtime_seconds": 0
+      }
+    },
+    
+    "rollback_scenario": {
+      "description": "Automatic rollback due to high error rate",
+      "initial_state": {
+        "devops_environment": "blue"
+      },
+      "switch_operation": {
+        "team": "devops",
+        "from_environment": "blue",
+        "to_environment": "green"
+      },
+      "failure_condition": {
+        "error_rate": 0.15,
+        "response_time_ms": 8000
+      },
+      "expected_result": {
+        "success": false,
+        "rollback_executed": true,
+        "final_environment": "blue",
+        "rollback_reason": "High error rate detected"
+      }
+    }
+  }
+}

@@ -1,0 +1,206 @@
+---
+# GlusterFS Volume Creation and Configuration Tasks
+
+- name: Check existing volumes
+  command: gluster volume list
+  register: existing_volumes
+  changed_when: false
+  failed_when: false
+  become: yes
+  tags: ['glusterfs', 'volumes', 'check']
+
+- name: Parse existing volumes list
+  set_fact:
+    existing_volumes_list: "{{ existing_volumes.stdout_lines | default([]) }}"
+  tags: ['glusterfs', 'volumes', 'check']
+
+- name: Display existing volumes
+  debug:
+    msg: "Existing volumes: {{ existing_volumes_list | join(', ') if existing_volumes_list | length > 0 else 'None' }}"
+  tags: ['glusterfs', 'volumes', 'info']
+
+- name: Create GlusterFS replicated volumes (primary node only)
+  block:
+    - name: Build brick list for each volume
+      set_fact:
+        volume_bricks: "{{ volume_bricks | default({}) | combine({item.volume_name: brick_list}) }}"
+      vars:
+        brick_list: "{{ glusterfs_cluster_nodes | default(groups['glusterfs_servers'] | default([inventory_hostname])) | map('regex_replace', '^(.*)$', '\\1:' + glusterfs_brick_base_path + '/' + item.brick_name) | list }}"
+      loop: "{{ glusterfs_all_volumes }}"
+      when: glusterfs_all_volumes is defined and glusterfs_all_volumes | length > 0
+
+    - name: Display volume brick configuration
+      debug:
+        msg: |
+          Volume Brick Configuration:
+          {% for vol in glusterfs_all_volumes %}
+          Volume: {{ vol.volume_name }}
+            Replica Count: {{ glusterfs_replica_count }}
+            Bricks:
+            {% for brick in volume_bricks[vol.volume_name] %}
+              - {{ brick }}
+            {% endfor %}
+          {% endfor %}
+      when: volume_bricks is defined
+
+    - name: Create volumes (if not exist)
+      command: >
+        gluster volume create {{ item.volume_name }}
+        replica {{ glusterfs_replica_count }}
+        {{ volume_bricks[item.volume_name] | join(' ') }}
+        {{ 'force' if glusterfs_volume_force else '' }}
+      loop: "{{ glusterfs_all_volumes }}"
+      when:
+        - glusterfs_all_volumes is defined
+        - glusterfs_all_volumes | length > 0
+        - item.volume_name not in existing_volumes_list
+      register: volume_create_result
+      until: volume_create_result.rc == 0 or 'already exists' in volume_create_result.stderr
+      retries: "{{ glusterfs_volume_create_retries }}"
+      delay: "{{ glusterfs_volume_create_delay }}"
+      changed_when: "'success' in volume_create_result.stdout"
+      failed_when:
+        - volume_create_result.rc != 0
+        - "'already exists' not in volume_create_result.stderr"
+
+    - name: Wait for volume creation to propagate
+      pause:
+        seconds: 3
+      when: volume_create_result is changed
+
+  when:
+    - inventory_hostname == glusterfs_primary_node
+    - glusterfs_all_volumes is defined
+    - glusterfs_all_volumes | length > 0
+  become: yes
+  tags: ['glusterfs', 'volumes', 'create']
+
+- name: Configure volume options (primary node only)
+  block:
+    - name: Set performance options
+      command: "gluster volume set {{ item[0].volume_name }} {{ item[1].key }} {{ item[1].value }}"
+      loop: "{{ glusterfs_all_volumes | product(glusterfs_performance_options | dict2items) | list }}"
+      when: glusterfs_all_volumes is defined and glusterfs_all_volumes | length > 0
+      register: perf_options_result
+      changed_when: "'success' in perf_options_result.stdout"
+      failed_when:
+        - perf_options_result.rc != 0
+        - "'does not exist' not in perf_options_result.stderr"
+
+    - name: Set reliability options (quorum)
+      command: "gluster volume set {{ item[0].volume_name }} {{ item[1].key }} {{ item[1].value }}"
+      loop: "{{ glusterfs_all_volumes | product(glusterfs_reliability_options | dict2items) | list }}"
+      when: glusterfs_all_volumes is defined and glusterfs_all_volumes | length > 0
+      register: reliability_options_result
+      changed_when: "'success' in reliability_options_result.stdout"
+      failed_when:
+        - reliability_options_result.rc != 0
+        - "'does not exist' not in reliability_options_result.stderr"
+
+    - name: Set self-heal options
+      command: "gluster volume set {{ item[0].volume_name }} {{ item[1].key }} {{ item[1].value }}"
+      loop: "{{ glusterfs_all_volumes | product(glusterfs_self_heal_options | dict2items) | list }}"
+      when: glusterfs_all_volumes is defined and glusterfs_all_volumes | length > 0
+      register: self_heal_options_result
+      changed_when: "'success' in self_heal_options_result.stdout"
+      failed_when:
+        - self_heal_options_result.rc != 0
+        - "'does not exist' not in self_heal_options_result.stderr"
+
+    - name: Set other volume options
+      command: "gluster volume set {{ item[0].volume_name }} {{ item[1].key }} {{ item[1].value }}"
+      loop: "{{ glusterfs_all_volumes | product(glusterfs_other_options | dict2items) | list }}"
+      when: glusterfs_all_volumes is defined and glusterfs_all_volumes | length > 0
+      register: other_options_result
+      changed_when: "'success' in other_options_result.stdout"
+      failed_when:
+        - other_options_result.rc != 0
+        - "'does not exist' not in other_options_result.stderr"
+
+  when:
+    - inventory_hostname == glusterfs_primary_node
+    - glusterfs_all_volumes is defined
+    - glusterfs_all_volumes | length > 0
+  become: yes
+  tags: ['glusterfs', 'volumes', 'configure']
+
+- name: Start GlusterFS volumes (primary node only)
+  command: "gluster volume start {{ item.volume_name }}"
+  loop: "{{ glusterfs_all_volumes }}"
+  when:
+    - inventory_hostname == glusterfs_primary_node
+    - glusterfs_all_volumes is defined
+    - glusterfs_all_volumes | length > 0
+    - glusterfs_auto_start_volumes
+  register: volume_start_result
+  changed_when: "'success' in volume_start_result.stdout"
+  failed_when:
+    - volume_start_result.rc != 0
+    - "'already started' not in volume_start_result.stderr"
+  become: yes
+  tags: ['glusterfs', 'volumes', 'start']
+
+- name: Verify volume status on all nodes
+  block:
+    - name: Get volume status
+      command: gluster volume status
+      register: volume_status_output
+      changed_when: false
+      failed_when: false
+
+    - name: Get volume info
+      command: "gluster volume info {{ item.volume_name }}"
+      loop: "{{ glusterfs_all_volumes }}"
+      register: volume_info_output
+      when: glusterfs_all_volumes is defined and glusterfs_all_volumes | length > 0
+      changed_when: false
+      failed_when: false
+
+    - name: Display volume status
+      debug:
+        msg: |
+          Volume Status on {{ inventory_hostname }}:
+          {{ volume_status_output.stdout }}
+      when: volume_status_output is defined
+
+  become: yes
+  tags: ['glusterfs', 'volumes', 'validation']
+
+- name: Display volume configuration summary (primary node only)
+  debug:
+    msg: |
+      ====================================================
+      GlusterFS Volumes Created and Configured
+      ====================================================
+      Total Volumes: {{ glusterfs_all_volumes | length if glusterfs_all_volumes is defined else 0 }}
+
+      {% for vol in glusterfs_all_volumes | default([]) %}
+      {{ loop.index }}. {{ vol.volume_name }}:
+         Type: Replicate ({{ glusterfs_replica_count }} replicas)
+         Bricks: {{ volume_bricks[vol.volume_name] | join(', ') if volume_bricks is defined and vol.volume_name in volume_bricks else 'N/A' }}
+         Mount Path: {{ vol.mount_path | default('Not specified') }}
+         Team: {{ vol.team_name | default('Manual configuration') }}
+
+         Performance Options:
+         {% for key, value in glusterfs_performance_options.items() %}
+         - {{ key }}: {{ value }}
+         {% endfor %}
+
+         Reliability (Quorum):
+         {% for key, value in glusterfs_reliability_options.items() %}
+         - {{ key }}: {{ value }}
+         {% endfor %}
+
+         Self-Healing:
+         {% for key, value in glusterfs_self_heal_options.items() %}
+         - {{ key }}: {{ value }}
+         {% endfor %}
+
+      {% endfor %}
+      ====================================================
+  run_once: true
+  when:
+    - inventory_hostname == glusterfs_primary_node
+    - glusterfs_all_volumes is defined
+    - glusterfs_all_volumes | length > 0
+  tags: ['glusterfs', 'volumes', 'summary']

@@ -70,6 +70,7 @@
               - Disk space: {{ (ansible_mounts | selectattr('mount', 'equalto', '/') | first).size_available // 1000000000 }}GB (minimum: {{ min_disk_gb }}GB)
               - OS: {{ ansible_distribution }} (supported: Ubuntu, Debian, CentOS, RedHat, Rocky, AlmaLinux)
             success_msg: "✅ System requirements validated for {{ deployment_mode | default('local') }} deployment"
+          when: inventory_hostname != 'localhost' and ansible_mounts is defined
 
         - name: Check network connectivity to dependencies
           uri:
@@ -147,6 +148,23 @@
       when: validation_mode != 'skip'
       tags: ['validation', 'pre-deployment']
 
+- name: Setup GlusterFS Replicated Storage (if enabled)
+  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'glusterfs_servers') }}"
+  become: yes
+  gather_facts: yes
+  serial: "100%"  # Deploy to all GlusterFS servers in parallel
+  vars:
+    deployment_environment: "{{ lookup('env', 'DEPLOYMENT_ENV') | default('local') }}"
+  roles:
+    - role: glusterfs-server
+      tags: ['glusterfs', 'storage', 'bootstrap']
+      when:
+        - shared_storage_enabled | default(false)
+        - shared_storage_type is defined
+        - shared_storage_type == "glusterfs"
+        - groups['glusterfs_servers'] is defined
+        - groups['glusterfs_servers'] | length > 0
+
 - name: Bootstrap Infrastructure
   hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'all') }}"
   become: "{{ deployment_mode | default('local') != 'production' }}"
@@ -166,17 +184,17 @@
       tags: ['security', 'bootstrap']
 
 
-- name: Build and Manage Jenkins Images
-  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'jenkins_masters[0]') }}"  # Build on primary master only
-  become: yes
-  gather_facts: yes
-  vars:
-    jenkins_images_build: true
-    jenkins_images_push: true
-  roles:
-    - role: jenkins-images
-      tags: ['images', 'build']
-      when: build_jenkins_images | default(false)
+# - name: Build and Manage Jenkins Images
+#   hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'jenkins_masters[0]') }}"  # Build on primary master only
+#   become: yes
+#   gather_facts: yes
+#   vars:
+#     jenkins_images_build: false
+#     jenkins_images_push: false
+#   roles:
+#     - role: jenkins-images
+#       tags: ['images', 'build']
+#       when: build_jenkins_images | default(false) | bool
 
 - name: Deploy Jenkins Infrastructure
   hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'jenkins_masters') }}"
@@ -186,68 +204,143 @@
   vars:
     jenkins_ha_enabled: "{{ groups['jenkins_masters'] | default([]) | length > 1 }}"
     jenkins_master_priority: "{{ play_hosts.index(inventory_hostname) + 1 }}"
-    # Unified jenkins-master role supports both single and multi-team deployments
-    # jenkins_teams is already defined in group_vars
   roles:
-    - role: jenkins-master
+    - role: jenkins-master-v2
       tags: ['jenkins', 'deploy']
   post_tasks:
     - name: Wait for Jenkins teams to be ready
       uri:
-        url: "http://{{ ansible_default_ipv4.address }}:{{ item.ports.web | default(8080) }}/login"
+        url: "http://{{ ansible_default_ipv4.address }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web | default(8080) }}{% else %}{{ (item.ports.web | default(8080)) + 100 }}{% endif %}/login"
         method: GET
         status_code: [200, 403]
       register: jenkins_ready
       until: jenkins_ready is succeeded
       retries: 60
       delay: 10
-      loop: "{{ jenkins_teams | default([{'ports': {'web': 8080}}]) }}"
+      loop: "{{ jenkins_teams_config | default(jenkins_teams) | default([{'ports': {'web': 8080}}]) }}"
       tags: ['jenkins', 'verify']
 
 - name: Configure High Availability (HAProxy Load Balancer + Multi-Team Routing)
   hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'load_balancers:jenkins_masters') }}"
   become: yes
   gather_facts: yes
+  pre_tasks:
+    - name: Apply team filtering logic for HAProxy configuration - Deploy Teams
+      set_fact:
+        jenkins_teams_for_haproxy: "{{ jenkins_teams_config | selectattr('team_name', 'in', deploy_teams.split(',') | map('trim') | list) | list }}"
+      when: deploy_teams is defined and deploy_teams != ""
+      tags: ['ha', 'filter']
+
+    - name: Apply team filtering logic for HAProxy configuration - Exclude Teams
+      set_fact:
+        jenkins_teams_for_haproxy: "{{ jenkins_teams_config | rejectattr('team_name', 'in', exclude_teams.split(',') | map('trim') | list) | list }}"
+      when: 
+        - exclude_teams is defined and exclude_teams != ""
+        - deploy_teams is not defined or deploy_teams == ""
+      tags: ['ha', 'filter']
+
+    - name: Apply team filtering logic for HAProxy configuration - All Teams
+      set_fact:
+        jenkins_teams_for_haproxy: "{{ jenkins_teams_config | default([]) }}"
+      when:
+        - deploy_teams is not defined or deploy_teams == ""
+        - exclude_teams is not defined or exclude_teams == ""
+      tags: ['ha', 'filter']
   roles:
-    - role: high-availability
+    - role: high-availability-v2
+      vars:
+        jenkins_teams: "{{ jenkins_teams_for_haproxy }}"
       tags: ['ha', 'cluster', 'haproxy', 'loadbalancer']
       when: 
-        - jenkins_ha_enabled | default(false)
-        - (groups['jenkins_masters'] | default([]) | length > 1) or (jenkins_teams | default([]) | length > 1)
+        - (jenkins_ha_enabled | default(false)) | bool
+        - (groups['jenkins_masters'] | default([]) | length > 1) or (jenkins_teams_for_haproxy | default([]) | length > 1)
 
 - name: Setup Monitoring Stack
-  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'monitoring') }}"
+  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'monitoring:jenkins_masters') }}"
   become: yes
   gather_facts: yes
+  pre_tasks:
+    - name: Apply team filtering logic for Monitoring configuration - Deploy Teams
+      set_fact:
+        jenkins_teams_for_monitoring: "{{ jenkins_teams_config | selectattr('team_name', 'in', deploy_teams.split(',') | map('trim') | list) | list }}"
+      when: deploy_teams is defined and deploy_teams != ""
+      tags: ['monitoring', 'filter']
+
+    - name: Apply team filtering logic for Monitoring configuration - Exclude Teams
+      set_fact:
+        jenkins_teams_for_monitoring: "{{ jenkins_teams_config | rejectattr('team_name', 'in', exclude_teams.split(',') | map('trim') | list) | list }}"
+      when: 
+        - exclude_teams is defined and exclude_teams != ""
+        - deploy_teams is not defined or deploy_teams == ""
+      tags: ['monitoring', 'filter']
+
+    - name: Apply team filtering logic for Monitoring configuration - All Teams
+      set_fact:
+        jenkins_teams_for_monitoring: "{{ jenkins_teams_config | default([]) }}"
+      when:
+        - deploy_teams is not defined or deploy_teams == ""
+        - exclude_teams is not defined or exclude_teams == ""
+      tags: ['monitoring', 'filter']
   roles:
     - role: monitoring
+      vars:
+        jenkins_teams: "{{ jenkins_teams_for_monitoring }}"
+        jenkins_deployment_mode: "{{ 'multi-team' if jenkins_teams_for_monitoring | length > 1 else 'single-team' }}"
       tags: ['monitoring', 'prometheus', 'grafana']
       when: monitoring_enabled | default(true)
 
-- name: Configure Backup System
-  hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'shared_storage:jenkins_masters') }}"
-  become: yes
-  gather_facts: yes
-  roles:
-    - role: backup
-      tags: ['backup', 'storage']
-      when: backup_enabled | default(true)
+# Backup functionality is now integrated into jenkins-master-v2 role via dedicated backup daemon scripts
+# Sync operations are handled by Ansible-native tasks for improved reliability and control
 
 - name: Post-Deployment Verification
   hosts: "{{ (deployment_mode | default('local') == 'local') | ternary('localhost', 'jenkins_masters:monitoring') }}"
   become: no
   gather_facts: yes
   tasks:
+    - name: Apply robust team filtering logic for verification - Deploy Teams
+      set_fact:
+        jenkins_teams_for_verification: "{{ jenkins_teams_config | default([]) | selectattr('team_name', 'in', deploy_teams.split(',') | map('trim') | list) | list }}"
+      when: deploy_teams is defined and deploy_teams != ""
+      tags: ['verify', 'filter']
+
+    - name: Apply robust team filtering logic for verification - Exclude Teams
+      set_fact:
+        jenkins_teams_for_verification: "{{ jenkins_teams_config | default([]) | rejectattr('team_name', 'in', exclude_teams.split(',') | map('trim') | list) | list }}"
+      when: 
+        - exclude_teams is defined and exclude_teams != ""
+        - deploy_teams is not defined or deploy_teams == ""
+      tags: ['verify', 'filter']
+
+    - name: Apply robust team filtering logic for verification - All Teams
+      set_fact:
+        jenkins_teams_for_verification: "{{ jenkins_teams_config | default([]) }}"
+      when:
+        - deploy_teams is not defined or deploy_teams == ""
+        - exclude_teams is not defined or exclude_teams == ""
+      tags: ['verify', 'filter']
+
+    - name: Display teams for verification
+      debug:
+        msg: |
+          [VERIFICATION] Team Filtering Summary:
+          {% if jenkins_teams_for_verification | length > 0 %}
+          Teams to Verify: {{ jenkins_teams_for_verification | map(attribute='team_name') | list | join(', ') }}
+          Teams Count: {{ jenkins_teams_for_verification | length }}
+          {% else %}
+          No teams to verify (all teams filtered out)
+          {% endif %}
+      tags: ['verify', 'filter']
+
     - name: Verify Jenkins teams accessibility
       uri:
-        url: "http://{{ ansible_default_ipv4.address }}:{{ item.ports.web | default(8080) }}/api/json"
+        url: "http://{{ ansible_default_ipv4.address }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web | default(8080) }}{% else %}{{ (item.ports.web | default(8080)) + 100 }}{% endif %}/api/json"
         method: GET
         user: "{{ jenkins_admin_user }}"
         password: "{{ jenkins_admin_password }}"
         force_basic_auth: yes
         status_code: [200, 403]
       register: jenkins_team_checks
-      loop: "{{ jenkins_teams | default([{'team_name': 'default', 'ports': {'web': 8080}}]) }}"
+      loop: "{{ jenkins_teams_for_verification | default([{'team_name': 'default', 'ports': {'web': 8080}}]) }}"
       ignore_errors: yes
       tags: ['verify', 'api']
 
@@ -270,12 +363,12 @@
           📋 Team Access Information:
           {% if deployment_mode | default('local') == 'local' %}
           {% for team in jenkins_teams | default([{'team_name': 'default', 'ports': {'web': 8080}}]) %}
-          {{ team.team_name | title }} Team: http://localhost:{{ team.ports.web | default(8080) }}
+          {{ team.team_name | title }} Team: http://localhost:{% if team.active_environment | default('blue') == 'blue' %}{{ team.ports.web | default(8080) }}{% else %}{{ (team.ports.web | default(8080)) + 100 }}{% endif %}
           {% endfor %}
           {% else %}
           {% for host in groups['jenkins_masters'] | default([]) %}
           {% for team in jenkins_teams | default([{'team_name': 'default', 'ports': {'web': 8080}}]) %}
-          {{ team.team_name | title }} Team: http://{{ hostvars[host]['ansible_default_ipv4']['address'] }}:{{ team.ports.web | default(8080) }}
+          {{ team.team_name | title }} Team: http://{{ hostvars[host]['ansible_default_ipv4']['address'] }}:{% if team.active_environment | default('blue') == 'blue' %}{{ team.ports.web | default(8080) }}{% else %}{{ (team.ports.web | default(8080)) + 100 }}{% endif %}
           {% endfor %}
           {% endfor %}
           {% endif %}

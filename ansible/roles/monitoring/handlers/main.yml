@@ -1,16 +1,5 @@
 ---
 # Handlers for monitoring role
-- name: restart monitoring service
-  systemd:
-    name: monitoring
-    state: restarted
-    enabled: yes
-  listen: "restart monitoring"
-
-- name: reload systemd
-  systemd:
-    daemon_reload: yes
-  listen: "reload systemd"
 
 - name: restart prometheus
   community.docker.docker_container:
@@ -18,6 +7,18 @@
     state: started
     restart: yes
   listen: "restart prometheus"
+
+- name: reload prometheus
+  uri:
+    url: "http://{{ monitoring_server_address }}:{{ prometheus_port }}/-/reload"
+    method: POST
+    status_code: 200
+  listen: "reload prometheus"
+  ignore_errors: yes
+  register: prometheus_reload_result
+  retries: 3
+  delay: 2
+  when: inventory_hostname == monitoring_server_host
 
 - name: restart grafana
   community.docker.docker_container:
@@ -33,3 +34,19 @@
     restart: yes
   listen: "restart alertmanager"
   when: alertmanager_enabled | default(false)
+
+- name: restart loki
+  community.docker.docker_container:
+    name: loki-{{ deployment_environment | default('local') }}
+    state: started
+    restart: yes
+  listen: "restart loki"
+  when: loki_enabled | default(true)
+
+- name: restart promtail
+  community.docker.docker_container:
+    name: promtail-monitoring-{{ deployment_environment | default('local') }}
+    state: started
+    restart: yes
+  listen: "restart promtail"
+  when: promtail_enabled | default(true)

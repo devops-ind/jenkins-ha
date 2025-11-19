@@ -1,0 +1,373 @@
+---
+# Jenkins Master v2 - Intelligent Cleanup of Orphaned Team Resources
+# Automatically removes containers, volumes, and images for teams no longer defined in jenkins_teams.yml
+
+# ====================================
+# SELECTIVE DEPLOYMENT DETECTION - Safety Gate
+# ====================================
+
+- name: Detect selective deployment mode
+  set_fact:
+    selective_deployment: "{{ (deploy_teams is defined and deploy_teams != '') or (exclude_teams is defined and exclude_teams != '') }}"
+    deployment_scope: >-
+      {% if deploy_teams is defined and deploy_teams != '' %}
+      deploy-only: {{ deploy_teams }}
+      {% elif exclude_teams is defined and exclude_teams != '' %}
+      exclude: {{ exclude_teams }}
+      {% else %}
+      full-deployment
+      {% endif %}
+  tags: ['cleanup', 'safety']
+
+- name: Display deployment context for cleanup
+  debug:
+    msg: |
+      ====================================
+      Cleanup Deployment Context
+      ====================================
+      Selective Deployment: {{ selective_deployment | bool }}
+      Deployment Scope: {{ deployment_scope }}
+      Teams in Config: {{ jenkins_teams_config | map(attribute='team_name') | list | join(', ') }}
+      Force Cleanup: {{ force_cleanup_selective | default(false) }}
+      Cleanup Enabled: {{ jenkins_cleanup_enabled | default(true) }}
+      ====================================
+  tags: ['cleanup', 'safety']
+
+- name: Safety gate for selective deployments
+  block:
+    - name: Warn about cleanup during selective deployment
+      debug:
+        msg: |
+          ⚠️  SELECTIVE DEPLOYMENT DETECTED - CLEANUP SAFETY GATE
+          
+          Deployment Scope: {{ deployment_scope }}
+          Teams Being Deployed: {{ jenkins_teams_config | map(attribute='team_name') | list | join(', ') }}
+          
+          🛡️  CLEANUP DISABLED: To prevent accidental removal of teams that aren't 
+          being deployed in this run, cleanup is automatically disabled during 
+          selective deployments.
+          
+          This safety mechanism prevents data loss when deploying specific teams.
+          
+          To override this safety (advanced users only):
+          ansible-playbook site.yml -e deploy_teams="team1" -e force_cleanup_selective=true -e jenkins_cleanup_confirmed=true
+    
+    - name: Skip cleanup for selective deployment
+      meta: end_play
+  when: 
+    - selective_deployment | bool
+    - not (force_cleanup_selective | default(false))
+  tags: ['cleanup', 'safety']
+
+# ====================================
+# DISCOVERY PHASE - Find All Jenkins Resources
+# ====================================
+
+- name: Discover all Jenkins containers currently running
+  shell: |
+    docker ps -a --filter "name=jenkins-" --format "{{ '{{' }}.Names{{ '}}' }}" | grep -E "jenkins-.*-(blue|green)$" || true
+  register: discovered_containers
+  changed_when: false
+  tags: ['cleanup', 'discovery']
+
+- name: Extract team names from discovered containers
+  set_fact:
+    discovered_teams: >-
+      {{
+        discovered_containers.stdout_lines 
+        | map('regex_replace', '^jenkins-(.+)-(blue|green)$', '\1') 
+        | unique 
+        | list
+      }}
+  when: discovered_containers.stdout_lines | length > 0
+  tags: ['cleanup', 'discovery']
+
+- name: Set empty list if no containers found
+  set_fact:
+    discovered_teams: []
+  when: discovered_containers.stdout_lines | length == 0
+  tags: ['cleanup', 'discovery']
+
+- name: Get current team configuration
+  set_fact:
+    current_teams: "{{ jenkins_teams_config | map(attribute='team_name') | list }}"
+  tags: ['cleanup', 'discovery']
+
+# ====================================
+# ANALYSIS PHASE - Identify Orphaned Resources
+# ====================================
+
+- name: Identify orphaned teams (deployed but not in config)
+  set_fact:
+    orphaned_teams: "{{ discovered_teams | difference(current_teams) }}"
+  tags: ['cleanup', 'analysis']
+
+- name: Display cleanup analysis
+  debug:
+    msg: |
+      ====================================
+      Jenkins Team Cleanup Analysis
+      ====================================
+      Currently Configured Teams: {{ current_teams | join(', ') or 'None' }}
+      Discovered Deployed Teams: {{ discovered_teams | join(', ') or 'None' }}
+      Orphaned Teams (to be removed): {{ orphaned_teams | join(', ') or 'None' }}
+      
+      Deployment Context: {{ deployment_scope }}
+      Selective Deployment: {{ selective_deployment | bool }}
+      Force Cleanup: {{ force_cleanup_selective | default(false) }}
+      
+      Cleanup Mode: {{ jenkins_cleanup_dry_run | default(false) | ternary('DRY RUN (no changes)', 'ACTIVE (will remove resources)') }}
+      ====================================
+  tags: ['cleanup', 'analysis']
+
+# ====================================
+# CONFIRMATION PHASE - Safety Checks
+# ====================================
+
+- name: Skip cleanup if no orphaned teams found
+  debug:
+    msg: "✅ No orphaned teams found. Infrastructure is clean and aligned with configuration."
+  when: orphaned_teams | length == 0
+  tags: ['cleanup', 'confirmation']
+
+- name: Confirm cleanup operations for orphaned teams
+  debug:
+    msg: |
+      ⚠️  CLEANUP REQUIRED: Found {{ orphaned_teams | length }} orphaned team(s)
+      
+      The following teams are deployed but not in jenkins_teams.yml:
+      {% for team in orphaned_teams %}
+      • {{ team }}: jenkins-{{ team }}-blue, jenkins-{{ team }}-green
+      {% endfor %}
+      
+      {% if jenkins_cleanup_dry_run | default(false) %}
+      🔍 DRY RUN MODE: No resources will be removed (jenkins_cleanup_dry_run=true)
+      {% else %}
+      🗑️  CLEANUP MODE: Resources will be removed automatically
+      {% endif %}
+  when: orphaned_teams | length > 0
+  tags: ['cleanup', 'confirmation']
+
+- name: Require explicit confirmation for selective deployment cleanup
+  assert:
+    that:
+      - jenkins_cleanup_confirmed | default(false) | bool
+    fail_msg: |
+      ⛔ SELECTIVE DEPLOYMENT CLEANUP CONFIRMATION REQUIRED
+      
+      You are running cleanup during a selective deployment with force override.
+      This will remove {{ orphaned_teams | length }} team(s): {{ orphaned_teams | join(', ') }}
+      
+      ⚠️  WARNING: This operation may remove teams that you didn't intend to clean up.
+      
+      Deployment Context: {{ deployment_scope }}
+      Teams Being Deployed: {{ jenkins_teams_config | map(attribute='team_name') | list | join(', ') }}
+      Teams to be Removed: {{ orphaned_teams | join(', ') }}
+      
+      To proceed, add explicit confirmation:
+      ansible-playbook site.yml -e deploy_teams="..." -e force_cleanup_selective=true -e jenkins_cleanup_confirmed=true
+      
+      For safe testing first, use dry-run:
+      ansible-playbook site.yml -e deploy_teams="..." -e force_cleanup_selective=true -e jenkins_cleanup_dry_run=true
+  when: 
+    - orphaned_teams | length > 0
+    - selective_deployment | bool
+    - force_cleanup_selective | default(false) | bool
+    - not (jenkins_cleanup_dry_run | default(false))
+  tags: ['cleanup', 'confirmation']
+
+- name: Validate container safety before cleanup
+  block:
+    - name: Check for active containers before cleanup
+      shell: |
+        active_containers=$(docker ps --filter "name=jenkins-{{ item }}-" --format "{{.Names}}")
+        if [ -n "$active_containers" ]; then
+          echo "ACTIVE: $active_containers"
+        else
+          echo "SAFE: No active containers for {{ item }}"
+        fi
+      loop: "{{ orphaned_teams }}"
+      loop_control:
+        label: "safety-check-{{ item }}"
+      register: container_safety_check
+      when: orphaned_teams | length > 0
+      
+    - name: Report container safety status
+      debug:
+        msg: |
+          🔍 Container Safety Check Results:
+          {% for result in container_safety_check.results %}
+          {{ result.item }}: {{ result.stdout }}
+          {% endfor %}
+      when: 
+        - orphaned_teams | length > 0
+        - container_safety_check is defined
+        
+  when: 
+    - orphaned_teams | length > 0
+    - not (jenkins_cleanup_dry_run | default(false))
+  tags: ['cleanup', 'safety']
+
+# ====================================
+# REMOVAL PHASE - Clean Up Orphaned Resources
+# ====================================
+
+- name: Cleanup orphaned team resources
+  block:
+    - name: Stop orphaned Jenkins containers gracefully
+      shell: |
+        for container in jenkins-{{ item }}-blue jenkins-{{ item }}-green; do
+          if docker ps -q --filter "name=$container" | grep -q .; then
+            echo "Stopping container: $container"
+            docker stop "$container" || true
+          fi
+        done
+      loop: "{{ orphaned_teams }}"
+      loop_control:
+        label: "stop-containers-{{ item }}"
+      register: stop_results
+      when: not (jenkins_cleanup_dry_run | default(false))
+
+    - name: Remove orphaned Jenkins containers
+      shell: |
+        for container in jenkins-{{ item }}-blue jenkins-{{ item }}-green; do
+          if docker ps -aq --filter "name=$container" | grep -q .; then
+            echo "Removing container: $container"
+            docker rm -f "$container" || true
+          fi
+        done
+      loop: "{{ orphaned_teams }}"
+      loop_control:
+        label: "remove-containers-{{ item }}"
+      register: remove_results
+      when: not (jenkins_cleanup_dry_run | default(false))
+
+    - name: Remove orphaned Jenkins volumes
+      shell: |
+        for volume in jenkins-{{ item }}-blue-home jenkins-{{ item }}-green-home jenkins-{{ item }}-shared; do
+          if docker volume ls -q --filter "name=$volume" | grep -q .; then
+            echo "Removing volume: $volume"
+            docker volume rm "$volume" || true
+          fi
+        done
+      loop: "{{ orphaned_teams }}"
+      loop_control:
+        label: "remove-volumes-{{ item }}"
+      register: volume_results
+      when: 
+        - not (jenkins_cleanup_dry_run | default(false))
+        - not (jenkins_cleanup_preserve_volumes | default(false))
+
+    - name: Remove orphaned custom Jenkins images
+      shell: |
+        for image in jenkins-custom-{{ item }}; do
+          if docker images -q "$image" | grep -q .; then
+            echo "Removing image: $image"
+            docker rmi "$image:{{ jenkins_master_image_tag }}" || true
+            # Also remove any other tags
+            docker images "$image" --format "{{ '{{' }}.Repository{{ '}}' }}:{{ '{{' }}.Tag{{ '}}' }}" | xargs -r docker rmi || true
+          fi
+        done
+      loop: "{{ orphaned_teams }}"
+      loop_control:
+        label: "remove-images-{{ item }}"
+      register: image_results
+      when: 
+        - not (jenkins_cleanup_dry_run | default(false))
+        - not (jenkins_cleanup_preserve_images | default(false))
+        - jenkins_master_build_custom_images | default(true)
+
+  when: orphaned_teams | length > 0
+  tags: ['cleanup', 'removal']
+
+# ====================================
+# DRY RUN REPORTING
+# ====================================
+
+- name: Report what would be removed in dry run mode
+  debug:
+    msg: |
+      🔍 DRY RUN REPORT: The following would be removed if jenkins_cleanup_dry_run=false:
+      
+      {% for team in orphaned_teams %}
+      Team: {{ team }}
+      ├── Containers: jenkins-{{ team }}-blue, jenkins-{{ team }}-green
+      ├── Volumes: jenkins-{{ team }}-blue-home, jenkins-{{ team }}-green-home, jenkins-{{ team }}-shared
+      {% if jenkins_master_build_custom_images | default(true) %}
+      └── Images: jenkins-custom-{{ team }}:{{ jenkins_master_image_tag }}
+      {% else %}
+      └── Images: (none - using base images)
+      {% endif %}
+      {% endfor %}
+      
+      Volume Preservation: {{ jenkins_cleanup_preserve_volumes | default(false) | ternary('Enabled (volumes will be kept)', 'Disabled (volumes will be removed)') }}
+      Image Preservation: {{ jenkins_cleanup_preserve_images | default(false) | ternary('Enabled (images will be kept)', 'Disabled (images will be removed)') }}
+  when: 
+    - orphaned_teams | length > 0
+    - jenkins_cleanup_dry_run | default(false)
+  tags: ['cleanup', 'dry-run']
+
+# ====================================
+# VERIFICATION PHASE - Confirm Cleanup
+# ====================================
+
+- name: Verify cleanup completion
+  shell: |
+    docker ps -a --filter "name=jenkins-{{ item }}-" --format "{{ '{{' }}.Names{{ '}}' }}" || true
+  loop: "{{ orphaned_teams }}"
+  loop_control:
+    label: "verify-cleanup-{{ item }}"
+  register: cleanup_verification
+  when: 
+    - orphaned_teams | length > 0
+    - not (jenkins_cleanup_dry_run | default(false))
+  tags: ['cleanup', 'verification']
+
+- name: Display cleanup results
+  debug:
+    msg: |
+      ====================================
+      Jenkins Team Cleanup Results
+      ====================================
+      Deployment Context: {{ deployment_scope }}
+      Selective Deployment: {{ selective_deployment | bool }}
+      {% if selective_deployment | bool %}
+      Teams in Current Deployment: {{ jenkins_teams_config | map(attribute='team_name') | list | join(', ') }}
+      {% endif %}
+      
+      {% if jenkins_cleanup_dry_run | default(false) %}
+      Mode: DRY RUN (no changes made)
+      Orphaned Teams Found: {{ orphaned_teams | default([]) | length }}
+      {% elif (orphaned_teams | default([])) | length == 0 %}
+      Status: ✅ No cleanup required - infrastructure is aligned
+      {% else %}
+      Status: ✅ Cleanup completed successfully
+      Teams Removed: {{ orphaned_teams | default([]) | join(', ') }}
+      Containers Removed: {{ (orphaned_teams | default([])) | length * 2 }} (blue + green pairs)
+      {% if not (jenkins_cleanup_preserve_volumes | default(false)) %}
+      Volumes Removed: {{ (orphaned_teams | default([])) | length * 3 }} (blue-home + green-home + shared)
+      {% endif %}
+      {% if jenkins_master_build_custom_images | default(true) and not (jenkins_cleanup_preserve_images | default(false)) %}
+      Images Removed: {{ (orphaned_teams | default([])) | length }} custom images
+      {% endif %}
+      {% endif %}
+      
+      {% if selective_deployment | bool and force_cleanup_selective | default(false) %}
+      ⚠️  Advanced Operation: Cleanup executed during selective deployment with force override
+      {% endif %}
+      ====================================
+  tags: ['cleanup', 'summary']
+
+# ====================================
+# CLEANUP CONFIGURATION DEFAULTS
+# ====================================
+
+- name: Set cleanup configuration defaults
+  set_fact:
+    jenkins_cleanup_enabled: "{{ jenkins_cleanup_enabled | default(true) }}"
+    jenkins_cleanup_dry_run: "{{ jenkins_cleanup_dry_run | default(false) }}"
+    jenkins_cleanup_preserve_volumes: "{{ jenkins_cleanup_preserve_volumes | default(false) }}"
+    jenkins_cleanup_preserve_images: "{{ jenkins_cleanup_preserve_images | default(false) }}"
+    force_cleanup_selective: "{{ force_cleanup_selective | default(false) }}"
+    jenkins_cleanup_confirmed: "{{ jenkins_cleanup_confirmed | default(false) }}"
+  tags: ['cleanup', 'config']

@@ -1,0 +1,290 @@
+---
+# Plugin Upgrade Handler
+# Handles zero-downtime plugin upgrades with hot reload capability
+
+- name: Execute plugin upgrade
+  block:
+    - name: Prepare plugin upgrade environment
+      set_fact:
+        plugin_upgrade_teams: "{{ team_list }}"
+        plugins_to_update: "{{ plugins_to_upgrade }}"
+
+    - name: Download and validate plugin updates
+      block:
+        - name: Create plugin staging directory
+          file:
+            path: "{{ upgrade_workspace }}/plugins-staging/{{ item }}"
+            state: directory
+            mode: '0755'
+          loop: "{{ plugin_upgrade_teams }}"
+
+        - name: Download target plugins
+          script: >-
+            {{ jenkins_home_dir }}/scripts/plugin-downloader.sh
+            --plugins "{{ plugins_to_update | join(',') }}"
+            --strategy "{{ plugin_update_strategy }}"
+            --output "{{ upgrade_workspace }}/plugins-staging/{{ item }}"
+            --team "{{ item }}"
+          register: plugin_download
+          loop: "{{ plugin_upgrade_teams }}"
+
+        - name: Validate plugin integrity and security
+          script: >-
+            {{ jenkins_home_dir }}/scripts/plugin-security-validator.sh
+            --plugin-dir "{{ upgrade_workspace }}/plugins-staging/{{ item }}"
+            --team "{{ item }}"
+          register: plugin_security_check
+          loop: "{{ plugin_upgrade_teams }}"
+
+        - name: Analyze plugin dependencies
+          script: >-
+            {{ jenkins_home_dir }}/scripts/plugin-dependency-resolver.sh
+            --plugin-dir "{{ upgrade_workspace }}/plugins-staging/{{ item }}"
+            --current-jenkins "{{ jenkins_home_dir }}/{{ item }}/{{ upgrade_env }}"
+            --team "{{ item }}"
+          register: dependency_analysis
+          loop: "{{ plugin_upgrade_teams }}"
+
+        - name: Display plugin validation results
+          debug:
+            msg: |
+              📦 Plugin Validation Results:
+              ============================
+              {% for team in plugin_upgrade_teams %}
+              Team: {{ team }}
+              Download: {{ 'SUCCESS' if plugin_download.results[loop.index0].rc == 0 else 'FAILED' }}
+              Security: {{ 'PASS' if plugin_security_check.results[loop.index0].rc == 0 else 'FAIL' }}
+              Dependencies: {{ 'RESOLVED' if dependency_analysis.results[loop.index0].rc == 0 else 'CONFLICTS' }}
+              {% endfor %}
+              ============================
+
+        - name: Abort on plugin validation failure
+          fail:
+            msg: |
+              ❌ Plugin validation failed for one or more teams!
+              
+              Check the following:
+              {% for result in plugin_download.results %}
+              {% if result.rc != 0 %}
+              - {{ plugin_upgrade_teams[loop.index0] }}: Plugin download failed
+              {% endif %}
+              {% endfor %}
+              {% for result in plugin_security_check.results %}
+              {% if result.rc != 0 %}
+              - {{ plugin_upgrade_teams[loop.index0] }}: Security validation failed
+              {% endif %}
+              {% endfor %}
+              {% for result in dependency_analysis.results %}
+              {% if result.rc != 0 %}
+              - {{ plugin_upgrade_teams[loop.index0] }}: Dependency conflicts detected
+              {% endif %}
+              {% endfor %}
+          when: >
+            plugin_download.results | selectattr('rc', 'ne', 0) | list | length > 0 or
+            plugin_security_check.results | selectattr('rc', 'ne', 0) | list | length > 0 or
+            dependency_analysis.results | selectattr('rc', 'ne', 0) | list | length > 0
+
+    - name: Stage plugins in target environment
+      block:
+        - name: Copy plugins to target environment
+          script: >-
+            {{ jenkins_home_dir }}/scripts/plugin-stager.sh
+            --source "{{ upgrade_workspace }}/plugins-staging/{{ item }}"
+            --target "{{ jenkins_home_dir }}/{{ item }}/{{ upgrade_env }}/plugins"
+            --team "{{ item }}"
+            --backup
+          register: plugin_staging
+          loop: "{{ plugin_upgrade_teams }}"
+
+        - name: Restart Jenkins instances for plugin loading
+          docker_container:
+            name: "jenkins-{{ item }}-{{ upgrade_env }}"
+            state: started
+            restart: yes
+          register: jenkins_restart
+          loop: "{{ plugin_upgrade_teams }}"
+
+        - name: Wait for Jenkins to fully restart
+          pause:
+            seconds: 60
+
+        - name: Verify Jenkins instances are healthy after plugin update
+          script: >-
+            {{ jenkins_home_dir }}/scripts/jenkins-health-checker.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+            --check-plugins
+          register: post_plugin_health
+          retries: 10
+          delay: 15
+          loop: "{{ plugin_upgrade_teams }}"
+
+        - name: Validate plugin functionality
+          script: >-
+            {{ jenkins_home_dir }}/scripts/plugin-functionality-tester.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+            --plugins "{{ plugins_to_update | join(',') }}"
+          register: plugin_functionality_test
+          loop: "{{ plugin_upgrade_teams }}"
+
+        - name: Check for plugin conflicts
+          script: >-
+            {{ jenkins_home_dir }}/scripts/plugin-conflict-detector.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+          register: plugin_conflict_check
+          loop: "{{ plugin_upgrade_teams }}"
+
+        - name: Validate Jenkins API after plugin update
+          uri:
+            url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/pluginManager/api/json?depth=2"
+            method: GET
+            timeout: 30
+            return_content: yes
+          register: plugin_api_check
+          delegate_to: "{{ 'jenkins-' + item + '-' + upgrade_env }}"
+          loop: "{{ plugin_upgrade_teams }}"
+
+        - name: Display plugin upgrade validation results
+          debug:
+            msg: |
+              🔌 Plugin Upgrade Validation:
+              =============================
+              {% for team in plugin_upgrade_teams %}
+              Team: {{ team }}
+              Staging: {{ 'SUCCESS' if plugin_staging.results[loop.index0].rc == 0 else 'FAILED' }}
+              Restart: {{ 'SUCCESS' if jenkins_restart.results[loop.index0].changed else 'FAILED' }}
+              Health: {{ 'PASS' if post_plugin_health.results[loop.index0].rc == 0 else 'FAIL' }}
+              Functionality: {{ 'PASS' if plugin_functionality_test.results[loop.index0].rc == 0 else 'FAIL' }}
+              Conflicts: {{ 'NONE' if plugin_conflict_check.results[loop.index0].rc == 0 else 'DETECTED' }}
+              API: {{ 'PASS' if plugin_api_check.results[loop.index0].status == 200 else 'FAIL' }}
+              {% endfor %}
+              =============================
+
+        - name: Run plugin-specific test suites
+          script: >-
+            {{ jenkins_home_dir }}/scripts/plugin-test-suite.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+            --plugins "{{ plugins_to_update | join(',') }}"
+            --test-type integration
+          register: plugin_integration_tests
+          loop: "{{ plugin_upgrade_teams }}"
+          when: run_integration_tests | default(true)
+
+        - name: Fail if plugin upgrade validation failed
+          fail:
+            msg: |
+              ❌ Plugin upgrade validation failed for one or more teams!
+              
+              Failed validations:
+              {% for result in post_plugin_health.results %}
+              {% if result.rc != 0 %}
+              - {{ plugin_upgrade_teams[loop.index0] }}: Jenkins health check failed
+              {% endif %}
+              {% endfor %}
+              {% for result in plugin_functionality_test.results %}
+              {% if result.rc != 0 %}
+              - {{ plugin_upgrade_teams[loop.index0] }}: Plugin functionality test failed
+              {% endif %}
+              {% endfor %}
+              {% for result in plugin_conflict_check.results %}
+              {% if result.rc != 0 %}
+              - {{ plugin_upgrade_teams[loop.index0] }}: Plugin conflicts detected
+              {% endif %}
+              {% endfor %}
+              {% for result in plugin_api_check.results %}
+              {% if result.status != 200 %}
+              - {{ plugin_upgrade_teams[loop.index0] }}: Plugin API validation failed
+              {% endif %}
+              {% endfor %}
+          when: >
+            post_plugin_health.results | selectattr('rc', 'ne', 0) | list | length > 0 or
+            plugin_functionality_test.results | selectattr('rc', 'ne', 0) | list | length > 0 or
+            plugin_conflict_check.results | selectattr('rc', 'ne', 0) | list | length > 0 or
+            plugin_api_check.results | selectattr('status', 'ne', 200) | list | length > 0
+
+    - name: Record successful plugin upgrade
+      copy:
+        content: |
+          {
+            "timestamp": "{{ ansible_date_time.iso8601 }}",
+            "upgrade_type": "plugins",
+            "environment": "{{ upgrade_env }}",
+            "teams": {{ plugin_upgrade_teams | to_json }},
+            "plugins_updated": {{ plugins_to_update | to_json }},
+            "update_strategy": "{{ plugin_update_strategy }}",
+            "deployment_successful": true,
+            "validation_passed": true,
+            "plugins_count": {{ plugins_to_update | length }}
+          }
+        dest: "{{ upgrade_workspace }}/plugin-upgrade-success.json"
+        mode: '0644'
+
+  rescue:
+    - name: Handle plugin upgrade failure
+      block:
+        - name: Restore plugin backups
+          script: >-
+            {{ jenkins_home_dir }}/scripts/plugin-backup-restorer.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+            --restore-point latest
+          register: plugin_restore
+          loop: "{{ plugin_upgrade_teams }}"
+          ignore_errors: true
+
+        - name: Restart Jenkins with restored plugins
+          docker_container:
+            name: "jenkins-{{ item }}-{{ upgrade_env }}"
+            state: started
+            restart: yes
+          loop: "{{ plugin_upgrade_teams }}"
+          ignore_errors: true
+
+        - name: Wait for Jenkins recovery
+          pause:
+            seconds: 45
+
+        - name: Verify restoration success
+          script: >-
+            {{ jenkins_home_dir }}/scripts/jenkins-health-checker.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+          register: restore_verification
+          loop: "{{ plugin_upgrade_teams }}"
+          retries: 5
+          delay: 10
+          ignore_errors: true
+
+        - name: Log plugin upgrade failure
+          copy:
+            content: |
+              {
+                "timestamp": "{{ ansible_date_time.iso8601 }}",
+                "upgrade_type": "plugins",
+                "environment": "{{ upgrade_env }}",
+                "teams": {{ plugin_upgrade_teams | to_json }},
+                "plugins_attempted": {{ plugins_to_update | to_json }},
+                "update_strategy": "{{ plugin_update_strategy }}",
+                "deployment_successful": false,
+                "failed_task": "{{ ansible_failed_task.name | default('unknown') }}",
+                "error_message": "{{ ansible_failed_result.msg | default('unknown error') }}",
+                "rollback_attempted": true,
+                "rollback_successful": {{ plugin_restore.results | selectattr('rc', 'equalto', 0) | list | length == plugin_upgrade_teams | length }}
+              }
+            dest: "{{ upgrade_workspace }}/plugin-upgrade-failure.json"
+            mode: '0644'
+
+        - name: Re-raise plugin upgrade failure
+          fail:
+            msg: |
+              ❌ Plugin upgrade failed!
+              Environment: {{ upgrade_env }}
+              Teams: {{ plugin_upgrade_teams | join(', ') }}
+              Plugins: {{ plugins_to_update | join(', ') }}
+              
+              Rollback Status: {{ 'SUCCESS' if plugin_restore.results | selectattr('rc', 'equalto', 0) | list | length == plugin_upgrade_teams | length else 'PARTIAL/FAILED' }}
+              
+              Check failure details: {{ upgrade_workspace }}/plugin-upgrade-failure.json

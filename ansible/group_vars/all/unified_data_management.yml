@@ -1,0 +1,149 @@
+---
+# Separated Data Operations Configuration
+# Dedicated backup daemons and Ansible-native sync for Jenkins HA infrastructure
+
+# Backup daemon configuration (dedicated background processes)
+backup_daemon_enabled: true
+backup_daemon_interval: 3600  # 1 hour interval for daemon checks
+backup_verification_enabled: true
+
+# Backup daemon scheduling configuration
+# Backup daemon startup schedule (daemon manages its own intervals)
+backup_daemon_startup_minute: "0"
+backup_daemon_startup_hour: "2"
+backup_daemon_startup_day: "*"
+backup_daemon_startup_month: "*"
+backup_daemon_startup_weekday: "*"
+
+# Backup schedule (daily at 2 AM by default)
+backup_cron_minute: "0"
+backup_cron_hour: "2"
+backup_cron_day: "*"
+backup_cron_month: "*"
+backup_cron_weekday: "*"
+
+# Legacy variables for backward compatibility (deprecated)
+# unified_cron_schedule: removed - sync now handled by Ansible tasks
+# backup_cron_schedule: replaced by backup daemon scheduling
+
+# Team-specific backup daemon configuration (optional override)
+team_backup_daemon_intervals: {}
+  # Example team-specific daemon intervals (in seconds):
+  # devops: 1800   # 30 minutes
+  # developer: 3600  # 1 hour
+  # qa: 7200     # 2 hours
+
+# Ansible-native sync configuration
+# Sync operations are now handled directly by Ansible tasks
+sync_method: "ansible"  # Ansible-native using docker cp and container operations
+sync_parallel_enabled: true  # Ansible can run sync tasks in parallel
+sync_verification_enabled: true  # Verify sync operations with markers
+
+# Advanced backup configuration  
+backup_method: "tar"  # Options: tar, borg
+backup_compression: "gzip"  # Options: gzip, bzip2, xz, none
+backup_parallel_enabled: true
+backup_integrity_check: true
+backup_encryption_enabled: false
+backup_encryption_key: ""  # Should be overridden in vault
+
+# Enhanced retention policies
+backup_daily_retention: 7
+backup_weekly_retention: 4  
+backup_monthly_retention: 12
+backup_cleanup_enabled: true
+backup_cleanup_schedule: "0 3 * * 0"  # Weekly cleanup on Sunday at 3 AM
+
+# Verification settings
+verification_timeout: 300  # 5 minutes
+verification_retry_count: 3
+verification_detailed_logging: false
+
+# Performance tuning
+operation_timeout: 1800  # 30 minutes
+max_parallel_operations: 2
+memory_usage_limit: "2g"
+disk_usage_threshold: 85  # Percentage
+
+# Monitoring and alerting integration
+operation_monitoring_enabled: true
+operation_metrics_enabled: false
+operation_prometheus_integration: false
+
+# Error handling and recovery
+backup_retry_enabled: true
+backup_retry_count: 2
+backup_retry_delay: 60  # seconds
+backup_failure_notification: false
+backup_recovery_mode: "graceful"  # Options: graceful, aggressive, none
+sync_failure_mode: "continue"  # Sync failures are non-blocking for deployments
+
+# Storage backend configuration
+backup_storage_backends:
+  local:
+    enabled: true
+    path: "{{ backup_local_dir | default('/var/backups/jenkins') }}"
+    min_free_space: "5G"
+  nfs:
+    enabled: false
+    path: "/mnt/nfs-backup"
+    mount_options: "rw,sync,hard,intr"
+  s3:
+    enabled: false
+    bucket: ""
+    region: "us-east-1"
+    access_key: ""  # Should be overridden in vault
+    secret_key: ""  # Should be overridden in vault
+
+# Notification configuration
+notification_enabled: false
+notification_channels:
+  email:
+    enabled: false
+    recipients: []
+    smtp_server: ""
+    smtp_port: 587
+  slack:
+    enabled: false
+    webhook_url: ""  # Should be overridden in vault
+    channel: "#ops"
+  webhook:
+    enabled: false
+    url: ""
+    headers: {}
+
+# Security configuration
+operation_user: "{{ jenkins_user }}"
+operation_group: "{{ jenkins_group }}"
+script_permissions: "0755"
+log_permissions: "0644"
+backup_permissions: "0600"
+
+# Logging configuration
+log_level: "INFO"  # Options: DEBUG, INFO, WARN, ERROR
+log_rotation_enabled: true
+log_max_size: "100M"
+log_retention_days: 30
+centralized_logging_enabled: false
+syslog_facility: "local0"
+
+# Development and testing
+dry_run_default: false
+test_mode_enabled: false
+development_mode: false
+debug_mode_enabled: false
+
+# Architecture separation (unified scripts removed)
+legacy_unified_script_cleanup: true
+backward_compatibility_warnings: true
+
+# Feature flags
+experimental_features_enabled: false
+beta_features_enabled: false
+feature_flags:
+  ansible_native_sync: true
+  dedicated_backup_daemons: true
+  parallel_verification: false
+  advanced_metrics: false
+  cloud_storage_integration: false
+  automated_recovery: true

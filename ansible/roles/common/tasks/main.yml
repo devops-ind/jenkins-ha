@@ -33,6 +33,41 @@
 #     state: present
 #   when: ansible_os_family == "Debian" and common_locale is defined
 
+- name: Check for processes using monitoring user
+  shell: |
+    if id "{{ common_monitoring_user }}" >/dev/null 2>&1; then
+      # User exists, check for running processes
+      PROCESSES=$(ps -u "{{ common_monitoring_user }}" --no-headers | wc -l | tr -d ' ')
+      if [ "$PROCESSES" -gt 0 ]; then
+        echo "processes_found:$PROCESSES"
+        ps -u "{{ common_monitoring_user }}" -o pid,ppid,cmd --no-headers
+      else
+        echo "no_processes_found"
+      fi
+    else
+      echo "user_not_exists"
+    fi
+  register: monitoring_user_check
+  changed_when: false
+  failed_when: false
+
+- name: Stop monitoring containers to resolve user conflicts
+  command: docker stop {{ item }}
+  loop:
+    - prometheus-production
+    - grafana-production
+    - alertmanager-production
+    - node-exporter-production
+  when: monitoring_user_check.stdout is defined and 'processes_found' in monitoring_user_check.stdout
+  register: container_stops
+  failed_when: false
+  changed_when: container_stops.rc == 0
+
+- name: Wait for processes to terminate
+  pause:
+    seconds: 3
+  when: monitoring_user_check.stdout is defined and 'processes_found' in monitoring_user_check.stdout
+
 - name: Create monitoring user
   user:
     name: "{{ common_monitoring_user }}"
@@ -40,6 +75,23 @@
     shell: /bin/bash
     system: yes
     create_home: yes
+
+- name: Restart monitoring containers if they were stopped
+  command: docker start {{ item }}
+  loop:
+    - prometheus-production
+    - grafana-production
+    - alertmanager-production
+    - node-exporter-production
+  when: container_stops is defined and container_stops.changed
+  register: container_restarts
+  failed_when: false
+  changed_when: container_restarts.rc == 0
+
+- name: Wait for containers to be ready
+  pause:
+    seconds: 5
+  when: container_restarts is defined and container_restarts.changed
 
 # SSH hardening removed - no longer needed for Jenkins agent connections
 # SSH is still available for system administration but not used for Jenkins communication

@@ -1,0 +1,289 @@
+---
+# Grafana setup tasks
+- name: Create Grafana provisioning directories
+  file:
+    path: "{{ monitoring_home_dir }}/grafana/provisioning/{{ item }}"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  loop:
+    - datasources
+    - dashboards
+    - plugins
+
+- name: Create Grafana plugins directory
+  file:
+    path: "{{ monitoring_home_dir }}/grafana/plugins"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+
+- name: Create Grafana provisioning configuration (core datasources only)
+  template:
+    src: "{{ item }}.j2"
+    dest: "{{ monitoring_home_dir }}/grafana/provisioning/{{ item }}"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  loop:
+    - datasources/prometheus.yml
+    - datasources/loki.yml
+    - dashboards/dashboard.yml
+    - plugins/plugins.yml
+  notify: restart grafana
+
+# Generate team-specific dashboard configurations
+- name: Generate team-specific dashboard list
+  set_fact:
+    team_specific_dashboards: |
+      [
+      {% if dashboard_deployment.generate_team_specific %}
+      {% for dashboard_id, config in grafana_dashboards.items() %}
+      {% if config.enabled and config.team_specific | default(false) and ((config.category == 'core' and dashboard_deployment.core_enabled) or (config.category == 'enhanced' and dashboard_deployment.enhanced_enabled)) %}
+      {% for team in jenkins_teams_config | default(jenkins_teams) %}
+        {
+          "id": "{{ dashboard_id }}{{ dashboard_deployment.team_dashboard_separator }}{{ team.team_name }}",
+          "base_template": "{{ dashboard_id }}",
+          "team_name": "{{ team.team_name }}",
+          "team_environment": "{{ team.active_environment | default('blue') }}",
+          "title": "{{ config.title }} - {{ team.team_name | title }} Team",
+          "name": "{{ config.template_file }}",
+          "template_file": "{{ config.template_file }}",
+          "category": "{{ config.category }}-team-specific",
+          "priority": {{ config.priority }}
+        },
+      {% endfor %}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+      ]
+
+# Generate global dashboard list (for non-team-specific dashboards)
+- name: Generate global dashboard list
+  set_fact:
+    global_dashboards: |
+      [
+      {% for dashboard_id, config in grafana_dashboards.items() %}
+      {% if config.enabled and not (config.team_specific | default(false)) and ((config.category == 'core' and dashboard_deployment.core_enabled) or (config.category == 'enhanced' and dashboard_deployment.enhanced_enabled)) %}
+        {
+          "id": "{{ dashboard_id }}",
+          "name": "{{ config.template_file }}",
+          "title": "{{ config.title }} - {{ deployment_mode | default('local') | title }}",
+          "category": "{{ config.category }}",
+          "priority": {{ config.priority }}
+        },
+      {% endif %}
+      {% if config.enabled and config.team_specific | default(false) and dashboard_deployment.keep_global_dashboards and ((config.category == 'core' and dashboard_deployment.core_enabled) or (config.category == 'enhanced' and dashboard_deployment.enhanced_enabled)) %}
+        {
+          "id": "{{ dashboard_id }}-global",
+          "name": "{{ config.template_file }}",
+          "title": "{{ config.title }} - Global - {{ deployment_mode | default('local') | title }}",
+          "category": "{{ config.category }}-global",
+          "priority": {{ config.priority + 1000 }}
+        },
+      {% endif %}
+      {% endfor %}
+      ]
+
+- name: Parse and combine dashboard lists
+  set_fact:
+    parsed_team_dashboards: "{{ team_specific_dashboards | from_yaml }}"
+    parsed_global_dashboards: "{{ global_dashboards | from_yaml }}"
+
+- name: Sort combined dashboard list by priority
+  set_fact:
+    sorted_enabled_dashboards: "{{ (parsed_team_dashboards + parsed_global_dashboards) | sort(attribute='priority') }}"
+
+- name: Validate dashboard template files exist
+  stat:
+    path: "{{ role_path }}/templates/dashboards/{{ item.name }}.j2"
+  register: template_file_check
+  loop: "{{ sorted_enabled_dashboards }}"
+  loop_control:
+    label: "{{ item.id }}"
+  failed_when: not template_file_check.stat.exists
+  when: dashboard_deployment.validation_strict | default(true)
+
+- name: Deploy global Grafana dashboards from centralized configuration
+  template:
+    src: "dashboards/{{ item.name }}.j2"
+    dest: "{{ monitoring_home_dir }}/grafana/dashboards/{{ item.id }}.json"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  vars:
+    # Global dashboard variables (no team-specific filtering)
+    dashboard_title_override: "{{ item.title if item.title is defined and item.title else item.id | replace('-', ' ') | title }}"
+    dashboard_team: "all"  # Placeholder for global dashboards
+    team_environment: "{{ deployment_mode | default('local') }}"  # Use deployment mode for globals
+  loop: "{{ sorted_enabled_dashboards | rejectattr('category', 'match', '.*-team-specific') | list }}"
+  loop_control:
+    label: "{{ item.id }} ({{ item.category }})"
+  notify: restart grafana
+  when: dashboard_deployment.jinja2_enabled | default(true)
+
+- name: Display dashboard deployment summary
+  debug:
+    msg: |
+      📊 Dashboard Template Deployment Summary:
+      Total Dashboards: {{ sorted_enabled_dashboards | length }}
+      Core Dashboards: {{ sorted_enabled_dashboards | selectattr('category', 'equalto', 'core') | list | length }}
+      Enhanced Dashboards: {{ sorted_enabled_dashboards | selectattr('category', 'equalto', 'enhanced') | list | length }}
+      Team-Specific Dashboards: {{ sorted_enabled_dashboards | selectattr('category', 'match', '.*-team-specific') | list | length }}
+      Global Dashboards: {{ sorted_enabled_dashboards | rejectattr('category', 'match', '.*-team-specific') | list | length }}
+      
+      Deployed Dashboards:
+      {% for dashboard in sorted_enabled_dashboards %}
+      • {{ dashboard.title }}{% if dashboard.team_name is defined %} (Team: {{ dashboard.team_name | title }}){% endif %} [{{ dashboard.category }}]
+      {% endfor %}
+
+- name: Create team-specific dashboard folders
+  file:
+    path: "{{ monitoring_home_dir }}/grafana/dashboards/teams/{{ item.team_name }}"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  loop: "{{ jenkins_teams_config | default(jenkins_teams) }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  when: dashboard_deployment.team_folder_organization | default(true)
+
+- name: Deploy team-specific dashboards to team folders
+  template:
+    src: "dashboards/{{ item.name }}.j2"
+    dest: "{{ monitoring_home_dir }}/grafana/dashboards/{% if item.team_name is defined %}teams/{{ item.team_name }}/{% endif %}{{ item.id }}.json"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  vars:
+    # Team-specific template variables
+    dashboard_team: "{{ item.team_name }}"
+    team_name: "{{ item.team_name }}"
+    team_specific: true
+    team_environment: "{{ item.team_environment }}"
+    dashboard_title_override: "{{ item.title if item.title is defined and item.title else (item.id | replace('-', ' ') | title + ' - ' + item.team_name | title + ' Team') }}"
+  loop: "{{ sorted_enabled_dashboards | selectattr('category', 'match', '.*-team-specific') | list }}"
+  loop_control:
+    label: "{{ item.id }} (Team: {{ item.team_name }})"
+  notify: restart grafana
+  when:
+    - dashboard_deployment.team_folder_organization | default(true)
+    - dashboard_deployment.jinja2_enabled | default(true)
+
+- name: Deploy Grafana container
+  community.docker.docker_container:
+    name: grafana-{{ deployment_environment | default('local') }}
+    image: "grafana/grafana:{{ grafana_version }}"
+    state: started
+    restart_policy: "{{ monitoring_restart_policy }}"
+    ports:
+      - "{{ grafana_port }}:3000"
+    volumes:
+      - "{{ monitoring_home_dir }}/grafana/data:/var/lib/grafana"
+      - "{{ monitoring_home_dir }}/grafana/provisioning:/etc/grafana/provisioning"
+      - "{{ monitoring_home_dir }}/grafana/dashboards:/var/lib/grafana/dashboards"
+      - "{{ monitoring_home_dir }}/grafana/dashboards-generated:/var/lib/grafana/dashboards-generated"
+      - "{{ monitoring_home_dir }}/grafana/plugins:/var/lib/grafana/plugins"
+    env:
+      GF_SECURITY_ADMIN_USER: "{{ grafana_admin_user }}"
+      GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_admin_password }}"
+      GF_USERS_ALLOW_SIGN_UP: "{{ grafana_allow_sign_up | lower }}"
+      GF_USERS_DEFAULT_THEME: "dark"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: "/var/lib/grafana/dashboards/jenkins-overview.json"
+      # Disable features that require SSL connections to grafana.com
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: "true"
+      # Note: GF_INSTALL_PLUGINS removed - plugins installed post-deployment to avoid SSL issues
+    networks:
+      - name: "{{ monitoring_docker_network }}"
+    user: "{{ monitoring_uid }}:{{ monitoring_gid }}"
+  when: grafana_enabled | default(true)
+
+- name: Wait for Grafana to be ready
+  uri:
+    url: "http://localhost:{{ grafana_port }}/api/health"
+    status_code: 200
+  register: grafana_health
+  until: grafana_health.status == 200
+  retries: 30
+  delay: 2
+  when: grafana_enabled | default(true)
+
+- name: Install GitHub datasource plugin with insecure flag
+  community.docker.docker_container_exec:
+    container: grafana-{{ deployment_environment | default('local') }}
+    command: grafana-cli --insecure plugins install grafana-github-datasource
+  register: github_plugin_install
+  until: github_plugin_install is not failed
+  retries: 10
+  delay: 3
+  failed_when: false
+  changed_when: "'Installed' in github_plugin_install.stdout or 'installed' in github_plugin_install.stdout"
+  when: grafana_enabled | default(true)
+
+- name: Install Jira datasource plugin with insecure flag
+  community.docker.docker_container_exec:
+    container: grafana-{{ deployment_environment | default('local') }}
+    command: grafana-cli --insecure plugins install grafana-jira-datasource
+  register: jira_plugin_install
+  until: jira_plugin_install is not failed
+  retries: 10
+  delay: 3
+  failed_when: false
+  changed_when: "'Installed' in jira_plugin_install.stdout or 'installed' in jira_plugin_install.stdout"
+  when: grafana_enabled | default(true)
+
+- name: Wait for plugin installation to complete
+  pause:
+    seconds: 5
+  when:
+    - grafana_enabled | default(true)
+    - (github_plugin_install.changed | default(false)) or (jira_plugin_install.changed | default(false))
+
+- name: Restart Grafana to load plugins
+  community.docker.docker_container:
+    name: grafana-{{ deployment_environment | default('local') }}
+    state: started
+    restart: true
+  when:
+    - grafana_enabled | default(true)
+    - (github_plugin_install.changed | default(false)) or (jira_plugin_install.changed | default(false))
+
+- name: Wait for Grafana to be ready after plugin installation
+  uri:
+    url: "http://localhost:{{ grafana_port }}/api/health"
+    status_code: 200
+  register: grafana_health_post_plugin
+  until: grafana_health_post_plugin.status == 200
+  retries: 30
+  delay: 2
+  when: grafana_enabled | default(true)
+
+- name: Provision GitHub datasource configuration after plugin installation
+  template:
+    src: datasources/github-datasource.yml.j2
+    dest: "{{ monitoring_home_dir }}/grafana/provisioning/datasources/github-datasource.yml"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  when: grafana_enabled | default(true)
+
+- name: Provision Jira datasource configuration after plugin installation
+  template:
+    src: datasources/jira-datasource.yml.j2
+    dest: "{{ monitoring_home_dir }}/grafana/provisioning/datasources/jira-datasource.yml"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  when: grafana_enabled | default(true)
+
+- name: Restart Grafana to load datasource configurations
+  community.docker.docker_container:
+    name: grafana-{{ deployment_environment | default('local') }}
+    state: started
+    restart: true
+  when: grafana_enabled | default(true)

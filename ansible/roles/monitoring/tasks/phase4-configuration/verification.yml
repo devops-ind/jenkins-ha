@@ -1,0 +1,189 @@
+---
+# Post-Deployment Verification
+# Health checks and final verification of monitoring stack
+
+- name: Create monitoring bin directory
+  file:
+    path: "{{ monitoring_home_dir }}/bin"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  become: yes
+  tags: ['monitoring', 'verification', 'scripts']
+
+- name: Create monitoring health check script
+  template:
+    src: monitoring-health.sh.j2
+    dest: "{{ monitoring_home_dir }}/bin/monitoring-health.sh"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  become: yes
+  tags: ['monitoring', 'verification', 'scripts']
+
+- name: Setup monitoring health check cron job
+  cron:
+    name: "Monitoring stack health check"
+    minute: "*/5"
+    user: "{{ monitoring_user }}"
+    job: "{{ monitoring_home_dir }}/bin/monitoring-health.sh"
+    state: present
+  tags: ['monitoring', 'verification', 'cron']
+
+- name: Verify Prometheus is responding
+  uri:
+    url: "http://{{ prometheus_host }}:{{ prometheus_port }}/-/healthy"
+    method: GET
+    status_code: 200
+    timeout: 10
+  register: prometheus_health
+  retries: 5
+  delay: 3
+  until: prometheus_health is succeeded
+  tags: ['monitoring', 'verification', 'health']
+
+- name: Verify Grafana is responding
+  uri:
+    url: "http://{{ grafana_host }}:{{ grafana_port }}/api/health"
+    method: GET
+    status_code: 200
+    timeout: 10
+  register: grafana_health
+  retries: 5
+  delay: 3
+  until: grafana_health is succeeded
+  tags: ['monitoring', 'verification', 'health']
+
+- name: Verify Loki is responding
+  uri:
+    url: "http://{{ loki_host }}:{{ loki_port }}/ready"
+    method: GET
+    status_code: 200
+    timeout: 10
+  register: loki_health
+  retries: 5
+  delay: 3
+  until: loki_health is succeeded
+  when: loki_enabled | default(true)
+  tags: ['monitoring', 'verification', 'health']
+
+- name: Force handlers to execute (reload Prometheus configuration)
+  meta: flush_handlers
+  tags: ['monitoring', 'verification', 'targets']
+
+- name: Wait for Prometheus to discover targets
+  pause:
+    seconds: 15
+    prompt: "Waiting for Prometheus to discover file-sd targets..."
+  tags: ['monitoring', 'verification', 'targets']
+
+- name: Verify Prometheus has targets
+  uri:
+    url: "http://{{ prometheus_host }}:{{ prometheus_port }}/api/v1/targets"
+    method: GET
+    return_content: yes
+  register: prometheus_targets_check
+  retries: 6
+  delay: 10
+  until: >
+    prometheus_targets_check.json.data.activeTargets | default([]) | length > 0
+  failed_when: >
+    prometheus_targets_check.json.data.activeTargets | default([]) | length == 0
+  tags: ['monitoring', 'verification', 'targets']
+
+- name: Display discovered Prometheus targets
+  debug:
+    msg: |
+      ========================================================
+      ✅ Prometheus Target Discovery Successful
+      ========================================================
+      Active Targets: {{ prometheus_targets_check.json.data.activeTargets | length }}
+      Dropped Targets: {{ prometheus_targets_check.json.data.droppedTargets | length }}
+
+      📊 Discovered Targets by Job:
+      {% for target in prometheus_targets_check.json.data.activeTargets %}
+      • {{ target.labels.job }}: {{ target.scrapeUrl }} ({{ target.health }})
+        └─ Last Scrape: {{ target.lastScrape | default('N/A') }}
+      {% endfor %}
+      {% if prometheus_targets_check.json.data.droppedTargets | length > 0 %}
+
+      ⚠️ Dropped Targets:
+      {% for target in prometheus_targets_check.json.data.droppedTargets %}
+      • {{ target.discoveredLabels.__address__ }} ({{ target.discoveredLabels.job }})
+      {% endfor %}
+      {% endif %}
+      ========================================================
+  when: prometheus_targets_check.json.data.activeTargets | length > 0
+  tags: ['monitoring', 'verification', 'targets']
+
+- name: Display monitoring access information
+  debug:
+    msg: |
+      ==========================================================
+      🎉 Monitoring Stack Deployment Completed!
+      ==========================================================
+
+      📊 Access Information:
+      Prometheus: http://{{ prometheus_host }}:{{ prometheus_port }}
+      Grafana: http://{{ grafana_host }}:{{ grafana_port }}
+      {% if loki_enabled | default(true) %}
+      Loki: http://{{ loki_host }}:{{ loki_port }}
+      {% endif %}
+      {% if alertmanager_enabled | default(false) %}
+      AlertManager: http://{{ alertmanager_host }}:{{ alertmanager_port }}
+      {% endif %}
+
+      🔐 Grafana Credentials:
+      Username: {{ grafana_admin_user }}
+      Password: [Check vault for grafana_admin_password]
+
+      📋 Available Dashboards ({{ sorted_api_dashboards | default([]) | length }}):
+      {% for dashboard in sorted_api_dashboards | default([]) %}
+      • {{ dashboard.title.split(' - ')[0] }} - {{ grafana_dashboards[dashboard.name].description }}
+      {% endfor %}
+
+      🎯 Monitored Targets ({{ prometheus_targets | default([]) | length }}):
+      {% for target in prometheus_targets | default([]) %}
+      • {{ target.job }}: {{ target.targets | join(', ') }}
+      {% endfor %}
+
+      🔍 Jenkins-Specific Monitoring:
+      {% for target in prometheus_jenkins_targets | default([]) %}
+      • {{ target.team_name }} ({{ target.active_environment }}): {{ target.targets | join(', ') }}
+      {% endfor %}
+
+      🤖 Agent Targets:
+      {% if prometheus_node_exporter_targets is defined %}
+      • Node Exporter ({{ prometheus_node_exporter_targets | length }} hosts): {{ prometheus_node_exporter_targets | join(', ') }}
+      {% endif %}
+      {% if prometheus_cadvisor_targets is defined %}
+      • cAdvisor ({{ prometheus_cadvisor_targets | length }} hosts): {{ prometheus_cadvisor_targets | join(', ') }}
+      {% endif %}
+
+      📁 Deployment Details:
+      Deployment Type: {{ monitoring_deployment_type }}
+      Deployment Mode: {{ deployment_mode | default('local') }}
+      Target Hosts: {{ monitoring_target_hosts | length }}
+      Server Host: {{ monitoring_server_host }}
+      FQDN Mode: {{ monitoring_use_fqdn }}
+
+      🔧 Health Check:
+      Script: {{ monitoring_home_dir }}/bin/monitoring-health.sh
+      Cron Schedule: Every 5 minutes
+
+      ✅ Verification Status:
+      • Prometheus: {{ 'Healthy' if prometheus_health is succeeded else 'Failed' }}
+      • Grafana: {{ 'Healthy' if grafana_health is succeeded else 'Failed' }}
+      {% if loki_enabled | default(true) %}
+      • Loki: {{ 'Healthy' if loki_health is succeeded else 'Failed' }}
+      {% endif %}
+      • Active Targets: {{ prometheus_targets_check.json.data.activeTargets | default([]) | length }}
+
+      📖 Next Steps:
+      1. Access Grafana and explore dashboards
+      2. Verify all targets are up in Prometheus
+      3. Check agent health on all target hosts
+      4. Review logs in Loki (if enabled)
+      ==========================================================
+  tags: ['monitoring', 'verification', 'summary']

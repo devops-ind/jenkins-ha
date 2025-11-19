@@ -1,0 +1,72 @@
+---
+# Streamlined HAProxy Verification - Essential Tests Only
+# Consolidates redundant tests to improve deployment speed
+
+- name: Essential HAProxy health verification
+  block:
+    - name: Wait for HAProxy container startup (essential)
+      pause:
+        seconds: 10
+
+    - name: Verify HAProxy container status (essential)
+      community.docker.docker_container_info:
+        name: "jenkins-haproxy"
+      register: haproxy_info
+      failed_when: not haproxy_info.exists or haproxy_info.container.State.Status != "running"
+
+    - name: Verify HAProxy configuration syntax (essential)
+      command: docker exec jenkins-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+      register: haproxy_config_check
+      failed_when: haproxy_config_check.rc != 0
+      changed_when: false
+
+    - name: Test HAProxy stats endpoint (essential)
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port | default(8404) }}{{ haproxy_stats_uri | default('/stats') }}"
+        method: GET
+        timeout: 5
+        user: "{{ haproxy_stats_user | default('admin') }}"
+        password: "{{ haproxy_stats_password | default('admin123') }}"
+        force_basic_auth: true
+        status_code: [200, 401]
+      register: haproxy_stats_check
+      retries: 2
+      delay: 3
+      failed_when: haproxy_stats_check.status not in [200, 401]
+
+    # - name: Test primary team routing (sample test)
+    #   uri:
+    #     url: "http://{{ ansible_default_ipv4.address }}:{{ haproxy_frontend_port | default('8000') }}"
+    #     method: HEAD
+    #     timeout: 5
+    #     headers:
+    #       Host: "{{ haproxy_effective_teams[0].team_name }}jenkins.{{ jenkins_domain | default('devops.example.com') }}"
+    #   register: primary_routing_test
+    #   failed_when: primary_routing_test.status not in [200, 302, 404, 503]
+    #   when: haproxy_effective_teams | length > 0
+
+    # - name: Display streamlined verification results
+    #   debug:
+    #     msg: |
+    #       ====================================
+    #       HAProxy Essential Verification
+    #       ====================================
+    #       ✅ Container Status: {{ haproxy_info.container.State.Status }}
+    #       ✅ Configuration: Valid
+    #       ✅ Stats Endpoint: {{ 'Accessible' if haproxy_stats_check.status == 200 else 'Auth Required' }}
+    #       {% if haproxy_effective_teams | length > 0 %}
+    #       # ✅ Team Routing: {{ 'Working' if primary_routing_test.status in [200, 302, 404, 503] else 'Failed' }}
+    #       {% endif %}
+    #       ====================================
+
+  # rescue:
+  #   - name: Display quick troubleshooting info on failure
+  #     debug:
+  #       msg: |
+  #         ❌ HAProxy verification failed. Quick checks:
+  #         1. Container status: docker ps --filter "name=jenkins-haproxy"
+  #         2. Container logs: docker logs jenkins-haproxy --tail 10
+  #         3. Config syntax: docker exec jenkins-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+  #     failed_when: true
+
+  tags: ['verify', 'essential']

@@ -1,0 +1,516 @@
+# Custom pre-commit hooks for Jenkins HA Infrastructure
+# These hooks can be used by other repositories that depend on this project
+
+- id: ansible-syntax-check
+  name: Ansible Playbook Syntax Check
+  description: Validate Ansible playbook syntax
+  entry: ansible-playbook
+  args: ['--syntax-check']
+  language: system
+  files: '\.yml$|\.yaml$'
+  require_serial: true
+
+- id: ansible-inventory-validation
+  name: Ansible Inventory Validation
+  description: Validate Ansible inventory files
+  entry: bash
+  args:
+    - -c
+    - 'ansible-inventory -i $1 --list > /dev/null'
+  language: system
+  files: '^ansible/inventories/.*\.(yml|yaml)$'
+  require_serial: true
+
+- id: jenkins-dsl-validation
+  name: Jenkins DSL Syntax Validation
+  description: Validate Jenkins Job DSL Groovy scripts
+  entry: scripts/dsl-syntax-validator.sh
+  language: system
+  files: '\.groovy$'
+  require_serial: true
+
+- id: jinja2-template-validation
+  name: Jinja2 Template Validation
+  description: Validate Jinja2 template syntax
+  entry: python3
+  args:
+    - -c
+    - |
+      import sys
+      import jinja2
+      
+      def validate_template(file_path):
+          try:
+              with open(file_path, 'r') as f:
+                  template_content = f.read()
+              # Basic syntax validation with strict undefined
+              jinja2.Template(template_content, undefined=jinja2.StrictUndefined)
+              return True
+          except jinja2.exceptions.TemplateError as e:
+              print(f'Template error in {file_path}: {e}')
+              return False
+          except Exception as e:
+              print(f'Error validating {file_path}: {e}')
+              return False
+      
+      failed = False
+      for file_path in sys.argv[1:]:
+          if not validate_template(file_path):
+              failed = True
+      
+      sys.exit(1 if failed else 0)
+  language: system
+  files: '\.j2$'
+
+- id: infrastructure-security-scan
+  name: Infrastructure Security Pattern Detection
+  description: Scan for security anti-patterns in infrastructure code
+  entry: python3
+  args:
+    - -c
+    - |
+      import sys
+      import re
+      
+      # Security patterns specific to infrastructure code
+      SECURITY_PATTERNS = [
+          (r'password\s*[:=]\s*["\'][^"\']{3,}', 'Potential hardcoded password'),
+          (r'secret\s*[:=]\s*["\'][^"\']{8,}', 'Potential hardcoded secret'),
+          (r'api[_-]?key\s*[:=]\s*["\'][^"\']{8,}', 'Potential hardcoded API key'),
+          (r'token\s*[:=]\s*["\'][^"\']{8,}', 'Potential hardcoded token'),
+          (r'(?i)(aws_access_key_id|aws_secret_access_key)\s*[:=]', 'AWS credentials detected'),
+          (r'-----BEGIN (PRIVATE|RSA|DSA|EC) KEY-----', 'Private key detected'),
+          (r'System\.exit\s*\(', 'System.exit() usage in Groovy (potential security risk)'),
+          (r'Runtime\.getRuntime\s*\(\)', 'Runtime.getRuntime() usage detected'),
+          (r'eval\s*\(', 'eval() usage detected (code injection risk)'),
+          (r'shell:\s*.*\$\{[^}]*\}', 'Shell command with variable substitution (injection risk)'),
+          (r'become:\s*yes.*ansible_ssh_pass', 'SSH password with privilege escalation'),
+          (r'vault_password_file.*\.txt', 'Vault password file should not be plain text'),
+          (r'(?i)curl.*http://', 'HTTP usage detected (should use HTTPS)'),
+          (r'(?i)wget.*http://', 'HTTP usage detected (should use HTTPS)'),
+          (r'chmod\s+777', 'Overly permissive file permissions (777)'),
+          (r'(?i)disable.*selinux', 'SELinux being disabled'),
+          (r'(?i)iptables.*-F', 'Firewall rules being flushed'),
+      ]
+      
+      failed = False
+      for file_path in sys.argv[1:]:
+          try:
+              with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                  content = f.read()
+                  for pattern, message in SECURITY_PATTERNS:
+                      matches = re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE)
+                      for match in matches:
+                          line_num = content[:match.start()].count('\n') + 1
+                          print(f'SECURITY: {file_path}:{line_num}: {message}')
+                          failed = True
+          except Exception as e:
+              print(f'Error scanning {file_path}: {e}')
+      
+      sys.exit(1 if failed else 0)
+  language: system
+  files: '\.(py|groovy|yml|yaml|sh|j2)$'
+
+- id: ansible-vault-check
+  name: Ansible Vault File Validation
+  description: Ensure Ansible vault files are properly encrypted
+  entry: python3
+  args:
+    - -c
+    - |
+      import sys
+      import os
+      
+      failed = False
+      for file_path in sys.argv[1:]:
+          if 'vault' in file_path.lower():
+              try:
+                  with open(file_path, 'r') as f:
+                      content = f.read().strip()
+                  
+                  # Check if file is encrypted
+                  if not content.startswith('$ANSIBLE_VAULT;'):
+                      print(f'VAULT: {file_path}: Vault file is not encrypted')
+                      failed = True
+                  
+                  # Check if file is not empty
+                  if len(content) < 50:  # Encrypted files should be longer
+                      print(f'VAULT: {file_path}: Vault file appears to be empty or too short')
+                      failed = True
+                      
+              except Exception as e:
+                  print(f'Error checking vault file {file_path}: {e}')
+                  failed = True
+      
+      sys.exit(1 if failed else 0)
+  language: system
+  files: 'vault\.(yml|yaml)$'
+
+- id: docker-security-check
+  name: Docker Security Check
+  description: Check Docker configurations for security best practices
+  entry: python3
+  args:
+    - -c
+    - |
+      import sys
+      import re
+      
+      DOCKER_SECURITY_PATTERNS = [
+          (r'USER\s+root', 'Running container as root user'),
+          (r'--privileged', 'Privileged container detected'),
+          (r'--cap-add\s+ALL', 'All capabilities granted to container'),
+          (r'--net\s*=\s*host', 'Host network mode (potential security risk)'),
+          (r'--pid\s*=\s*host', 'Host PID namespace (potential security risk)'),
+          (r'volume.*:/etc:', 'Mounting host /etc directory'),
+          (r'volume.*:/proc:', 'Mounting host /proc directory'),
+          (r'volume.*:/sys:', 'Mounting host /sys directory'),
+          (r'ADD\s+http://', 'Using HTTP in Dockerfile ADD (use HTTPS)'),
+          (r'curl.*http://.*\|.*sh', 'Piping HTTP content to shell'),
+      ]
+      
+      failed = False
+      for file_path in sys.argv[1:]:
+          try:
+              with open(file_path, 'r') as f:
+                  content = f.read()
+                  for pattern, message in DOCKER_SECURITY_PATTERNS:
+                      matches = re.finditer(pattern, content, re.IGNORECASE)
+                      for match in matches:
+                          line_num = content[:match.start()].count('\n') + 1
+                          print(f'DOCKER_SECURITY: {file_path}:{line_num}: {message}')
+                          failed = True
+          except Exception as e:
+              print(f'Error checking {file_path}: {e}')
+      
+      sys.exit(1 if failed else 0)
+  language: system
+  files: '^(Dockerfile.*|.*\.dockerfile|docker-compose\.yml|.*\.j2)$'
+
+- id: makefile-validation
+  name: Makefile Validation
+  description: Validate Makefile syntax and structure
+  entry: bash
+  args:
+    - -c
+    - 'make -f $1 -n help > /dev/null 2>&1 || (echo "Makefile validation failed for $1"; exit 1)'
+  language: system
+  files: '^Makefile$|^.*\.mk$'
+
+- id: script-executable-check
+  name: Script Executable Check
+  description: Ensure shell scripts are executable
+  entry: python3
+  args:
+    - -c
+    - |
+      import sys
+      import os
+      import stat
+      
+      failed = False
+      for file_path in sys.argv[1:]:
+          try:
+              file_stat = os.stat(file_path)
+              if not (file_stat.st_mode & stat.S_IXUSR):
+                  print(f'EXECUTABLE: {file_path}: Script is not executable')
+                  failed = True
+          except Exception as e:
+              print(f'Error checking {file_path}: {e}')
+      
+      sys.exit(1 if failed else 0)
+  language: system
+  files: '^scripts/.*\.sh$'
+
+- id: groovy-syntax-validation
+  name: Groovy Syntax Validation
+  description: Validate Groovy script syntax using Groovy compiler
+  entry: python3
+  args:
+    - -c
+    - |
+      import sys
+      import subprocess
+      import tempfile
+      import os
+      import re
+      
+      def validate_groovy_syntax(file_path):
+          '''Comprehensive Groovy syntax validation'''
+          try:
+              with open(file_path, 'r') as f:
+                  content = f.read()
+              
+              # Basic syntax checks
+              if not content.strip():
+                  print(f'WARNING: {file_path}: Empty Groovy file')
+                  return True
+              
+              # Check for balanced braces
+              brace_count = content.count('{') - content.count('}')
+              if brace_count != 0:
+                  print(f'SYNTAX: {file_path}: Unbalanced braces (difference: {brace_count})')
+                  return False
+              
+              # Check for balanced parentheses
+              paren_count = content.count('(') - content.count(')')
+              if paren_count != 0:
+                  print(f'SYNTAX: {file_path}: Unbalanced parentheses (difference: {paren_count})')
+                  return False
+              
+              # Try Groovy syntax check if available
+              try:
+                  result = subprocess.run(['groovy', '--version'], capture_output=True, timeout=5)
+                  if result.returncode == 0:
+                      # Use groovy to validate syntax
+                      with tempfile.NamedTemporaryFile(mode='w', suffix='.groovy', delete=False) as temp_file:
+                          temp_file.write(content)
+                          temp_path = temp_file.name
+                      
+                      try:
+                          result = subprocess.run(['groovy', '-e', f'new File("{temp_path}").text'], 
+                                                capture_output=True, text=True, timeout=30)
+                          os.unlink(temp_path)
+                          
+                          if result.returncode == 0:
+                              print(f'✅ Groovy syntax valid: {file_path}')
+                              return True
+                          else:
+                              print(f'❌ Groovy syntax error in {file_path}: {result.stderr}')
+                              return False
+                      except subprocess.TimeoutExpired:
+                          os.unlink(temp_path)
+                          print(f'❌ Groovy syntax check timeout: {file_path}')
+                          return False
+                      
+              except (subprocess.TimeoutExpired, FileNotFoundError):
+                  print(f'INFO: Groovy compiler not available, using basic validation for {file_path}')
+              
+              # Basic structure validation for DSL files
+              if 'jenkins-dsl' in file_path:
+                  if not re.search(r'(job|folder|view|multibranchPipelineJob)', content):
+                      print(f'WARNING: {file_path}: DSL file may be missing job definitions')
+              
+              print(f'✅ Basic Groovy validation passed: {file_path}')
+              return True
+              
+          except Exception as e:
+              print(f'❌ Error validating Groovy file {file_path}: {e}')
+              return False
+      
+      failed = False
+      for file_path in sys.argv[1:]:
+          if not validate_groovy_syntax(file_path):
+              failed = True
+      
+      sys.exit(1 if failed else 0)
+  language: system
+  files: '^.*\.groovy$'
+
+- id: jenkinsfile-structure-check
+  name: Jenkinsfile Structure Validation
+  description: Validate Jenkinsfile pipeline structure and best practices
+  entry: python3
+  args:
+    - -c
+    - |
+      import sys
+      import re
+      import os
+      
+      def validate_jenkinsfile_structure(file_path):
+          '''Comprehensive Jenkinsfile validation'''
+          try:
+              with open(file_path, 'r') as f:
+                  content = f.read()
+              
+              issues = []
+              warnings = []
+              
+              # Required structure checks
+              if not re.search(r'pipeline\s*{', content, re.IGNORECASE):
+                  issues.append('Missing pipeline block')
+              
+              if not re.search(r'agent\s+(\{|[a-zA-Z])', content, re.IGNORECASE):
+                  issues.append('Missing agent definition')
+              
+              if not re.search(r'stages\s*{', content, re.IGNORECASE):
+                  issues.append('Missing stages block')
+              
+              if not re.search(r'stage\s*\([^)]+\)\s*{', content, re.IGNORECASE):
+                  issues.append('Missing stage definitions')
+              
+              # Best practices checks
+              if not re.search(r'options\s*{', content, re.IGNORECASE):
+                  warnings.append('Consider adding options block for better pipeline configuration')
+              
+              if not re.search(r'environment\s*{', content, re.IGNORECASE):
+                  warnings.append('Consider using environment block for variables')
+              
+              if not re.search(r'post\s*{', content, re.IGNORECASE):
+                  warnings.append('Consider adding post block for cleanup/notifications')
+              
+              # Security checks
+              security_patterns = [
+                  (r'sh\s*["\'].*\$\{[^}]*\}.*rm\s+-rf', 'Dangerous rm -rf with variable expansion'),
+                  (r'withCredentials\s*\([^)]*\).*echo', 'Potential credential exposure in echo'),
+                  (r'env\.[A-Z_]*PASSWORD\s*=', 'Password assignment to environment variable'),
+                  (r'def\s+password\s*=\s*["\']', 'Hardcoded password in variable'),
+                  (r'sudo\s', 'Sudo usage detected'),
+                  (r'chmod\s+777', 'Overly permissive file permissions'),
+              ]
+              
+              for pattern, message in security_patterns:
+                  if re.search(pattern, content, re.IGNORECASE):
+                      issues.append(f'SECURITY: {message}')
+              
+              # Performance/resource checks
+              if re.search(r'node\s*\(["\'][^"\']*master', content, re.IGNORECASE):
+                  warnings.append('Avoid running builds on master node')
+              
+              if not re.search(r'timeout\s*\(', content, re.IGNORECASE):
+                  warnings.append('Consider adding timeout to prevent hanging builds')
+              
+              # Report results
+              if issues:
+                  for issue in issues:
+                      print(f'❌ ISSUE: {file_path}: {issue}')
+                  return False
+              
+              if warnings:
+                  for warning in warnings:
+                      print(f'⚠️ WARNING: {file_path}: {warning}')
+              
+              print(f'✅ Jenkinsfile structure valid: {file_path}')
+              return True
+              
+          except Exception as e:
+              print(f'❌ Error validating Jenkinsfile {file_path}: {e}')
+              return False
+      
+      failed = False
+      for file_path in sys.argv[1:]:
+          if not validate_jenkinsfile_structure(file_path):
+              failed = True
+      
+      sys.exit(1 if failed else 0)
+  language: system
+  files: '^.*Jenkinsfile.*$'
+
+- id: jenkins-dsl-security-scan
+  name: Jenkins DSL Security Scanner
+  description: Comprehensive security scanning for Jenkins DSL and Groovy scripts
+  entry: python3
+  args:
+    - -c
+    - |
+      import sys
+      import re
+      
+      def scan_jenkins_security(file_path):
+          '''Enhanced security scanning for Jenkins files'''
+          try:
+              with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                  content = f.read()
+              
+              # Enhanced security patterns
+              security_patterns = [
+                  # System/Runtime patterns
+                  (r'System\.exit\s*\(', 'CRITICAL: System.exit() can terminate Jenkins'),
+                  (r'Runtime\.getRuntime\s*\(\)\.exec', 'CRITICAL: Runtime.exec() usage'),
+                  (r'ProcessBuilder\s*\(', 'HIGH: ProcessBuilder usage'),
+                  (r'new\s+ProcessBuilder', 'HIGH: ProcessBuilder instantiation'),
+                  
+                  # Code execution patterns
+                  (r'evaluate\s*\(', 'HIGH: Dynamic code evaluation'),
+                  (r'GroovyShell\s*\(\)', 'HIGH: GroovyShell instantiation'),
+                  (r'ScriptEngine.*eval', 'HIGH: Script engine evaluation'),
+                  (r'@Grab\s*\(', 'MEDIUM: Dynamic dependency loading'),
+                  
+                  # Credential patterns
+                  (r'password\s*[:=]\s*["\'][^"\']{3,}["\']', 'CRITICAL: Hardcoded password'),
+                  (r'secret\s*[:=]\s*["\'][^"\']{8,}["\']', 'CRITICAL: Hardcoded secret'),
+                  (r'token\s*[:=]\s*["\'][^"\']{10,}["\']', 'HIGH: Hardcoded token'),
+                  (r'api[_-]?key\s*[:=]\s*["\'][^"\']{10,}["\']', 'HIGH: Hardcoded API key'),
+                  
+                  # Shell injection patterns
+                  (r'sh\s*["\'].*\$\{[^}]*\}.*[|;&`]', 'HIGH: Shell injection risk with variables'),
+                  (r'bat\s*["\'].*\$\{[^}]*\}', 'HIGH: Batch injection risk with variables'),
+                  (r'script\s*\{.*sh.*curl.*\|.*sh', 'CRITICAL: Piping curl to shell'),
+                  
+                  # File system risks
+                  (r'sh\s*["\'].*rm\s+-rf\s+/[^"\']*["\']', 'CRITICAL: Dangerous rm -rf on root'),
+                  (r'deleteDir\s*\(\s*["\'][^"\']*\.\.[^"\']*["\']', 'HIGH: Path traversal in deleteDir'),
+                  (r'writeFile.*\.\.[/\\]', 'HIGH: Path traversal in writeFile'),
+                  
+                  # Network security
+                  (r'curl.*http://[^"\']*[|&]', 'MEDIUM: HTTP usage in shell commands'),
+                  (r'wget.*http://[^"\']*[|&]', 'MEDIUM: HTTP usage in wget commands'),
+                  
+                  # Jenkins-specific patterns
+                  (r'Jenkins\.instance\.save\s*\(\)', 'HIGH: Jenkins instance modification'),
+                  (r'Jenkins\.instance\.doRestart\s*\(\)', 'CRITICAL: Jenkins restart command'),
+                  (r'Jenkins\.instance\.doSafeRestart\s*\(\)', 'HIGH: Jenkins safe restart command'),
+                  (r'node\s*\(\s*["\']master["\']', 'MEDIUM: Execution on master node'),
+                  
+                  # Privilege escalation
+                  (r'withCredentials.*sudo', 'HIGH: Sudo with credentials'),
+                  (r'sh.*sudo.*\$\{', 'HIGH: Sudo with variable expansion'),
+                  (r'setuid|setgid', 'HIGH: Privilege escalation attempt'),
+              ]
+              
+              violations = []
+              for pattern, message in security_patterns:
+                  matches = re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE)
+                  for match in matches:
+                      line_num = content[:match.start()].count('\n') + 1
+                      violations.append((line_num, message, match.group()))
+              
+              if violations:
+                  print(f'🔒 SECURITY VIOLATIONS in {file_path}:')
+                  for line_num, message, match in violations:
+                      print(f'   Line {line_num}: {message}')
+                      print(f'   Code: {match.strip()}')
+                  return False
+              
+              print(f'✅ Security scan passed: {file_path}')
+              return True
+              
+          except Exception as e:
+              print(f'❌ Error scanning {file_path}: {e}')
+              return False
+      
+      failed = False
+      for file_path in sys.argv[1:]:
+          if not scan_jenkins_security(file_path):
+              failed = True
+      
+      sys.exit(1 if failed else 0)
+  language: system
+  files: '^(jenkins-dsl/.*\.groovy|.*Jenkinsfile.*|pipelines/.*|.*\.groovy)$'
+
+- id: file-size-check
+  name: File Size Check
+  description: Check for files that are too large for version control
+  entry: python3
+  args:
+    - -c
+    - |
+      import sys
+      import os
+      
+      MAX_SIZE = 1024 * 1024  # 1MB
+      
+      failed = False
+      for file_path in sys.argv[1:]:
+          try:
+              size = os.path.getsize(file_path)
+              if size > MAX_SIZE:
+                  print(f'LARGE_FILE: {file_path}: File is {size} bytes (max allowed: {MAX_SIZE})')
+                  failed = True
+          except Exception as e:
+              print(f'Error checking {file_path}: {e}')
+      
+      sys.exit(1 if failed else 0)
+  language: system
+  exclude: '\.(zip|tar\.gz|jar|war|jpg|jpeg|png|gif|pdf|mp4|mov|avi)$'

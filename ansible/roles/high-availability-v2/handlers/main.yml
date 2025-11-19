@@ -1,0 +1,115 @@
+---
+# Simplified HAProxy High Availability Role v2 - Handlers
+# Streamlined handlers for HAProxy services
+
+- name: restart haproxy container
+  community.docker.docker_container:
+    name: "jenkins-haproxy"
+    state: started
+    restart: yes
+    restart_policy: "{{ haproxy_restart_policy | default('unless-stopped') }}"
+  listen: 
+    - restart haproxy container
+    - reload haproxy container
+
+- name: validate haproxy config
+  command: docker exec jenkins-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+  register: config_validation
+  failed_when: config_validation.rc != 0
+  ignore_errors: true
+
+- name: wait for haproxy ready
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port | default(8404) }}{{ haproxy_stats_uri | default('/stats') }}"
+    method: GET
+    timeout: 10
+  retries: 5
+  delay: 3
+  ignore_errors: true
+
+- name: log haproxy restart
+  lineinfile:
+    path: /var/log/haproxy-restarts.log
+    line: "{{ ansible_date_time.iso8601 }}: HAProxy container restarted via ansible handler"
+    create: yes
+    mode: '0644'
+  become: yes
+
+- name: restart keepalived
+  systemd:
+    name: keepalived
+    state: restarted
+    daemon_reload: yes
+  become: yes
+
+- name: validate keepalived config
+  command: keepalived -t -f /etc/keepalived/keepalived.conf
+  register: keepalived_validation
+  failed_when: keepalived_validation.rc != 0
+  become: yes
+  ignore_errors: true
+
+- name: wait for keepalived ready
+  pause:
+    seconds: 5
+
+- name: verify vip assignment
+  command: ip addr show
+  register: vip_verification
+  changed_when: false
+  when: jenkins_vip is defined and jenkins_vip != ""
+
+- name: log keepalived restart
+  lineinfile:
+    path: /var/log/keepalived-restarts.log
+    line: "{{ ansible_date_time.iso8601 }}: keepalived restarted via ansible handler"
+    create: yes
+    mode: '0644'
+  become: yes
+
+- name: reload haproxy config
+  command: docker exec jenkins-haproxy haproxy -f /usr/local/etc/haproxy/haproxy.cfg -p /run/haproxy/haproxy.pid -sf $(cat /run/haproxy/haproxy.pid 2>/dev/null || echo "")
+  register: reload_result
+  failed_when: reload_result.rc != 0
+  ignore_errors: true
+
+- name: verify haproxy reload
+  uri:
+    url: "http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port | default(8404) }}{{ haproxy_stats_uri | default('/stats') }}"
+    method: GET
+    timeout: 5
+  retries: 3
+  delay: 2
+  ignore_errors: true
+
+- name: update management scripts
+  file:
+    path: "/usr/local/bin/{{ item }}"
+    mode: '0755'
+    owner: root
+    group: root
+  loop:
+    - jenkins-ha-monitor.sh
+    - jenkins-failover.sh
+    - haproxy-container-manager.sh
+    - keepalived-haproxy-check.sh
+  become: yes
+
+- name: verify management scripts
+  command: "bash -n /usr/local/bin/{{ item }}"
+  loop:
+    - jenkins-ha-monitor.sh
+    - jenkins-failover.sh
+    - haproxy-container-manager.sh
+    - keepalived-haproxy-check.sh
+  register: script_validation
+  failed_when: script_validation.rc != 0
+  become: yes
+  ignore_errors: true
+
+- name: restart monitoring cron
+  systemd:
+    name: cron
+    state: restarted
+  become: yes
+  ignore_errors: true

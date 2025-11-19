@@ -1,0 +1,96 @@
+---
+# Backup Configuration Tasks
+# Setup backup directories, users, and environment
+
+- name: Create backup user
+  user:
+    name: "{{ backup_user }}"
+    uid: "{{ backup_uid }}"
+    group: "{{ backup_group }}"
+    home: "{{ backup_home_dir }}"
+    shell: /bin/bash
+    system: yes
+    create_home: yes
+  tags:
+    - config
+    - user
+
+- name: Create backup group
+  group:
+    name: "{{ backup_group }}"
+    gid: "{{ backup_gid }}"
+    system: yes
+  tags:
+    - config
+    - group
+
+- name: Create local backup directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  loop:
+    - "{{ backup_local_dir }}"
+    - "{{ backup_home_dir }}/scripts"
+    - "{{ backup_home_dir }}/logs"
+    - /var/log/jenkins-backup
+  tags:
+    - config
+    - directories
+
+- name: Deploy backup-active-to-nfs.sh script
+  copy:
+    src: "{{ backup_script_source_path }}"
+    dest: "{{ backup_script_path }}"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+    backup: yes
+  tags:
+    - config
+    - script
+
+- name: Create backup configuration file
+  template:
+    src: backup-config.env.j2
+    dest: "{{ backup_home_dir }}/backup-config.env"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0644'
+    backup: yes
+  tags:
+    - config
+    - environment
+
+- name: Create backup wrapper script
+  template:
+    src: backup-wrapper.sh.j2
+    dest: "{{ backup_home_dir }}/scripts/backup-wrapper.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  tags:
+    - config
+    - wrapper
+
+- name: Setup log rotation for backup logs
+  template:
+    src: backup-logrotate.j2
+    dest: /etc/logrotate.d/jenkins-backup
+    owner: root
+    group: root
+    mode: '0644'
+  tags:
+    - config
+    - logging
+
+- name: Add backup user to docker group for container access
+  user:
+    name: "{{ backup_user }}"
+    groups: docker
+    append: yes
+  tags:
+    - config
+    - docker

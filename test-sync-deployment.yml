@@ -1,0 +1,131 @@
+---
+# Test Synchronized Blue-Green Deployment
+# Tests both Jenkins container switching and HAProxy configuration updating
+
+- name: Test Synchronized Blue-Green Deployment
+  hosts: centos9-vm
+  become: yes
+  gather_facts: yes
+  vars:
+    jenkins_ha_enabled: true
+    validation_mode: skip
+    jenkins_teams_config: "{{ jenkins_teams }}"
+  
+  tasks:
+    - name: Display current team configuration
+      debug:
+        msg: |
+          Current Team Configuration:
+          {% for team in jenkins_teams %}
+          • {{ team.team_name }}: {{ team.active_environment }} environment (port {{ team.ports.web }}{% if team.active_environment == 'green' %}+100{% endif %})
+          {% endfor %}
+    
+    - name: Phase 1 - Deploy Jenkins containers with correct environment switching
+      include_tasks: ansible/roles/jenkins-master-v2/tasks/image-and-container.yml
+      vars:
+        jenkins_teams_config: "{{ jenkins_teams }}"
+        
+    - name: Phase 2 - Update HAProxy configuration
+      template:
+        src: ansible/roles/high-availability-v2/templates/haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+        backup: yes
+        owner: root
+        group: haproxy
+        mode: '0644'
+      register: haproxy_config_updated
+      
+    - name: Phase 3 - Restart HAProxy if configuration changed
+      community.docker.docker_container:
+        name: jenkins-haproxy
+        state: started
+        restart: yes
+        restart_policy: unless-stopped
+      when: haproxy_config_updated.changed
+      
+    - name: Wait for services to stabilize
+      pause:
+        seconds: 15
+        
+    - name: Phase 4 - Verify deployment synchronization
+      block:
+        - name: Check Jenkins containers status
+          shell: docker ps --filter "name=jenkins-" --format "table {% raw %}{{.Names}}\t{{.Status}}\t{{.Ports}}{% endraw %}"
+          register: jenkins_containers
+          
+        - name: Check HAProxy configuration
+          shell: docker exec jenkins-haproxy grep -A 10 "backend jenkins_backend_devops" /usr/local/etc/haproxy/haproxy.cfg
+          register: haproxy_backend
+          failed_when: false
+          
+        - name: Test end-to-end connectivity for each team
+          uri:
+            url: "http://localhost:8000/login"
+            method: GET
+            headers:
+              Host: "{{ item.team_name }}jenkins.devops.example.com"
+            status_code: [200, 403, 302]
+          loop: "{{ jenkins_teams }}"
+          loop_control:
+            label: "{{ item.team_name }} team"
+          register: routing_tests
+          failed_when: false
+          
+        - name: Display verification results
+          debug:
+            msg: |
+              ===============================================
+              DEPLOYMENT SYNCHRONIZATION VERIFICATION
+              ===============================================
+              
+              Jenkins Containers:
+              {{ jenkins_containers.stdout }}
+              
+              HAProxy Backend Configuration:
+              {{ haproxy_backend.stdout }}
+              
+              End-to-End Routing Tests:
+              {% for result in routing_tests.results %}
+              • {{ jenkins_teams[loop.index0].team_name }} team: HTTP {{ result.status | default('FAILED') }}
+              {% endfor %}
+              
+              ===============================================
+              
+        - name: Verify specific issues are fixed
+          block:
+            - name: Check that devops team is on correct port
+              shell: |
+                # Check if devops green container is running on port 8180
+                docker ps --filter "name=jenkins-devops-green" --format "table {% raw %}{{.Names}}\t{{.Ports}}{% endraw %}" | grep "8180"
+              register: devops_green_check
+              failed_when: false
+              
+            - name: Check that HAProxy routes to correct port
+              shell: |
+                # Check if HAProxy backend points to port 8180 for green environment
+                docker exec jenkins-haproxy grep "192.168.188.142:8180" /usr/local/etc/haproxy/haproxy.cfg
+              register: haproxy_port_check
+              failed_when: false
+              
+            - name: Display fix verification
+              debug:
+                msg: |
+                  ===============================================
+                  BUG FIX VERIFICATION
+                  ===============================================
+                  
+                  ✅ CRITICAL BUG 1 - HAProxy Port Switching:
+                  {% if haproxy_port_check.rc == 0 %}
+                  ✓ FIXED: HAProxy routes to port 8180 (green environment)
+                  {% else %}
+                  ✗ NOT FIXED: HAProxy not routing to correct green port
+                  {% endif %}
+                  
+                  ✅ CRITICAL BUG 2 - Jenkins Container Switching:
+                  {% if devops_green_check.rc == 0 %}
+                  ✓ FIXED: Jenkins devops-green container running on port 8180
+                  {% else %}
+                  ✗ NOT FIXED: Jenkins devops-green container not running correctly
+                  {% endif %}
+                  
+                  ===============================================

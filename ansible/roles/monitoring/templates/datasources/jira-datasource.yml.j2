@@ -1,0 +1,73 @@
+apiVersion: 1
+
+# Jira Cloud Datasource Provisioning
+# Provides access to Jira issues, sprints, boards, and projects
+# Reference: https://grafana.com/grafana/plugins/grafana-jira-datasource/
+
+datasources:
+  - name: Jira Cloud
+    type: grafana-jira-datasource
+    uid: jira-cloud
+    access: proxy
+    orgId: 1
+    isDefault: false
+    editable: true
+    jsonData:
+      # Jira Cloud URL
+      # Format: https://your-domain.atlassian.net
+      url: "{{ jira_cloud_url }}"
+
+      # Username/Email for Jira Cloud authentication
+      # Jira Cloud requires email address for API authentication
+      username: "{{ jira_cloud_email }}"
+
+      # Project keys to query (optional, can be specified per dashboard)
+      # Format: ["PROJ1", "PROJ2", "DEVOPS"]
+      projects: {{ jira_cloud_projects | default([]) | to_json }}
+
+      # Cache settings for API responses
+      cacheTimeInSeconds: 300  # Cache Jira API responses for 5 minutes
+
+      # Request timeout
+      requestTimeout: 30
+
+      # Use HTTPS (recommended for Cloud instances)
+      useSslCertificate: true
+
+      # Allow self-signed certificates (set to false in production)
+      verifySSL: true
+
+      # Optional: Custom JQL query for default behavior
+      # This allows restricting visible issues at datasource level
+      # Example: "assignee = currentUser() AND resolution = Unresolved"
+      # defaultJqlQuery: "project in ({{ jira_cloud_projects | default([]) | join(',') }})"
+
+    # Store Jira API Token securely
+    secureJsonData:
+      # Jira Cloud API Token (not password!)
+      # Generate at: https://id.atlassian.com/manage-profile/security/api-tokens
+      # Requirements:
+      # - Email: {{ jira_cloud_email }}
+      # - Token: Long alphanumeric string (keep this secret!)
+      apiToken: "{{ jira_cloud_token }}"
+
+    version: 1
+
+# Query Examples (use these in Grafana dashboards):
+#
+# Basic JQL Queries:
+#   - "project = DEVOPS AND type = Bug"
+#   - "assignee = currentUser() AND status = 'In Progress'"
+#   - "sprint = SPRINT-1 AND resolution = Unresolved"
+#   - "created >= -7d ORDER BY created DESC"
+#
+# Sprint Metrics:
+#   - "sprint = activeSprints() AND issuetype in (Bug, Task, Story)"
+#   - "sprint = (previous(1)) AND status = Done"  # Completed in last sprint
+#
+# Team-based:
+#   - "project = DEVOPS AND assignee in (userMatching('team-devops'))"
+#
+# Advanced:
+#   - "labels = 'ci-cd' AND labels = 'infrastructure'"
+#   - "created >= -30d AND (status = 'In Progress' OR status = 'To Do')"

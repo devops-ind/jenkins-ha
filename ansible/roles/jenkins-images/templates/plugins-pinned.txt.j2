@@ -1,0 +1,50 @@
+# Production-Ready Jenkins Plugins with Pinned Versions
+# Generated on {{ ansible_date_time.iso8601 }}
+# Jenkins Version: {{ jenkins_version }}
+# Plugin Version Strategy: {{ jenkins_plugin_version_strategy | default('pinned') }}
+
+{% for plugin_name, plugin_version in jenkins_plugin_versions.items() %}
+# {{ plugin_name | upper | replace('-', ' ') }} Plugin
+{{ plugin_name }}:{{ plugin_version }}
+{% endfor %}
+
+{% if jenkins_plugins is defined and jenkins_plugins | length > 0 %}
+# Additional Environment-Specific Plugins
+{% for plugin in jenkins_plugins %}
+{% if plugin is string %}
+{% set plugin_name = plugin.split(':')[0] %}
+{% set plugin_version = plugin.split(':')[1] if ':' in plugin else jenkins_plugin_versions.get(plugin_name, 'latest') %}
+{{ plugin_name }}:{{ plugin_version }}
+{% else %}
+{{ plugin.name }}:{{ plugin.version | default(jenkins_plugin_versions.get(plugin.name, 'latest')) }}
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if jenkins_ha_enabled | default(false) %}
+# High Availability Specific Plugins
+{% for plugin_name in ['shared-workspace'] %}
+{{ plugin_name }}:{{ jenkins_plugin_versions.get(plugin_name, 'latest') }}
+{% endfor %}
+{% endif %}
+
+{% if backup_enabled | default(true) %}
+# Backup Specific Plugins
+{% for plugin_name in ['backup'] %}
+{{ plugin_name }}:{{ jenkins_plugin_versions.get(plugin_name, 'latest') }}
+{% endfor %}
+{% endif %}
+
+{% if monitoring_enabled | default(true) %}
+# Monitoring Specific Plugins
+{% for plugin_name in ['prometheus', 'monitoring', 'metrics'] %}
+{{ plugin_name }}:{{ jenkins_plugin_versions.get(plugin_name, 'latest') }}
+{% endfor %}
+{% endif %}
+
+# Team-Specific Plugin Overrides
+{% if jenkins_team_plugin_version_overrides is defined and jenkins_team_plugin_version_overrides | length > 0 %}
+{% for plugin_name, plugin_version in jenkins_team_plugin_version_overrides.items() %}
+{{ plugin_name }}:{{ plugin_version }}
+{% endfor %}
+{% endif %}

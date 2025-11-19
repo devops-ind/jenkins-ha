@@ -1,0 +1,45 @@
+global_defs {
+   notification_email {
+{% for email in keepalived_notification_emails | default([]) %}
+     {{ email }}
+{% endfor %}
+   }
+   notification_email_from {{ keepalived_notification_from | default('keepalived@' + (ansible_fqdn | default(ansible_hostname | default('localhost')))) }}
+   smtp_server {{ keepalived_smtp_server | default('localhost') }}
+   smtp_connect_timeout 30
+   router_id {{ ansible_hostname | upper }}
+   vrrp_skip_check_adv_addr
+   vrrp_strict
+   vrrp_garp_interval 0
+   vrrp_gna_interval 0
+}
+
+vrrp_script chk_haproxy {
+    script "/usr/local/bin/keepalived-haproxy-check.sh"
+    interval 3
+    weight -2
+    fall 3
+    rise 2
+    timeout 10
+}
+
+vrrp_instance VI_1 {
+    state {% if ansible_hostname == groups['jenkins_masters'][0] %}MASTER{% else %}BACKUP{% endif %}
+    interface {{ keepalived_interface | default(ansible_default_ipv4.interface) }}
+    virtual_router_id {{ keepalived_virtual_router_id | default('51') }}
+    priority {% if ansible_hostname == groups['jenkins_masters'][0] %}{{ keepalived_master_priority | default('110') }}{% else %}{{ keepalived_backup_priority | default('100') }}{% endif %}
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass {{ keepalived_auth_pass | default('jenkins_ha') }}
+    }
+    virtual_ipaddress {
+        {{ vip_address }}/{{ vip_netmask | default('24') }}
+    }
+    track_script {
+        chk_haproxy
+    }
+    notify_master "/bin/echo 'Became master' | logger"
+    notify_backup "/bin/echo 'Became backup' | logger"
+    notify_fault "/bin/echo 'Fault detected' | logger"
+}

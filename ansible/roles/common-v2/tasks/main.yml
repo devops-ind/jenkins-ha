@@ -1,0 +1,380 @@
+---
+# Tasks for common-v2 role (Podman-enhanced)
+
+- name: Update package cache
+  package:
+    update_cache: yes
+  become: yes
+  when: common_update_packages
+
+- name: Install EPEL repository (RedHat family)
+  package:
+    name: epel-release
+    state: present
+  when: 
+    - common_install_tools
+    - ansible_os_family == "RedHat"
+
+- name: Install essential packages
+  package:
+    name: "{{ common_packages }}"
+    state: present
+  when: common_install_tools
+
+- name: Install Podman-specific packages
+  package:
+    name: "{{ common_podman_packages }}"
+    state: present
+  when: 
+    - common_install_tools
+    - common_container_runtime == "podman"
+
+- name: Check for processes using monitoring user
+  shell: |
+    if id "{{ common_monitoring_user }}" >/dev/null 2>&1; then
+      # User exists, check for running processes
+      PROCESSES=$(ps -u "{{ common_monitoring_user }}" --no-headers | wc -l | tr -d ' ')
+      if [ "$PROCESSES" -gt 0 ]; then
+        echo "processes_found:$PROCESSES"
+        ps -u "{{ common_monitoring_user }}" -o pid,ppid,cmd --no-headers
+      else
+        echo "no_processes_found"
+      fi
+    else
+      echo "user_not_exists"
+    fi
+  register: monitoring_user_check
+  changed_when: false
+  failed_when: false
+
+- name: Stop monitoring containers to resolve user conflicts (Podman)
+  command: podman stop {{ item }}
+  loop:
+    - prometheus-production
+    - grafana-production
+    - alertmanager-production
+    - node-exporter-production
+  when: 
+    - monitoring_user_check.stdout is defined and 'processes_found' in monitoring_user_check.stdout
+    - common_container_runtime == "podman"
+  register: podman_container_stops
+  failed_when: false
+  changed_when: podman_container_stops.rc == 0
+
+- name: Stop monitoring containers to resolve user conflicts (Docker - fallback)
+  command: docker stop {{ item }}
+  loop:
+    - prometheus-production
+    - grafana-production
+    - alertmanager-production
+    - node-exporter-production
+  when: 
+    - monitoring_user_check.stdout is defined and 'processes_found' in monitoring_user_check.stdout
+    - common_container_runtime == "docker"
+  register: docker_container_stops
+  failed_when: false
+  changed_when: docker_container_stops.rc == 0
+
+- name: Wait for processes to terminate
+  pause:
+    seconds: 5
+  when: monitoring_user_check.stdout is defined and 'processes_found' in monitoring_user_check.stdout
+
+- name: Create monitoring user with enhanced Podman support
+  user:
+    name: "{{ common_monitoring_user }}"
+    home: "{{ common_monitoring_user_home }}"
+    shell: /bin/bash
+    system: yes
+    create_home: yes
+    groups: "{{ common_monitoring_user_groups }}"
+    append: yes
+
+- name: Configure subuid/subgid for monitoring user (Podman rootless)
+  block:
+    - name: Add subuid mapping for monitoring user
+      lineinfile:
+        path: /etc/subuid
+        line: "{{ common_monitoring_user }}:{{ common_monitoring_subuid_start }}:{{ common_monitoring_subuid_size }}"
+        create: yes
+        mode: '0644'
+        state: present
+
+    - name: Add subgid mapping for monitoring user
+      lineinfile:
+        path: /etc/subgid
+        line: "{{ common_monitoring_user }}:{{ common_monitoring_subgid_start }}:{{ common_monitoring_subgid_size }}"
+        create: yes
+        mode: '0644'
+        state: present
+
+    - name: Enable lingering for monitoring user
+      command: loginctl enable-linger {{ common_monitoring_user }}
+      changed_when: false
+  when: 
+    - common_container_runtime == "podman"
+    - common_enable_rootless_containers
+
+- name: Create systemd user directory for monitoring user
+  file:
+    path: "{{ common_monitoring_user_home }}/.config/systemd/user"
+    state: directory
+    owner: "{{ common_monitoring_user }}"
+    group: "{{ common_monitoring_user }}"
+    mode: '0755'
+  when: 
+    - common_container_runtime == "podman"
+    - common_enable_rootless_containers
+
+- name: Restart monitoring containers if they were stopped (Podman)
+  command: podman start {{ item }}
+  loop:
+    - prometheus-production
+    - grafana-production
+    - alertmanager-production
+    - node-exporter-production
+  when: 
+    - podman_container_stops is defined and podman_container_stops.changed
+    - common_container_runtime == "podman"
+  register: podman_container_restarts
+  failed_when: false
+  changed_when: podman_container_restarts.rc == 0
+
+- name: Restart monitoring containers if they were stopped (Docker - fallback)
+  command: docker start {{ item }}
+  loop:
+    - prometheus-production
+    - grafana-production
+    - alertmanager-production
+    - node-exporter-production
+  when: 
+    - docker_container_stops is defined and docker_container_stops.changed
+    - common_container_runtime == "docker"
+  register: docker_container_restarts
+  failed_when: false
+  changed_when: docker_container_restarts.rc == 0
+
+- name: Wait for containers to be ready
+  pause:
+    seconds: 5
+  when: >
+    (podman_container_restarts is defined and podman_container_restarts.changed) or
+    (docker_container_restarts is defined and docker_container_restarts.changed)
+
+- name: Setup Podman socket for monitoring user
+  block:
+    - name: Enable Podman socket service for monitoring user
+      systemd:
+        name: podman.socket
+        scope: user
+        enabled: yes
+        state: started
+        daemon_reload: yes
+      become_user: "{{ common_monitoring_user }}"
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ common_monitoring_user_uid | default('1005') }}"
+
+    - name: Create Podman API socket directory
+      file:
+        path: "/run/user/{{ common_monitoring_user_uid | default('1005') }}"
+        state: directory
+        owner: "{{ common_monitoring_user }}"
+        group: "{{ common_monitoring_user }}"
+        mode: '0755'
+  when: 
+    - common_container_runtime == "podman"
+    - common_enable_rootless_containers
+    - common_enable_podman_socket
+
+- name: Configure container runtime environment variables
+  lineinfile:
+    path: "{{ common_monitoring_user_home }}/.bashrc"
+    line: "{{ item }}"
+    create: yes
+    owner: "{{ common_monitoring_user }}"
+    group: "{{ common_monitoring_user }}"
+  loop: "{{ common_container_env_vars }}"
+  when: common_container_env_vars | length > 0
+
+- name: Setup container registry authentication
+  block:
+    - name: Create containers auth directory
+      file:
+        path: "{{ common_monitoring_user_home }}/.config/containers"
+        state: directory
+        owner: "{{ common_monitoring_user }}"
+        group: "{{ common_monitoring_user }}"
+        mode: '0700'
+
+    - name: Configure registry authentication
+      template:
+        src: auth.json.j2
+        dest: "{{ common_monitoring_user_home }}/.config/containers/auth.json"
+        owner: "{{ common_monitoring_user }}"
+        group: "{{ common_monitoring_user }}"
+        mode: '0600'
+  when: 
+    - common_container_runtime == "podman"
+    - common_registry_auth is defined
+    - common_registry_auth | length > 0
+
+- name: Configure logrotate for system logs
+  template:
+    src: logrotate.j2
+    dest: /etc/logrotate.d/jenkins-system
+  when: common_logrotate_enabled
+
+- name: Configure logrotate for container logs
+  template:
+    src: container-logrotate.j2
+    dest: /etc/logrotate.d/containers
+  when: 
+    - common_logrotate_enabled
+    - common_container_runtime == "podman"
+
+- name: Setup container cleanup cron job
+  cron:
+    name: "{{ common_container_runtime | title }} system cleanup"
+    minute: "{{ common_container_cleanup_cron.minute }}"
+    hour: "{{ common_container_cleanup_cron.hour }}"
+    day: "{{ common_container_cleanup_cron.day }}"
+    month: "{{ common_container_cleanup_cron.month }}"
+    weekday: "{{ common_container_cleanup_cron.weekday }}"
+    job: "{{ common_container_cleanup_command }}"
+    user: root
+  when: common_container_cleanup_enabled
+
+- name: Setup user container cleanup for rootless users
+  cron:
+    name: "Rootless {{ common_container_runtime }} cleanup for {{ item }}"
+    minute: "{{ common_container_cleanup_cron.minute }}"
+    hour: "{{ common_container_cleanup_cron.hour }}"
+    day: "{{ common_container_cleanup_cron.day }}"
+    month: "{{ common_container_cleanup_cron.month }}"
+    weekday: "{{ common_container_cleanup_cron.weekday }}"
+    job: "{{ common_rootless_cleanup_command }}"
+    user: "{{ item }}"
+  loop: "{{ common_rootless_users }}"
+  when: 
+    - common_container_cleanup_enabled
+    - common_enable_rootless_containers
+    - common_rootless_users | length > 0
+
+- name: Create container health check script
+  template:
+    src: container-health-check.sh.j2
+    dest: /usr/local/bin/container-health-check.sh
+    mode: '0755'
+  when: common_container_health_check_enabled
+
+- name: Setup container health check cron job
+  cron:
+    name: "Container health check"
+    minute: "*/5"
+    job: "/usr/local/bin/container-health-check.sh > /dev/null 2>&1"
+    user: root
+  when: common_container_health_check_enabled
+
+- name: Configure SELinux for containers (if enabled)
+  block:
+    - name: Set SELinux booleans for containers
+      seboolean:
+        name: "{{ item }}"
+        state: yes
+        persistent: yes
+      loop: "{{ common_selinux_container_booleans }}"
+
+    - name: Create SELinux policy for container users
+      command: >
+        semanage login -a -s unconfined_u {{ item }}
+      loop: "{{ common_rootless_users + [common_monitoring_user] }}"
+      failed_when: false
+      changed_when: false
+  when: 
+    - ansible_selinux is defined
+    - ansible_selinux.status == "enabled"
+    - ansible_os_family == "RedHat"
+
+- name: Ensure system is up to date (disabled in production)
+  package:
+    name: "*"
+    state: latest
+  when: 
+    - common_update_packages
+    - ansible_os_family == "RedHat"
+    - deployment_environment | default('local') != 'production'
+
+- name: Setup container networking prerequisites
+  block:
+    - name: Enable IP forwarding
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        state: present
+        reload: yes
+
+    - name: Enable IPv6 forwarding (if IPv6 enabled)
+      sysctl:
+        name: net.ipv6.conf.all.forwarding
+        value: '1'
+        state: present
+        reload: yes
+      when: common_enable_ipv6
+
+    - name: Configure bridge networking
+      sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+        reload: yes
+      loop: "{{ common_bridge_sysctl_settings }}"
+  when: common_configure_networking
+
+- name: Install container management utilities
+  package:
+    name: "{{ common_container_utilities }}"
+    state: present
+  when: common_install_tools
+
+- name: Create container data directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ common_monitoring_user }}"
+    group: "{{ common_monitoring_user }}"
+    mode: '0755'
+  loop: "{{ common_container_data_dirs }}"
+  when: common_container_data_dirs | length > 0
+
+- name: Verify container runtime installation
+  command: "{{ common_container_runtime }} --version"
+  register: container_runtime_version
+  changed_when: false
+  failed_when: container_runtime_version.rc != 0
+
+- name: Display container runtime version
+  debug:
+    msg: "{{ common_container_runtime | title }} installed: {{ container_runtime_version.stdout }}"
+
+- name: Setup monitoring integration
+  block:
+    - name: Create monitoring configuration directory
+      file:
+        path: "{{ common_monitoring_user_home }}/monitoring"
+        state: directory
+        owner: "{{ common_monitoring_user }}"
+        group: "{{ common_monitoring_user }}"
+        mode: '0755'
+
+    - name: Install monitoring utilities
+      package:
+        name: "{{ common_monitoring_utilities }}"
+        state: present
+      when: common_monitoring_utilities | length > 0
+
+    - name: Configure monitoring user for container access
+      user:
+        name: "{{ common_monitoring_user }}"
+        groups: "{{ common_monitoring_access_groups }}"
+        append: yes
+  when: common_enable_monitoring_integration

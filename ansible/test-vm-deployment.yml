@@ -1,0 +1,102 @@
+---
+# Test VM deployment of simplified jenkins-master-v2 role
+- hosts: centos9-vm
+  become: yes
+  gather_facts: yes
+  vars:
+    # Test configuration for VM deployment
+    jenkins_test_v2_role: true
+    jenkins_teams:
+      - team_name: "devops-test"
+        active_environment: "blue"
+        ports:
+          web: 8080
+          agent: 50000
+        resources:
+          memory: "1g"
+          cpu: "1.0"
+        env_vars:
+          JAVA_OPTS: "-Djenkins.install.runSetupWizard=false -Xmx512m"
+        labels:
+          environment: "test"
+          tier: "testing"
+      - team_name: "developer-test"
+        active_environment: "blue"
+        ports:
+          web: 8081
+          agent: 50001
+        resources:
+          memory: "1g"
+          cpu: "1.0"
+        env_vars:
+          JAVA_OPTS: "-Djenkins.install.runSetupWizard=false -Xmx512m"
+        labels:
+          environment: "test"
+          tier: "testing"
+    
+    # Override settings for VM testing
+    jenkins_master_custom_image_prefix: "jenkins-custom-test"
+    jenkins_master_build_custom_images: false  # Disable for initial test
+    jenkins_master_startup_wait_time: 30
+    
+    # Ensure we have required variables
+    jenkins_user: jenkins
+    jenkins_uid: 1002
+    jenkins_gid: 1002
+    jenkins_home_dir: /var/jenkins
+    jenkins_master_port: 8080
+    jenkins_jnlp_port: 50000
+
+  pre_tasks:
+    - name: Display VM test configuration
+      debug:
+        msg: |
+          =================================================
+          Testing Simplified Jenkins Master Role v2 on VM
+          =================================================
+          Target Host: {{ inventory_hostname }}
+          Test teams: {{ jenkins_teams | length }}
+          Teams: {{ jenkins_teams | map(attribute='team_name') | list | join(', ') }}
+          Ports: {{ jenkins_teams | map(attribute='ports.web') | list | join(', ') }}
+          =================================================
+
+  tasks:
+    - name: Deploy jenkins-master-v2 role
+      include_role:
+        name: jenkins-master-v2
+      tags: ['jenkins-v2']
+
+  post_tasks:
+    - name: Verify deployment on VM
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ item.ports.web }}/login"
+        method: GET
+        status_code: [200, 403]
+        timeout: 30
+      retries: 10
+      delay: 10
+      loop: "{{ jenkins_teams }}"
+      loop_control:
+        label: "{{ item.team_name }}:{{ item.ports.web }}"
+      register: vm_deployment_verification
+
+    - name: Display VM deployment results
+      debug:
+        msg: |
+          =================================================
+          VM Deployment Verification Results
+          =================================================
+          {% for result in vm_deployment_verification.results %}
+          • {{ jenkins_teams[loop.index0].team_name }}: {{ 'SUCCESS' if result.status in [200, 403] else 'FAILED' }} (HTTP {{ result.status }})
+          {% endfor %}
+          
+          Access URLs on VM ({{ ansible_default_ipv4.address }}):
+          {% for team in jenkins_teams %}
+          • {{ team.team_name }}: http://{{ ansible_default_ipv4.address }}:{{ team.ports.web }}
+          {% endfor %}
+          
+          Role Complexity Comparison:
+          • Original jenkins-master: 1018 lines across 13 files
+          • Simplified jenkins-master-v2: 728 lines across 4 files
+          • Reduction: {{ ((1018 - 728) / 1018 * 100) | round(1) }}% fewer lines
+          =================================================

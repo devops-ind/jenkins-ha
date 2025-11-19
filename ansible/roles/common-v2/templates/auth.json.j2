@@ -1,0 +1,15 @@
+{
+  "auths": {
+{% for registry, auth in common_registry_auth.items() %}
+    "{{ registry }}": {
+{% if auth.username is defined and auth.password is defined %}
+      "username": "{{ auth.username }}",
+      "password": "{{ auth.password }}",
+      "auth": "{{ (auth.username + ':' + auth.password) | b64encode }}"
+{% elif auth.auth is defined %}
+      "auth": "{{ auth.auth }}"
+{% endif %}
+    }{% if not loop.last %},{% endif %}
+{% endfor %}
+  }
+}

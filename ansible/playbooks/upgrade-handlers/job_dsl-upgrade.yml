@@ -1,0 +1,342 @@
+---
+# Job DSL Upgrade Handler
+# Handles zero-downtime Job DSL configuration upgrades
+
+- name: Execute Job DSL upgrade
+  block:
+    - name: Prepare Job DSL upgrade environment
+      set_fact:
+        dsl_upgrade_teams: "{{ team_list }}"
+        dsl_workspace: "{{ upgrade_workspace }}/job-dsl"
+
+    - name: Validate and prepare DSL configuration
+      block:
+        - name: Create DSL backup for each team
+          script: >-
+            {{ jenkins_home_dir }}/scripts/dsl-backup-creator.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+            --backup-dir "{{ upgrade_workspace }}/dsl-backup"
+          register: dsl_backup
+          loop: "{{ dsl_upgrade_teams }}"
+
+        - name: Validate DSL syntax and security
+          script: >-
+            {{ jenkins_home_dir }}/scripts/dsl-syntax-validator.sh
+            --dsl-path "{{ dsl_workspace }}"
+            --team {{ item }}
+            --security-check
+          register: dsl_syntax_validation
+          loop: "{{ dsl_upgrade_teams }}"
+
+        - name: Check DSL security compliance
+          script: >-
+            {{ jenkins_home_dir }}/scripts/dsl-security-compliance.sh
+            --dsl-path "{{ dsl_workspace }}"
+            --team {{ item }}
+            --policy-file "{{ jenkins_home_dir }}/security-policies/{{ item }}-policy.json"
+          register: dsl_security_check
+          loop: "{{ dsl_upgrade_teams }}"
+
+        - name: Analyze DSL impact and changes
+          script: >-
+            {{ jenkins_home_dir }}/scripts/dsl-impact-analyzer.sh
+            --new-dsl "{{ dsl_workspace }}"
+            --current-dsl "{{ jenkins_home_dir }}/{{ item }}/{{ upgrade_env }}/job-dsl"
+            --team {{ item }}
+          register: dsl_impact_analysis
+          loop: "{{ dsl_upgrade_teams }}"
+
+        - name: Display DSL validation results
+          debug:
+            msg: |
+              📝 Job DSL Validation Results:
+              ==============================
+              {% for team in dsl_upgrade_teams %}
+              Team: {{ team }}
+              Backup: {{ 'SUCCESS' if dsl_backup.results[loop.index0].rc == 0 else 'FAILED' }}
+              Syntax: {{ 'VALID' if dsl_syntax_validation.results[loop.index0].rc == 0 else 'INVALID' }}
+              Security: {{ 'COMPLIANT' if dsl_security_check.results[loop.index0].rc == 0 else 'NON-COMPLIANT' }}
+              Impact: {{ 'ANALYZED' if dsl_impact_analysis.results[loop.index0].rc == 0 else 'ANALYSIS_FAILED' }}
+              {% endfor %}
+              ==============================
+
+        - name: Abort on DSL validation failure
+          fail:
+            msg: |
+              ❌ Job DSL validation failed for one or more teams!
+              
+              Validation failures:
+              {% for result in dsl_syntax_validation.results %}
+              {% if result.rc != 0 %}
+              - {{ dsl_upgrade_teams[loop.index0] }}: DSL syntax validation failed
+              {% endif %}
+              {% endfor %}
+              {% for result in dsl_security_check.results %}
+              {% if result.rc != 0 %}
+              - {{ dsl_upgrade_teams[loop.index0] }}: Security compliance failed
+              {% endif %}
+              {% endfor %}
+              {% for result in dsl_impact_analysis.results %}
+              {% if result.rc != 0 %}
+              - {{ dsl_upgrade_teams[loop.index0] }}: Impact analysis failed
+              {% endif %}
+              {% endfor %}
+          when: >
+            dsl_syntax_validation.results | selectattr('rc', 'ne', 0) | list | length > 0 or
+            dsl_security_check.results | selectattr('rc', 'ne', 0) | list | length > 0 or
+            dsl_impact_analysis.results | selectattr('rc', 'ne', 0) | list | length > 0
+
+    - name: Deploy DSL configuration to target environment
+      block:
+        - name: Stage DSL configuration files
+          script: >-
+            {{ jenkins_home_dir }}/scripts/dsl-configuration-stager.sh
+            --source "{{ dsl_workspace }}"
+            --target "{{ jenkins_home_dir }}/{{ item }}/{{ upgrade_env }}/job-dsl"
+            --team {{ item }}
+            --validate
+          register: dsl_staging
+          loop: "{{ dsl_upgrade_teams }}"
+
+        - name: Trigger DSL seed job processing
+          uri:
+            url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/job/{{ item }}-seed-job/build"
+            method: POST
+            timeout: 30
+            status_code: [201, 302]
+          register: seed_job_trigger
+          delegate_to: "{{ 'jenkins-' + item + '-' + upgrade_env }}"
+          loop: "{{ dsl_upgrade_teams }}"
+
+        - name: Wait for seed job completion
+          uri:
+            url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/job/{{ item }}-seed-job/lastBuild/api/json"
+            method: GET
+            timeout: 30
+          register: seed_job_status
+          delegate_to: "{{ 'jenkins-' + item + '-' + upgrade_env }}"
+          loop: "{{ dsl_upgrade_teams }}"
+          retries: 20
+          delay: 15
+          until: seed_job_status.json.building == false
+
+        - name: Validate seed job success
+          fail:
+            msg: "DSL seed job failed for team {{ item }}: {{ seed_job_status.json.result }}"
+          when: seed_job_status.json.result != 'SUCCESS'
+          loop: "{{ dsl_upgrade_teams }}"
+          loop_control:
+            index_var: loop_index
+
+        - name: Verify generated jobs
+          script: >-
+            {{ jenkins_home_dir }}/scripts/dsl-job-validator.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+            --expected-jobs "{{ dsl_workspace }}/expected-jobs-{{ item }}.json"
+          register: job_verification
+          loop: "{{ dsl_upgrade_teams }}"
+
+        - name: Test generated job execution
+          script: >-
+            {{ jenkins_home_dir }}/scripts/dsl-job-execution-tester.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+            --test-type dry-run
+          register: job_execution_test
+          loop: "{{ dsl_upgrade_teams }}"
+
+        - name: Validate job security configurations
+          script: >-
+            {{ jenkins_home_dir }}/scripts/job-security-validator.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+            --security-policy "{{ jenkins_home_dir }}/security-policies/{{ item }}-job-policy.json"
+          register: job_security_validation
+          loop: "{{ dsl_upgrade_teams }}"
+
+        - name: Check for job configuration conflicts
+          script: >-
+            {{ jenkins_home_dir }}/scripts/job-conflict-detector.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+          register: job_conflict_check
+          loop: "{{ dsl_upgrade_teams }}"
+
+        - name: Display DSL deployment validation results
+          debug:
+            msg: |
+              🏗️ Job DSL Deployment Validation:
+              ==================================
+              {% for team in dsl_upgrade_teams %}
+              Team: {{ team }}
+              Staging: {{ 'SUCCESS' if dsl_staging.results[loop.index0].rc == 0 else 'FAILED' }}
+              Seed Job: {{ 'SUCCESS' if seed_job_status.results[loop.index0].json.result == 'SUCCESS' else 'FAILED' }}
+              Job Verification: {{ 'PASS' if job_verification.results[loop.index0].rc == 0 else 'FAIL' }}
+              Execution Test: {{ 'PASS' if job_execution_test.results[loop.index0].rc == 0 else 'FAIL' }}
+              Security: {{ 'COMPLIANT' if job_security_validation.results[loop.index0].rc == 0 else 'NON-COMPLIANT' }}
+              Conflicts: {{ 'NONE' if job_conflict_check.results[loop.index0].rc == 0 else 'DETECTED' }}
+              {% endfor %}
+              ==================================
+
+        - name: Run comprehensive DSL integration tests
+          script: >-
+            {{ jenkins_home_dir }}/scripts/dsl-integration-test-suite.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+            --test-suite comprehensive
+          register: dsl_integration_tests
+          loop: "{{ dsl_upgrade_teams }}"
+          when: run_dsl_integration_tests | default(true)
+
+        - name: Fail if DSL deployment validation failed
+          fail:
+            msg: |
+              ❌ Job DSL deployment validation failed for one or more teams!
+              
+              Failed validations:
+              {% for result in job_verification.results %}
+              {% if result.rc != 0 %}
+              - {{ dsl_upgrade_teams[loop.index0] }}: Job verification failed
+              {% endif %}
+              {% endfor %}
+              {% for result in job_execution_test.results %}
+              {% if result.rc != 0 %}
+              - {{ dsl_upgrade_teams[loop.index0] }}: Job execution test failed
+              {% endif %}
+              {% endfor %}
+              {% for result in job_security_validation.results %}
+              {% if result.rc != 0 %}
+              - {{ dsl_upgrade_teams[loop.index0] }}: Job security validation failed
+              {% endif %}
+              {% endfor %}
+              {% for result in job_conflict_check.results %}
+              {% if result.rc != 0 %}
+              - {{ dsl_upgrade_teams[loop.index0] }}: Job conflicts detected
+              {% endif %}
+              {% endfor %}
+          when: >
+            job_verification.results | selectattr('rc', 'ne', 0) | list | length > 0 or
+            job_execution_test.results | selectattr('rc', 'ne', 0) | list | length > 0 or
+            job_security_validation.results | selectattr('rc', 'ne', 0) | list | length > 0 or
+            job_conflict_check.results | selectattr('rc', 'ne', 0) | list | length > 0
+
+    - name: Finalize DSL upgrade
+      block:
+        - name: Update DSL version tracking
+          script: >-
+            {{ jenkins_home_dir }}/scripts/dsl-version-tracker.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+            --source "{{ dsl_source }}"
+            --commit "{{ dsl_git_commit | default('N/A') }}"
+          register: dsl_version_update
+          loop: "{{ dsl_upgrade_teams }}"
+
+        - name: Generate DSL change summary
+          script: >-
+            {{ jenkins_home_dir }}/scripts/dsl-change-summarizer.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+            --backup-dir "{{ upgrade_workspace }}/dsl-backup"
+            --new-dsl "{{ dsl_workspace }}"
+          register: dsl_change_summary
+          loop: "{{ dsl_upgrade_teams }}"
+
+    - name: Record successful DSL upgrade
+      copy:
+        content: |
+          {
+            "timestamp": "{{ ansible_date_time.iso8601 }}",
+            "upgrade_type": "job_dsl",
+            "environment": "{{ upgrade_env }}",
+            "teams": {{ dsl_upgrade_teams | to_json }},
+            "dsl_source": "{{ dsl_source }}",
+            "dsl_git_repo": "{{ dsl_git_repo | default('N/A') }}",
+            "dsl_git_branch": "{{ dsl_git_branch | default('N/A') }}",
+            "deployment_successful": true,
+            "validation_passed": true,
+            "jobs_created": {{ job_verification.results | map(attribute='stdout') | map('from_json') | map(attribute='jobs_created') | sum | default(0) }},
+            "jobs_updated": {{ job_verification.results | map(attribute='stdout') | map('from_json') | map(attribute='jobs_updated') | sum | default(0) }},
+            "jobs_deleted": {{ job_verification.results | map(attribute='stdout') | map('from_json') | map(attribute='jobs_deleted') | sum | default(0) }}
+          }
+        dest: "{{ upgrade_workspace }}/dsl-upgrade-success.json"
+        mode: '0644'
+
+  rescue:
+    - name: Handle DSL upgrade failure
+      block:
+        - name: Restore DSL backup
+          script: >-
+            {{ jenkins_home_dir }}/scripts/dsl-backup-restorer.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+            --backup-dir "{{ upgrade_workspace }}/dsl-backup"
+            --restore-point latest
+          register: dsl_restore
+          loop: "{{ dsl_upgrade_teams }}"
+          ignore_errors: true
+
+        - name: Trigger seed job with restored DSL
+          uri:
+            url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/job/{{ item }}-seed-job/build"
+            method: POST
+            timeout: 30
+            status_code: [201, 302]
+          register: restore_seed_trigger
+          delegate_to: "{{ 'jenkins-' + item + '-' + upgrade_env }}"
+          loop: "{{ dsl_upgrade_teams }}"
+          ignore_errors: true
+
+        - name: Wait for restoration seed job completion
+          uri:
+            url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/job/{{ item }}-seed-job/lastBuild/api/json"
+            method: GET
+            timeout: 30
+          register: restore_seed_status
+          delegate_to: "{{ 'jenkins-' + item + '-' + upgrade_env }}"
+          loop: "{{ dsl_upgrade_teams }}"
+          retries: 10
+          delay: 15
+          until: restore_seed_status.json.building == false
+          ignore_errors: true
+
+        - name: Verify DSL restoration
+          script: >-
+            {{ jenkins_home_dir }}/scripts/dsl-restoration-validator.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+          register: restore_verification
+          loop: "{{ dsl_upgrade_teams }}"
+          ignore_errors: true
+
+        - name: Log DSL upgrade failure
+          copy:
+            content: |
+              {
+                "timestamp": "{{ ansible_date_time.iso8601 }}",
+                "upgrade_type": "job_dsl",
+                "environment": "{{ upgrade_env }}",
+                "teams": {{ dsl_upgrade_teams | to_json }},
+                "dsl_source": "{{ dsl_source }}",
+                "deployment_successful": false,
+                "failed_task": "{{ ansible_failed_task.name | default('unknown') }}",
+                "error_message": "{{ ansible_failed_result.msg | default('unknown error') }}",
+                "rollback_attempted": true,
+                "rollback_successful": {{ dsl_restore.results | selectattr('rc', 'equalto', 0) | list | length == dsl_upgrade_teams | length }}
+              }
+            dest: "{{ upgrade_workspace }}/dsl-upgrade-failure.json"
+            mode: '0644'
+
+        - name: Re-raise DSL upgrade failure
+          fail:
+            msg: |
+              ❌ Job DSL upgrade failed!
+              Environment: {{ upgrade_env }}
+              Teams: {{ dsl_upgrade_teams | join(', ') }}
+              DSL Source: {{ dsl_source }}
+              
+              Rollback Status: {{ 'SUCCESS' if dsl_restore.results | selectattr('rc', 'equalto', 0) | list | length == dsl_upgrade_teams | length else 'PARTIAL/FAILED' }}
+              
+              Check failure details: {{ upgrade_workspace }}/dsl-upgrade-failure.json

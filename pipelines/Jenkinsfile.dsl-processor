@@ -1,0 +1,378 @@
+#!/usr/bin/env groovy
+
+/**
+ * Standard DSL Processor Pipeline
+ * 
+ * This pipeline is used by all team DSL repository processing jobs to:
+ * - Clone external DSL repositories
+ * - Validate DSL scripts for security and syntax
+ * - Execute approved DSL scripts to create jobs
+ * 
+ * Parameters:
+ *   DSL_DIRECTORY - Directory containing DSL scripts (default: dsl)
+ *   ACTION - Action to perform: scan, validate, deploy (default: deploy)  
+ *   DRY_RUN - Perform dry run only (default: false)
+ *   TEAM_NAME - Team name for DSL processing
+ *   REPO_URL - Repository URL for reference
+ */
+
+pipeline {
+    agent { 
+        label "${params.TEAM_NAME}-python python-${params.TEAM_NAME}" 
+    }
+    
+    options {
+        buildDiscarder(logRotator(daysToKeepStr: '30', numToKeepStr: '20'))
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+        skipDefaultCheckout(true)
+    }
+    
+    parameters {
+        string(name: 'DSL_DIRECTORY', defaultValue: 'dsl', description: 'Directory containing DSL scripts')
+        choice(name: 'ACTION', choices: ['deploy', 'validate', 'scan'], description: 'Action to perform')
+        booleanParam(name: 'DRY_RUN', defaultValue: false, description: 'Perform dry run only (validate without creating jobs)')
+        string(name: 'TEAM_NAME', defaultValue: '', description: 'Team name for DSL processing')
+        string(name: 'REPO_URL', defaultValue: '', description: 'Repository URL for reference')
+    }
+    
+    environment {
+        DSL_FILES = ''
+        VALIDATION_ERRORS = '0'
+        SECURITY_VIOLATIONS = '0'
+        JOBS_PROCESSED = '0'
+    }
+    
+    stages {
+        stage('Initialize') {
+            steps {
+                script {
+                    echo """
+                    🚀 DSL Processor Pipeline Started
+                    ====================================
+                    Team: ${params.TEAM_NAME}
+                    Repository: ${params.REPO_URL}
+                    DSL Directory: ${params.DSL_DIRECTORY}
+                    Action: ${params.ACTION}
+                    Dry Run: ${params.DRY_RUN}
+                    Workspace: ${env.WORKSPACE}
+                    ====================================
+                    """
+                    
+                    // Validate required parameters
+                    if (!params.TEAM_NAME) {
+                        error('TEAM_NAME parameter is required')
+                    }
+                    
+                    currentBuild.displayName = "#${env.BUILD_NUMBER} - ${params.TEAM_NAME} - ${params.ACTION}"
+                    currentBuild.description = "DSL ${params.ACTION} for ${params.TEAM_NAME} from ${params.REPO_URL}"
+                }
+            }
+        }
+        
+        stage('Checkout DSL Repository') {
+            steps {
+                script {
+                    echo "📥 Checking out DSL repository..."
+                    
+                    // The SCM checkout is handled by the calling job's SCM configuration
+                    // This stage verifies the checkout was successful
+                    if (!fileExists(params.DSL_DIRECTORY)) {
+                        echo "⚠️  DSL directory '${params.DSL_DIRECTORY}' not found, creating it..."
+                        sh "mkdir -p ${params.DSL_DIRECTORY}"
+                    }
+                    
+                    // List contents for debugging
+                    echo "📂 Repository contents:"
+                    sh "find . -name '*.groovy' -o -name '*.md' -o -name 'Jenkinsfile*' | head -20"
+                }
+            }
+        }
+        
+        stage('Scan DSL Scripts') {
+            steps {
+                script {
+                    echo "🔍 Scanning for DSL scripts in ${params.DSL_DIRECTORY}/"
+                    
+                    def dslFiles = sh(
+                        script: """
+                            find ${params.DSL_DIRECTORY} -name '*.groovy' -type f 2>/dev/null | sort || true
+                        """,
+                        returnStdout: true
+                    ).trim()
+                    
+                    if (dslFiles) {
+                        env.DSL_FILES = dslFiles.replaceAll('\n', ',')
+                        def fileCount = dslFiles.split('\n').size()
+                        echo "📄 Found ${fileCount} DSL files:"
+                        dslFiles.split('\n').each { file ->
+                            echo "   • ${file}"
+                        }
+                    } else {
+                        echo "⚠️ No DSL files found in ${params.DSL_DIRECTORY}/ directory"
+                        env.DSL_FILES = ""
+                    }
+                }
+            }
+        }
+        
+        stage('Validate DSL Scripts') {
+            when {
+                expression { 
+                    return env.DSL_FILES && env.DSL_FILES != "" && 
+                           (params.ACTION == 'validate' || params.ACTION == 'deploy')
+                }
+            }
+            steps {
+                script {
+                    echo "🔧 Validating DSL scripts..."
+                    
+                    def validationErrors = 0
+                    def securityViolations = 0
+                    
+                    env.DSL_FILES.split(',').each { dslFile ->
+                        if (dslFile.trim()) {
+                            echo "📋 Validating ${dslFile}..."
+                            
+                            // Check file exists
+                            if (!fileExists(dslFile)) {
+                                echo "❌ ERROR: DSL file ${dslFile} does not exist"
+                                validationErrors++
+                                return
+                            }
+                            
+                            // Basic syntax validation (simplified - Jenkins has built-in validation)
+                            try {
+                                def content = readFile(dslFile)
+                                if (content.trim().isEmpty()) {
+                                    echo "⚠️ WARNING: DSL file ${dslFile} is empty"
+                                }
+                                echo "✅ Syntax check passed for ${dslFile}"
+                            } catch (Exception e) {
+                                echo "❌ ERROR: Failed to read ${dslFile}: ${e.message}"
+                                validationErrors++
+                            }
+                            
+                            // Security validation
+                            def securityResult = sh(
+                                script: """
+                                    echo "🔒 Security validation for ${dslFile}"
+                                    
+                                    # Check for dangerous patterns
+                                    if grep -q "System\\.exit\\|Runtime\\.getRuntime\\|ProcessBuilder" "${dslFile}"; then
+                                        echo "❌ SECURITY VIOLATION: Dangerous system calls found in ${dslFile}"
+                                        exit 1
+                                    fi
+                                    
+                                    # Check for file system access
+                                    if grep -q "new File\\|FileWriter\\|FileReader" "${dslFile}"; then
+                                        echo "⚠️ WARNING: File system access detected in ${dslFile}"
+                                    fi
+                                    
+                                    # Check for team boundary violations (basic check)
+                                    if grep -q "folder('.*[^${params.TEAM_NAME}].*')" "${dslFile}" && ! grep -q "folder.*${params.TEAM_NAME}" "${dslFile}"; then
+                                        echo "⚠️ WARNING: Potential team boundary violation in ${dslFile}"
+                                    fi
+                                    
+                                    # Check for hardcoded credentials
+                                    if grep -qi "password\\|secret\\|token\\|key.*=" "${dslFile}"; then
+                                        echo "⚠️ WARNING: Potential hardcoded credentials in ${dslFile}"
+                                    fi
+                                    
+                                    echo "✅ Security validation passed for ${dslFile}"
+                                """,
+                                returnStatus: true
+                            )
+                            
+                            if (securityResult != 0) {
+                                echo "❌ Security validation failed for ${dslFile}"
+                                securityViolations++
+                            }
+                        }
+                    }
+                    
+                    env.VALIDATION_ERRORS = validationErrors.toString()
+                    env.SECURITY_VIOLATIONS = securityViolations.toString()
+                    
+                    if (validationErrors > 0 || securityViolations > 0) {
+                        def message = "DSL validation failed: ${validationErrors} validation errors, ${securityViolations} security violations"
+                        if (params.ACTION == 'validate') {
+                            // For validation-only runs, mark as unstable but don't fail
+                            currentBuild.result = 'UNSTABLE'
+                            echo "⚠️ ${message}"
+                        } else {
+                            // For deploy runs, fail the build on validation errors
+                            error(message)
+                        }
+                    } else {
+                        echo "✅ All DSL scripts validated successfully"
+                    }
+                }
+            }
+        }
+        
+        stage('Execute DSL Scripts') {
+            when {
+                expression { 
+                    return env.DSL_FILES && env.DSL_FILES != "" && 
+                           params.ACTION == 'deploy' && 
+                           !params.DRY_RUN &&
+                           env.VALIDATION_ERRORS == '0' && 
+                           env.SECURITY_VIOLATIONS == '0'
+                }
+            }
+            steps {
+                script {
+                    echo "🚀 Executing DSL scripts..."
+                    
+                    def jobsProcessed = 0
+                    
+                    try {
+                        // Convert comma-separated files back to array
+                        def dslFileArray = env.DSL_FILES.split(',').findAll { it.trim() }
+                        
+                        echo "📋 Processing ${dslFileArray.size()} DSL files with Job DSL plugin..."
+                        
+                        // Use Jenkins Job DSL plugin to process all files
+                        jobDsl(
+                            targets: dslFileArray.join(','),
+                            sandbox: true,  // Always run in sandbox for security
+                            removedJobAction: 'IGNORE',  // Don't delete jobs not in DSL
+                            removedViewAction: 'IGNORE', // Don't delete views not in DSL
+                            lookupStrategy: 'JENKINS_ROOT',
+                            additionalParameters: [
+                                teamName: params.TEAM_NAME,
+                                teamDisplayName: params.TEAM_NAME.toLowerCase().capitalize()
+                            ]
+                        )
+                        
+                        jobsProcessed = dslFileArray.size()
+                        env.JOBS_PROCESSED = jobsProcessed.toString()
+                        
+                        echo "✅ Successfully processed ${jobsProcessed} DSL files"
+                        
+                    } catch (Exception e) {
+                        echo "❌ DSL execution failed: ${e.message}"
+                        
+                        // Try to provide more specific error information
+                        if (e.message.contains('script not yet approved for use')) {
+                            echo """
+                            🔒 SCRIPT APPROVAL REQUIRED
+                            
+                            Some DSL scripts require approval in Jenkins:
+                            1. Go to Jenkins → Manage Jenkins → In-process Script Approval
+                            2. Approve the pending scripts
+                            3. Re-run this job
+                            
+                            This is a security feature to prevent unauthorized code execution.
+                            """
+                        }
+                        
+                        throw e
+                    }
+                }
+            }
+        }
+        
+        stage('Dry Run Summary') {
+            when {
+                expression { params.DRY_RUN }
+            }
+            steps {
+                script {
+                    echo """
+                    🔍 DRY RUN SUMMARY
+                    ==================
+                    Team: ${params.TEAM_NAME}
+                    Repository: ${params.REPO_URL}
+                    
+                    DSL Files Found: ${env.DSL_FILES ? env.DSL_FILES.split(',').size() : 0}
+                    Validation Errors: ${env.VALIDATION_ERRORS}
+                    Security Violations: ${env.SECURITY_VIOLATIONS}
+                    
+                    Files that would be processed:
+                    ${env.DSL_FILES ? env.DSL_FILES.split(',').join('\n                    ') : 'None'}
+                    
+                    ℹ️  This was a dry run - no jobs were created or modified.
+                    """
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                // Clean up workspace if needed
+                echo "🧹 Cleaning up..."
+                
+                // Archive DSL files for reference
+                if (env.DSL_FILES) {
+                    try {
+                        archiveArtifacts(
+                            artifacts: "${params.DSL_DIRECTORY}/**/*.groovy",
+                            allowEmptyArchive: true,
+                            fingerprint: true
+                        )
+                    } catch (Exception e) {
+                        echo "⚠️ Could not archive DSL files: ${e.message}"
+                    }
+                }
+            }
+        }
+        
+        success {
+            script {
+                def message = """
+                ✅ DSL PROCESSING COMPLETED SUCCESSFULLY
+                
+                Team: ${params.TEAM_NAME}
+                Action: ${params.ACTION}
+                Files Processed: ${env.DSL_FILES ? env.DSL_FILES.split(',').size() : 0}
+                Jobs Created/Updated: ${env.JOBS_PROCESSED ?: 'N/A'}
+                """
+                
+                echo message
+                
+                // Update build description with results
+                currentBuild.description = """
+                DSL ${params.ACTION} completed - 
+                ${env.DSL_FILES ? env.DSL_FILES.split(',').size() : 0} files, 
+                ${env.JOBS_PROCESSED ?: 0} jobs processed
+                """.replaceAll('\n', ' ')
+            }
+        }
+        
+        failure {
+            script {
+                def message = """
+                ❌ DSL PROCESSING FAILED
+                
+                Team: ${params.TEAM_NAME}
+                Action: ${params.ACTION}
+                Validation Errors: ${env.VALIDATION_ERRORS}
+                Security Violations: ${env.SECURITY_VIOLATIONS}
+                
+                Check the build logs for detailed error information.
+                """
+                
+                echo message
+                currentBuild.description = "DSL ${params.ACTION} failed for ${params.TEAM_NAME}"
+            }
+        }
+        
+        unstable {
+            script {
+                echo """
+                ⚠️ DSL PROCESSING COMPLETED WITH WARNINGS
+                
+                Team: ${params.TEAM_NAME}
+                Validation Errors: ${env.VALIDATION_ERRORS}
+                Security Violations: ${env.SECURITY_VIOLATIONS}
+                
+                Review the validation warnings and fix before deploying.
+                """
+            }
+        }
+    }
+}

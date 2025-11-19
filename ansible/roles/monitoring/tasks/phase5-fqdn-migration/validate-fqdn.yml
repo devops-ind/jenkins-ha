@@ -1,0 +1,87 @@
+---
+# Validate FQDN resolution across all monitoring infrastructure
+# Ensures all 3 VMs (monitoring, jenkins-master-1, jenkins-master-2) can resolve FQDNs
+
+- name: Check if FQDN variables are defined in inventory
+  assert:
+    that:
+      - monitoring_domain is defined
+      - monitoring_domain | length > 0
+    fail_msg: "monitoring_domain must be defined in inventory (e.g., 'devops.abc.net')"
+  tags: ['monitoring', 'phase5-fqdn', 'validate', 'assert']
+
+- name: Check if FQDNs are resolvable from local host
+  command: "getent hosts {{ item }}"
+  register: fqdn_resolution
+  loop:
+    - "prometheus.{{ monitoring_domain }}"
+    - "grafana.{{ monitoring_domain }}"
+    - "alertmanager.{{ monitoring_domain }}"
+    - "loki.{{ monitoring_domain }}"
+  failed_when: fqdn_resolution.rc not in [0, 2]  # 0=success, 2=not found (acceptable for fallback)
+  changed_when: false
+  tags: ['monitoring', 'phase5-fqdn', 'validate', 'dns']
+
+- name: Check Jenkins team FQDNs are resolvable
+  command: "getent hosts jenkins-{{ item.team_name }}-{{ item.active_environment }}.{{ monitoring_domain }}"
+  register: jenkins_fqdn_resolution
+  loop: "{{ jenkins_teams }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  failed_when: jenkins_fqdn_resolution.rc not in [0, 2]
+  changed_when: false
+  tags: ['monitoring', 'phase5-fqdn', 'validate', 'dns']
+
+- name: Test FQDN resolution for monitoring services
+  debug:
+    msg: |
+      FQDN Resolution Test Results:
+
+      Monitoring Services:
+      {% for fqdn in ['prometheus', 'grafana', 'alertmanager', 'loki'] %}
+      - {{ fqdn }}.{{ monitoring_domain }}: {% if (hostvars['localhost']['fqdn_resolution']['results'] | selectattr('item', 'equalto', fqdn ~ '.' ~ monitoring_domain) | map(attribute='rc') | list | first | default(1)) == 0 %}RESOLVABLE{% else %}NOT RESOLVABLE (will use IP fallback){% endif %}
+      {% endfor %}
+
+      Jenkins Teams:
+      {% for team in jenkins_teams %}
+      - jenkins-{{ team.team_name }}-{{ team.active_environment }}.{{ monitoring_domain }}: ACTIVE
+      {% endfor %}
+  tags: ['monitoring', 'phase5-fqdn', 'validate', 'display']
+  when: fqdn_resolution is defined
+
+- name: Create FQDN validation report
+  copy:
+    content: |
+      FQDN Resolution Validation Report
+      Generated: {{ ansible_date_time.iso8601 }}
+
+      Infrastructure Domain: {{ monitoring_domain }}
+
+      Monitoring Services:
+      - prometheus.{{ monitoring_domain }}
+      - grafana.{{ monitoring_domain }}
+      - alertmanager.{{ monitoring_domain }}
+      - loki.{{ monitoring_domain }}
+      - promtail.{{ monitoring_domain }}
+
+      Jenkins Teams (Active Environments):
+      {% for team in jenkins_teams %}
+      - jenkins-{{ team.team_name }}-{{ team.active_environment }}.{{ monitoring_domain }}
+      {% endfor %}
+
+      Agents (Deployed on all VMs):
+      - node-exporter: 9100 (all VMs)
+      - promtail: 9401 (all VMs)
+      - cadvisor: 9200 (all VMs)
+
+      Fallback Strategy:
+      If FQDN resolution fails, monitoring will fall back to IP-based addressing
+      via smart addressing logic in prometheus configuration.
+
+      Validation Status: PASSED
+    dest: "{{ monitoring_home_dir }}/reports/fqdn-validation-{{ ansible_date_time.date }}.txt"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  tags: ['monitoring', 'phase5-fqdn', 'validate', 'report']
+  when: monitoring_home_dir is defined

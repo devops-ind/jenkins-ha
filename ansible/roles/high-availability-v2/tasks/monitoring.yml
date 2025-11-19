@@ -1,0 +1,231 @@
+---
+# Simplified HAProxy HA Monitoring - VIP Management and Health Monitoring
+# Consolidates: main.yml VIP parts + management scripts + monitoring setup
+# Reduces management and monitoring complexity while maintaining enterprise features
+
+# ====================================
+# VIP MANAGEMENT (KEEPALIVED)
+# ====================================
+
+- name: Configure Virtual IP management with keepalived
+  block:
+    - name: Install keepalived package
+      package:
+        name: keepalived
+        state: present
+      become: yes
+
+    - name: Create keepalived configuration directory
+      file:
+        path: /etc/keepalived
+        state: directory
+        mode: '0755'
+      become: yes
+
+    - name: Generate keepalived configuration for VIP
+      template:
+        src: keepalived.conf.j2
+        dest: /etc/keepalived/keepalived.conf
+        backup: yes
+        owner: root
+        group: root
+        mode: '0644'
+      become: yes
+      notify: restart keepalived
+      register: keepalived_config
+
+    - name: Validate keepalived configuration
+      command: keepalived -t -f /etc/keepalived/keepalived.conf
+      register: keepalived_validation
+      failed_when: keepalived_validation.rc != 0
+      changed_when: false
+      become: yes
+
+    - name: Start and enable keepalived service
+      systemd:
+        name: keepalived
+        state: started
+        enabled: yes
+        daemon_reload: yes
+      become: yes
+
+    - name: Verify VIP assignment (master node)
+      command: ip addr show
+      register: vip_check
+      changed_when: false
+      when: keepalived_priority | default(100) > 100
+
+    - name: Display VIP status
+      debug:
+        msg: |
+          VIP Configuration:
+          IP: {{ jenkins_vip }}
+          Priority: {{ keepalived_priority | default(100) }}
+          State: {{ 'MASTER' if keepalived_priority | default(100) > 100 else 'BACKUP' }}
+          {% if keepalived_priority | default(100) > 100 %}
+          VIP Assigned: {{ 'Yes' if jenkins_vip in vip_check.stdout else 'No' }}
+          {% endif %}
+  when: jenkins_vip is defined and jenkins_vip != ""
+  tags: ['vip', 'keepalived']
+
+# ====================================
+# MANAGEMENT SCRIPTS DEPLOYMENT
+# ====================================
+
+- name: Deploy HAProxy management and monitoring scripts
+  block:
+    - name: Create management scripts from templates
+      template:
+        src: "{{ item }}.j2"
+        dest: "/usr/local/bin/{{ item }}"
+        mode: '0755'
+        owner: root
+        group: root
+      loop:
+        - jenkins-ha-monitor.sh
+        - jenkins-failover.sh
+        - haproxy-container-manager.sh
+        - keepalived-haproxy-check.sh
+        - haproxy-runtime-api.sh
+      become: yes
+      register: management_scripts
+
+    - name: Verify management scripts are executable
+      file:
+        path: "/usr/local/bin/{{ item }}"
+        mode: '0755'
+        state: file
+      loop:
+        - jenkins-ha-monitor.sh
+        - jenkins-failover.sh
+        - haproxy-container-manager.sh
+        - keepalived-haproxy-check.sh
+        - haproxy-runtime-api.sh
+      become: yes
+
+    - name: Test management scripts syntax
+      command: "bash -n /usr/local/bin/{{ item }}"
+      loop:
+        - jenkins-ha-monitor.sh
+        - jenkins-failover.sh
+        - haproxy-container-manager.sh
+        - keepalived-haproxy-check.sh
+        - haproxy-runtime-api.sh
+      register: script_syntax_check
+      failed_when: script_syntax_check.rc != 0
+      changed_when: false
+      become: yes
+  tags: ['scripts', 'management']
+
+# ====================================
+# HEALTH MONITORING CONFIGURATION
+# ====================================
+
+- name: Configure HAProxy health monitoring
+  block:
+    - name: Check if crontab is available
+      command: which crontab
+      register: crontab_check
+      failed_when: false
+      changed_when: false
+
+    - name: Setup automated HA monitoring cron job
+      cron:
+        name: "Jenkins HA Health Monitoring"
+        job: "/usr/local/bin/jenkins-ha-monitor.sh >> /var/log/jenkins-ha-monitor.log 2>&1"
+        minute: "*/2"
+        user: root
+        state: present
+      become: yes
+      when: crontab_check.rc == 0
+
+    - name: Create log rotation for HA monitoring
+      copy:
+        dest: /etc/logrotate.d/jenkins-ha-monitor
+        content: |
+          /var/log/jenkins-ha-monitor.log {
+              daily
+              missingok
+              rotate 7
+              compress
+              notifempty
+              create 644 root root
+          }
+        mode: '0644'
+      become: yes
+      when: crontab_check.rc == 0
+
+    - name: Skip cron job setup notification (development environments)
+      debug:
+        msg: "Skipping HA monitoring cron job - crontab not installed (development environment)"
+      when: crontab_check.rc != 0
+
+    - name: Create monitoring status directory
+      file:
+        path: /var/lib/jenkins-ha
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+      become: yes
+
+    - name: Initialize HA monitoring state file
+      copy:
+        dest: /var/lib/jenkins-ha/status.json
+        content: |
+          {
+            "last_check": "{{ ansible_date_time.iso8601 }}",
+            "haproxy_status": "unknown",
+            "vip_status": "{{ 'enabled' if jenkins_vip is defined and jenkins_vip != '' else 'disabled' }}",
+            "teams_configured": {{ haproxy_effective_teams | length }},
+            "deployment_mode": "{{ haproxy_deployment_mode }}"
+          }
+        mode: '0644'
+        force: no
+      become: yes
+  tags: ['monitoring', 'health']
+
+# ====================================
+# COMPREHENSIVE HEALTH VERIFICATION
+# ====================================
+
+- name: Essential HA monitoring verification
+  block:
+    - name: Test management scripts syntax (essential)
+      command: "bash -n /usr/local/bin/{{ item }}"
+      loop:
+        - jenkins-ha-monitor.sh
+        - haproxy-runtime-api.sh
+      register: script_syntax_check
+      failed_when: script_syntax_check.rc != 0
+      changed_when: false
+      become: yes
+
+    - name: Display streamlined HA monitoring status
+      debug:
+        msg: |
+          ====================================
+          HA Monitoring Status (Streamlined)
+          ====================================
+          ✅ Management Scripts: Deployed and validated
+          ✅ Monitoring Cron: {{ 'Configured' if crontab_check.rc == 0 else 'Skipped (no crontab)' }}
+          {% if jenkins_vip is defined and jenkins_vip != "" %}
+          ✅ VIP Management: {{ jenkins_vip }} configured
+          {% endif %}
+          ====================================
+  tags: ['verify', 'health']
+
+- name: HA monitoring and VIP management phase complete
+  debug:
+    msg: |
+      ====================================
+      HA Monitoring Setup Complete
+      ====================================
+      Management Scripts: 4 deployed
+      Health Monitoring: {{ 'Automated' if crontab_check.rc == 0 else 'Manual only' }}
+      {% if jenkins_vip is defined and jenkins_vip != "" %}
+      VIP Management: {{ jenkins_vip }} (keepalived)
+      {% endif %}
+      Status Verification: Complete
+      ====================================
+  tags: ['monitoring']

@@ -1,0 +1,128 @@
+---
+# Streamlined Jenkins Master - Blue-Green Deployment and Health Monitoring
+# Removed redundant tests already covered in docker, common, security roles
+# Focused on essential Jenkins-specific verification only
+
+# ====================================
+# BLUE-GREEN DEPLOYMENT MANAGEMENT
+# ====================================
+
+- name: Generate blue-green management scripts
+  block:
+    - name: Create blue-green state tracking files
+      template:
+        src: blue-green-state.json.j2
+        dest: "{{ jenkins_home_dir }}/{{ item.team_name }}/blue-green-state.json"
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_user }}"
+        mode: '0644'
+      loop: "{{ jenkins_teams_filtered }}"
+      loop_control:
+        label: "{{ item.team_name }}"
+      vars:
+        jenkins_master_config: "{{ item }}"
+
+    - name: Generate team-specific blue-green management scripts
+      template:
+        src: "{{ item.template }}"
+        dest: "{{ jenkins_home_dir }}/scripts/{{ item.name }}-{{ item.team_name }}.sh"
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_user }}"
+        mode: '0755'
+      loop: >-
+        {%- set script_templates = [
+          {'template': 'blue-green-switch.sh.j2', 'name': 'blue-green-switch'},
+          {'template': 'zero-downtime-blue-green-switch.sh.j2', 'name': 'zero-downtime-blue-green-switch'},
+          {'template': 'blue-green-healthcheck.sh.j2', 'name': 'blue-green-healthcheck'},
+          {'template': 'health-monitor.sh.j2', 'name': 'health-monitor'}
+        ] -%}
+        {%- set result = [] -%}
+        {%- for team in jenkins_teams_filtered -%}
+          {%- for script in script_templates -%}
+            {%- set _ = result.append(team | combine({'template': script.template, 'name': script.name})) -%}
+          {%- endfor -%}
+        {%- endfor -%}
+        {{ result }}
+      loop_control:
+        label: "{{ item.team_name }}-{{ item.name }}"
+      vars:
+        jenkins_current_team: "{{ item }}"
+  tags: ['blue-green', 'scripts']
+
+# ====================================
+# ESSENTIAL HEALTH MONITORING
+# ====================================
+
+- name: Essential Jenkins health verification
+  block:
+    - name: Wait for Jenkins containers to initialize (essential)
+      pause:
+        seconds: 15
+
+    - name: Essential Jenkins web interface health check (blue-green aware)
+      uri:
+        url: "http://{{ jenkins_verification_host }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web }}{% else %}{{ item.ports.web + 100 }}{% endif %}/login"
+        method: GET
+        status_code: [200, 403]
+        timeout: 10
+      register: jenkins_web_health
+      until: jenkins_web_health.status in [200, 403]
+      retries: 5
+      delay: 5
+      loop: "{{ jenkins_teams_filtered }}"
+      loop_control:
+        label: "{{ item.team_name }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web }}{% else %}{{ item.ports.web + 100 }}{% endif %}"
+
+    - name: Display streamlined deployment status
+      debug:
+        msg: |
+          ====================================================
+          Jenkins Deployment Status (Streamlined)
+          ====================================================
+          Teams deployed: {{ jenkins_teams_filtered | length }}
+          Web interface tests: {{ jenkins_web_health.results | selectattr('status', 'defined') | selectattr('status', 'in', [200, 403]) | list | length }}/{{ jenkins_teams_filtered | length }} successful
+          Blue-green scripts: {{ jenkins_teams_filtered | length * 4 }} created
+          Resource optimization: Active-only containers (50% savings)
+
+          Team Summary:
+          {% for team in jenkins_teams_filtered %}
+          • {{ team.team_name }}: {{ team.active_environment | upper }} environment
+            URL: http://{{ jenkins_verification_host }}:{% if team.active_environment | default('blue') == 'blue' %}{{ team.ports.web }}{% else %}{{ team.ports.web + 100 }}{% endif %}
+            Scripts: /var/jenkins/scripts/*-{{ team.team_name }}.sh
+          {% endfor %}
+          ====================================================
+
+  rescue:
+    - name: Essential troubleshooting (streamlined)
+      debug:
+        msg: |
+          ❌ Jenkins deployment failed. Quick checks:
+          1. Container status: docker ps --filter "name=jenkins"
+          2. Container logs: docker logs jenkins-{team}-{env} --tail 10
+          3. Port binding: docker port jenkins-{team}-{env}
+          4. Manual test: curl http://{{ jenkins_verification_host }}:{port}/login
+      failed_when: true
+
+  tags: ['health', 'verify', 'essential']
+
+# ====================================
+# DEPLOYMENT STATUS SUMMARY
+# ====================================
+
+- name: Blue-green deployment complete
+  debug:
+    msg: |
+      ====================================
+      Jenkins Blue-Green Deployment Complete
+      ====================================
+      Deployment Mode: Resource-optimized (50% savings)
+      Teams deployed: {{ jenkins_teams_filtered | length }}
+      Management scripts: {{ jenkins_teams_filtered | length * 4 }}
+      Health verification: Essential tests only
+
+      Zero-downtime switching available:
+      {% for team in jenkins_teams_filtered %}
+      /var/jenkins/scripts/zero-downtime-blue-green-switch-{{ team.team_name }}.sh switch
+      {% endfor %}
+      ====================================
+  tags: ['deploy', 'summary']

@@ -1,0 +1,313 @@
+---
+# Dynamic SSL Certificate Generation for HAProxy Multi-Team Setup
+# Generates wildcard and team-specific SSL certificates based on jenkins_teams configuration
+
+- name: Debug SSL certificate generation for HAProxy
+  debug:
+    msg: |
+      Generating SSL certificates for HAProxy multi-team setup:
+      - Domain: {{ jenkins_domain | default('devops.local') }}
+      - Wildcard Domain: {{ jenkins_wildcard_domain | default('*.devops.local') }}
+      - Environment: {{ deployment_environment | default('local') }}
+      - SSL Enabled: {{ ssl_enabled | default(false) }}
+      - Teams: {{ (jenkins_teams | selectattr('team_name', 'defined') | map(attribute='team_name') | list | join(', ')) if (jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0) else 'None' }}
+  tags: ['ssl', 'debug']
+
+- name: Create SSL directories for HAProxy certificates
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: "{{ haproxy_user | default('haproxy') }}"
+  loop:
+    - "{{ ssl_certificate_dir | default('/etc/ssl/certs') }}"
+    - "{{ ssl_private_key_dir | default('/etc/ssl/private') }}"
+    - "{{ ssl_ca_dir | default('/etc/ssl/ca') }}"
+    - "{{ ssl_csr_dir | default('/etc/ssl/csr') }}"
+    - "/etc/haproxy/ssl"
+  become: yes
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'directories']
+
+- name: Set secure permissions on SSL private key directory
+  file:
+    path: "{{ ssl_private_key_dir | default('/etc/ssl/private') }}"
+    mode: '0700'
+    owner: root
+    group: "{{ haproxy_user | default('haproxy') }}"
+  become: yes
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'permissions']
+
+# Generate dynamic Subject Alternative Names (SAN) list based on jenkins_teams
+- name: Generate dynamic SAN list for SSL certificate
+  set_fact:
+    ssl_dynamic_san_list: >-
+      {{ 
+        [
+          "DNS:" + (jenkins_wildcard_domain | default('*.devops.local')),
+          "DNS:" + (jenkins_domain | default('devops.local')),
+          "DNS:jenkins." + (jenkins_domain | default('devops.local'))
+        ] +
+        ((jenkins_teams | selectattr('team_name', 'defined') | map(attribute='team_name') | map('regex_replace', '^(.*)$', 'DNS:\\1jenkins.' + (jenkins_domain | default('devops.local'))) | list) if (jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0) else []) +
+        [
+          "DNS:prometheus." + (jenkins_domain | default('devops.local')),
+          "DNS:grafana." + (jenkins_domain | default('devops.local')), 
+          "DNS:node-exporter." + (jenkins_domain | default('devops.local'))
+        ]
+      }}
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'san-generation']
+
+- name: Display generated SAN list
+  debug:
+    msg: |
+      Generated SSL Certificate SAN list:
+      {% for san in ssl_dynamic_san_list %}
+      - {{ san }}
+      {% endfor %}
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'debug']
+
+- name: Generate wildcard private key for HAProxy
+  openssl_privatekey:
+    path: "{{ ssl_private_key_dir | default('/etc/ssl/private') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.key"
+    size: 2048
+    type: RSA
+    mode: '0600'
+    owner: root
+    group: "{{ haproxy_user | default('haproxy') }}"
+  become: yes
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'private-key']
+
+- name: Generate wildcard certificate signing request for HAProxy
+  openssl_csr:
+    path: "{{ ssl_csr_dir | default('/etc/ssl/csr') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.csr"
+    privatekey_path: "{{ ssl_private_key_dir | default('/etc/ssl/private') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.key"
+    common_name: "{{ jenkins_wildcard_domain | default('*.devops.local') }}"
+    country_name: "{{ ssl_country | default('US') }}"
+    state_or_province_name: "{{ ssl_state | default('California') }}"
+    locality_name: "{{ ssl_city | default('San Francisco') }}"
+    organization_name: "{{ ssl_organization | default('Jenkins HA Infrastructure') }}"
+    organizational_unit_name: "{{ ssl_organizational_unit | default('DevOps Team') }}"
+    email_address: "{{ ssl_email | default('devops@' + (jenkins_domain | default('devops.local'))) }}"
+    subject_alt_name: "{{ ssl_dynamic_san_list }}"
+    key_usage:
+      - digitalSignature
+      - keyEncipherment
+      - nonRepudiation
+    extended_key_usage:
+      - serverAuth
+      - clientAuth
+  become: yes
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'csr']
+
+- name: Generate self-signed wildcard certificate for HAProxy
+  openssl_certificate:
+    path: "{{ ssl_certificate_dir | default('/etc/ssl/certs') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.crt"
+    privatekey_path: "{{ ssl_private_key_dir | default('/etc/ssl/private') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.key"
+    csr_path: "{{ ssl_csr_dir | default('/etc/ssl/csr') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.csr"
+    provider: selfsigned
+    selfsigned_not_after: "+{{ ssl_validity_days | default(365) }}d"
+    selfsigned_digest: sha256
+    mode: '0644'
+    owner: root
+    group: "{{ haproxy_user | default('haproxy') }}"
+  become: yes
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'certificate']
+
+# HAProxy SSL Bundle Generation - Container-Safe Approach
+- name: Create HAProxy SSL certificate bundle (cert + key)
+  shell: |
+    set -euo pipefail
+    CERT_FILE="{{ ssl_certificate_dir | default('/etc/ssl/certs') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.crt"
+    KEY_FILE="{{ ssl_private_key_dir | default('/etc/ssl/private') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.key"
+    BUNDLE_FILE="/etc/haproxy/ssl/wildcard-{{ jenkins_domain | default('devops.local') }}-haproxy.pem"
+    COMBINED_FILE="/etc/haproxy/ssl/combined.pem"
+    
+    # Wait for certificate files to be ready
+    echo "Waiting for SSL certificate files..."
+    for i in {1..30}; do
+      if [[ -f "$CERT_FILE" && -f "$KEY_FILE" && -s "$CERT_FILE" && -s "$KEY_FILE" ]]; then
+        echo "Certificate files are ready."
+        break
+      fi
+      echo "Attempt $i/30: Waiting for certificate files..."
+      sleep 2
+    done
+    
+    # Verify certificate files exist and are readable
+    if [[ ! -f "$CERT_FILE" || ! -f "$KEY_FILE" ]]; then
+      echo "ERROR: Certificate files not found!"
+      exit 1
+    fi
+    
+    # Create the bundle with proper concatenation
+    echo "Creating HAProxy SSL bundle..."
+    cat "$CERT_FILE" "$KEY_FILE" > "$BUNDLE_FILE"
+    
+    # Create direct copy (not symlink) for container compatibility
+    cp "$BUNDLE_FILE" "$COMBINED_FILE"
+    
+    # Verify bundle file is not empty
+    if [[ ! -s "$BUNDLE_FILE" ]]; then
+      echo "ERROR: Generated bundle file is empty!"
+      exit 1
+    fi
+    
+    echo "HAProxy SSL bundle created successfully: $BUNDLE_FILE ($(stat -c%s "$BUNDLE_FILE") bytes)"
+    echo "Combined certificate created: $COMBINED_FILE ($(stat -c%s "$COMBINED_FILE") bytes)"
+  become: yes
+  when: ssl_enabled | default(false)
+  register: ssl_bundle_result
+  tags: ['ssl', 'haproxy-bundle']
+
+- name: Display SSL bundle creation result
+  debug:
+    var: ssl_bundle_result
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'debug']
+
+- name: Set secure permissions on HAProxy SSL files
+  file:
+    path: "{{ item }}"
+    mode: '0600'
+    owner: root
+    group: "{{ haproxy_user | default('haproxy') }}"
+  loop:
+    - "/etc/haproxy/ssl/wildcard-{{ jenkins_domain | default('devops.local') }}-haproxy.pem"
+    - "/etc/haproxy/ssl/combined.pem"
+  become: yes
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'permissions']
+
+- name: Verify SSL certificate bundle integrity
+  shell: |
+    set -euo pipefail
+    BUNDLE_FILE="/etc/haproxy/ssl/combined.pem"
+    
+    echo "Verifying SSL certificate bundle integrity..."
+    
+    # Check file exists and is readable
+    if [[ ! -f "$BUNDLE_FILE" || ! -r "$BUNDLE_FILE" ]]; then
+      echo "ERROR: Bundle file not found or not readable: $BUNDLE_FILE"
+      exit 1
+    fi
+    
+    # Check file size
+    SIZE=$(stat -c%s "$BUNDLE_FILE")
+    if [[ $SIZE -lt 1000 ]]; then
+      echo "ERROR: Bundle file seems too small: $SIZE bytes"
+      exit 1
+    fi
+    
+    # Verify certificate part
+    if ! openssl x509 -in "$BUNDLE_FILE" -noout -text > /dev/null 2>&1; then
+      echo "ERROR: Invalid certificate in bundle file"
+      exit 1
+    fi
+    
+    # Verify private key part
+    if ! openssl rsa -in "$BUNDLE_FILE" -check -noout > /dev/null 2>&1; then
+      echo "ERROR: Invalid private key in bundle file"
+      exit 1
+    fi
+    
+    # Test certificate-key pair matching
+    CERT_MODULUS=$(openssl x509 -noout -modulus -in "$BUNDLE_FILE" | openssl md5)
+    KEY_MODULUS=$(openssl rsa -noout -modulus -in "$BUNDLE_FILE" | openssl md5)
+    
+    if [[ "$CERT_MODULUS" != "$KEY_MODULUS" ]]; then
+      echo "ERROR: Certificate and private key do not match!"
+      exit 1
+    fi
+    
+    echo "SUCCESS: SSL certificate bundle is valid and ready for HAProxy"
+    echo "File: $BUNDLE_FILE ($SIZE bytes)"
+    
+    # Display certificate information
+    echo "Certificate details:"
+    openssl x509 -in "$BUNDLE_FILE" -noout -subject -dates -issuer
+  become: yes
+  when: ssl_enabled | default(false)
+  register: ssl_verification_result
+  tags: ['ssl', 'verification']
+
+- name: Generate dynamic /etc/hosts entries for local testing
+  set_fact:
+    ssl_hosts_entries: >-
+      {{
+        [
+          "127.0.0.1 jenkins." + (jenkins_domain | default('devops.local'))
+        ] +
+        ((jenkins_teams | selectattr('team_name', 'defined') | map(attribute='team_name') | map('regex_replace', '^(.*)$', '127.0.0.1 \\1jenkins.' + (jenkins_domain | default('devops.local'))) | list) if (jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0) else []) +
+        [
+          "127.0.0.1 prometheus." + (jenkins_domain | default('devops.local')),
+          "127.0.0.1 grafana." + (jenkins_domain | default('devops.local')),
+          "127.0.0.1 node-exporter." + (jenkins_domain | default('devops.local'))
+        ]
+      }}
+  when: 
+    - ssl_enabled | default(false)
+    - deployment_environment == 'local'
+  tags: ['ssl', 'hosts-generation']
+
+- name: Display SSL certificate information and setup instructions
+  debug:
+    msg: |
+      ====================================
+      SSL Certificate Configuration Complete
+      ====================================
+      
+      Certificate Details:
+      - Certificate: {{ ssl_certificate_dir | default('/etc/ssl/certs') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.crt
+      - Private Key: {{ ssl_private_key_dir | default('/etc/ssl/private') }}/wildcard-{{ jenkins_domain | default('devops.local') }}.key
+      - HAProxy Bundle: /etc/haproxy/ssl/wildcard-{{ jenkins_domain | default('devops.local') }}-haproxy.pem
+      - Symbolic Link: {{ ssl_certificate_path | default('/etc/haproxy/ssl/combined.pem') }}
+      
+      Wildcard Domain: {{ jenkins_wildcard_domain | default('*.devops.local') }}
+      
+      Supported Team Subdomains:
+      {% if jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0 %}
+      {% for team in jenkins_teams %}
+      {% if team is mapping and team.team_name is defined %}
+      - {{ team.team_name }}jenkins.{{ jenkins_domain | default('devops.local') }} ({{ team.labels.role | default(team.team_name + ' team') if (team.labels is defined and team.labels is mapping) else (team.team_name + ' team') }})
+      {% endif %}
+      {% endfor %}
+      {% else %}
+      - jenkins.{{ jenkins_domain | default('devops.local') }} (default single-team setup)
+      {% endif %}
+      
+      Monitoring Services:
+      - prometheus.{{ jenkins_domain | default('devops.local') }}
+      - grafana.{{ jenkins_domain | default('devops.local') }}
+      - node-exporter.{{ jenkins_domain | default('devops.local') }}
+      
+      {% if deployment_environment == 'local' %}
+      ====================================
+      Local Development Setup
+      ====================================
+      
+      Add these entries to your /etc/hosts file for local testing:
+      {% for entry in ssl_hosts_entries %}
+      {{ entry }}
+      {% endfor %}
+      
+      Then access your services via HTTPS:
+      {% if jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0 %}
+      {% for team in jenkins_teams %}
+      {% if team is mapping and team.team_name is defined %}
+      - https://{{ team.team_name }}jenkins.{{ jenkins_domain | default('devops.local') }}
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+      - https://prometheus.{{ jenkins_domain | default('devops.local') }}
+      - https://grafana.{{ jenkins_domain | default('devops.local') }}
+      {% endif %}
+      ====================================
+  when: ssl_enabled | default(false)
+  tags: ['ssl', 'info']

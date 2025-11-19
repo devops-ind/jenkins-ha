@@ -1,0 +1,149 @@
+# Legacy Jenkins Master Dockerfile (No BuildKit Required)
+# Fallback for environments without Docker BuildKit support
+
+ARG JENKINS_VERSION={{ jenkins_version }}
+FROM jenkins/jenkins:${JENKINS_VERSION}
+
+# Build arguments
+ARG BUILD_DATE
+ARG VCS_REF
+ARG JENKINS_VERSION
+ARG BUILD_NUMBER=${BUILD_NUMBER:-unknown}
+ARG CI_PIPELINE_ID=${CI_PIPELINE_ID:-local}
+
+# Metadata following OCI specification
+LABEL maintainer="DevOps Team" \
+      org.opencontainers.image.title="Jenkins Master HA (Legacy)" \
+      org.opencontainers.image.description="Jenkins Master with HA support (BuildKit-free build)" \
+      org.opencontainers.image.version="${JENKINS_VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      jenkins.version="${JENKINS_VERSION}" \
+      build.number="${BUILD_NUMBER}" \
+      ci.pipeline="${CI_PIPELINE_ID}"
+
+# Switch to root for system-level operations
+USER root
+
+# Install essential packages (without cache mounts)
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    unzip \
+    jq \
+    ca-certificates \
+    gnupg \
+    wget \
+    procps && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Security: Create jenkins user with specific UID/GID for consistency  
+RUN groupmod -g {{ jenkins_gid | default('1002') }} jenkins && \
+    usermod -u {{ jenkins_uid | default('1002') }} -g {{ jenkins_gid | default('1002') }} jenkins
+
+# Create required directories with proper permissions
+RUN mkdir -p /var/jenkins_home/casc_configs \
+             /var/jenkins_home/init.groovy.d \
+             /var/jenkins_home/scripts \
+             /var/jenkins_home/backup \
+             /usr/share/jenkins/ref/plugins && \
+    chown -R jenkins:jenkins /var/jenkins_home /usr/share/jenkins
+
+# Copy plugin configuration
+{% if jenkins_plugin_version_strategy == 'pinned' %}
+COPY plugins-pinned.txt /usr/share/jenkins/ref/plugins.txt
+{% else %}
+COPY plugins.txt /usr/share/jenkins/ref/plugins.txt
+{% endif %}
+
+# Switch to jenkins user for plugin installation
+USER jenkins
+
+# Install plugins with retry logic (legacy approach)
+RUN set -euo pipefail; \
+    \
+    # Function for robust plugin installation without BuildKit caches
+    install_plugins_with_retry() { \
+        local retry_count=0; \
+        local max_retries={{ jenkins_build_retry_count | default('3') }}; \
+        local retry_delay={{ jenkins_build_retry_delay | default('30') }}; \
+        \
+        while [ $retry_count -lt $max_retries ]; do \
+            echo "Plugin installation attempt $((retry_count + 1))/$max_retries"; \
+            \
+            if timeout {{ jenkins_build_timeout | default('1800') }} \
+               jenkins-plugin-cli \
+               --plugin-file /usr/share/jenkins/ref/plugins.txt \
+               --verbose; then \
+                echo "Plugin installation successful"; \
+                return 0; \
+            else \
+                local exit_code=$?; \
+                echo "Plugin installation failed with exit code $exit_code"; \
+                retry_count=$((retry_count + 1)); \
+                \
+                if [ $retry_count -lt $max_retries ]; then \
+                    echo "Retrying in ${retry_delay} seconds..."; \
+                    sleep $retry_delay; \
+                    retry_delay=$((retry_delay * 2)); \
+                else \
+                    echo "Max retries exceeded. Installation failed."; \
+                    return $exit_code; \
+                fi; \
+            fi; \
+        done; \
+    }; \
+    \
+    # Perform plugin installation
+    install_plugins_with_retry
+
+# Verify critical plugins are installed
+RUN set -euo pipefail; \
+    critical_plugins=("configuration-as-code" "workflow-aggregator" "job-dsl" "matrix-auth"); \
+    for plugin in "${critical_plugins[@]}"; do \
+        if [ ! -d "/usr/share/jenkins/ref/plugins/$plugin" ]; then \
+            echo "ERROR: Critical plugin $plugin not found"; \
+            exit 1; \
+        fi; \
+        echo "✓ Critical plugin $plugin installed"; \
+    done
+
+# Copy initialization scripts with enhanced security
+COPY --chown=jenkins:jenkins init-scripts/ /usr/share/jenkins/ref/init.groovy.d/
+
+# Set up Java options for production (legacy compatible)
+ENV JAVA_OPTS="-Djenkins.install.runSetupWizard=false \
+               -Djenkins.model.Jenkins.slaveAgentPort={{ jenkins_agent_port | default('50000') }} \
+               -Djenkins.model.Jenkins.slaveAgentPortEnforce=true \
+               -Dhudson.DNSMultiCast.disabled=true \
+               -Dhudson.model.DirectoryBrowserSupport.CSP='default-src self; script-src self unsafe-inline; style-src self unsafe-inline;' \
+               -Dhudson.model.ParametersAction.keepUndefinedParameters=false \
+               -Dhudson.model.WorkspaceCleanupThread.retainForDays=2 \
+               -Djenkins.model.Jenkins.crumbIssuerProxyCompatibility=false \
+               -Djenkins.security.ApiTokenProperty.adminCanGenerateNewTokens=false \
+               -Djenkins.CLI.disabled=true \
+               -XX:+UseG1GC \
+               -XX:+UseStringDeduplication \
+               -XX:MaxRAMPercentage=75.0 \
+               -Xlog:gc*:gc.log:time,tags"
+
+# Set Jenkins options
+ENV JENKINS_OPTS="--httpPort={{ jenkins_port }} \
+                  --prefix={{ jenkins_context_path | default('') }} \
+                  --sessionTimeout=60 \
+                  --sessionEviction=3600"
+
+# Expose ports
+EXPOSE {{ jenkins_port }} {{ jenkins_agent_port | default('50000') }}
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5m --retries=3 \
+    CMD curl -f http://localhost:{{ jenkins_port }}{{ jenkins_context_path | default('') }}/login || exit 1
+
+# Set working directory
+WORKDIR /var/jenkins_home
+
+# Default command
+CMD ["/usr/bin/tini", "--", "/usr/local/bin/jenkins.sh"]

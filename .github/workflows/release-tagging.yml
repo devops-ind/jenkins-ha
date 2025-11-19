@@ -1,0 +1,497 @@
+name: Release Tagging & Changelog
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - 'examples/**'
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Type of release'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      custom_version:
+        description: 'Custom version (optional, overrides release_type)'
+        required: false
+        type: string
+      skip_tests:
+        description: 'Skip full test suite'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  PYTHON_VERSION: '3.11'
+  ANSIBLE_VERSION: '8.5.0'
+
+permissions:
+  contents: write
+  pull-requests: write
+  packages: write
+
+jobs:
+  # Pre-release validation
+  pre-release-validation:
+    name: Pre-Release Validation
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[release]'))
+    outputs:
+      should-release: ${{ steps.check-release.outputs.should-release }}
+      current-version: ${{ steps.current-version.outputs.version }}
+      next-version: ${{ steps.next-version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check if release should be created
+        id: check-release
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "should-release=true" >> $GITHUB_OUTPUT
+            echo "🚀 Manual release triggered"
+          elif [[ "${{ github.event.head_commit.message }}" == *"[release]"* ]]; then
+            echo "should-release=true" >> $GITHUB_OUTPUT
+            echo "🚀 Release triggered by commit message"
+          else
+            echo "should-release=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ No release trigger found"
+          fi
+
+      - name: Get current version
+        id: current-version
+        run: |
+          # Try to get version from git tags
+          if git describe --tags --abbrev=0 2>/dev/null; then
+            CURRENT_VERSION=$(git describe --tags --abbrev=0 | sed 's/^v//')
+          else
+            CURRENT_VERSION="0.0.0"
+          fi
+          
+          echo "version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+          echo "Current version: ${CURRENT_VERSION}"
+
+      - name: Calculate next version
+        id: next-version
+        run: |
+          CURRENT_VERSION="${{ steps.current-version.outputs.version }}"
+          
+          if [[ -n "${{ github.event.inputs.custom_version }}" ]]; then
+            NEXT_VERSION="${{ github.event.inputs.custom_version }}"
+            echo "Using custom version: ${NEXT_VERSION}"
+          else
+            RELEASE_TYPE="${{ github.event.inputs.release_type || 'patch' }}"
+            
+            # Parse semantic version
+            IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
+            MAJOR=${VERSION_PARTS[0]:-0}
+            MINOR=${VERSION_PARTS[1]:-0}
+            PATCH=${VERSION_PARTS[2]:-0}
+            
+            case $RELEASE_TYPE in
+              "major")
+                MAJOR=$((MAJOR + 1))
+                MINOR=0
+                PATCH=0
+                ;;
+              "minor")
+                MINOR=$((MINOR + 1))
+                PATCH=0
+                ;;
+              "patch")
+                PATCH=$((PATCH + 1))
+                ;;
+            esac
+            
+            NEXT_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          fi
+          
+          echo "version=${NEXT_VERSION}" >> $GITHUB_OUTPUT
+          echo "Next version: ${NEXT_VERSION}"
+
+      - name: Validate version format
+        run: |
+          NEXT_VERSION="${{ steps.next-version.outputs.version }}"
+          
+          if [[ ! "$NEXT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Invalid version format: $NEXT_VERSION"
+            echo "Expected format: X.Y.Z (semantic versioning)"
+            exit 1
+          fi
+          
+          echo "✅ Version format is valid: $NEXT_VERSION"
+
+  # Run tests before release (optional)
+  release-tests:
+    name: Release Test Suite
+    runs-on: ubuntu-latest
+    needs: pre-release-validation
+    if: needs.pre-release-validation.outputs.should-release == 'true' && github.event.inputs.skip_tests != 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible==${{ env.ANSIBLE_VERSION }}
+          pip install -r requirements.txt
+
+      - name: Run syntax validation
+        run: |
+          cd ansible
+          ansible-playbook site.yml --syntax-check
+
+      - name: Run inventory validation
+        run: |
+          cd ansible
+          ansible-inventory -i inventories/local/hosts.yml --list > /dev/null
+          ansible-inventory -i inventories/production/hosts.yml --list > /dev/null
+
+      - name: Run linting
+        run: |
+          pip install ansible-lint pre-commit
+          pre-commit run --all-files || echo "Pre-commit issues found (non-blocking for release)"
+
+  # Generate changelog
+  generate-changelog:
+    name: Generate Changelog
+    runs-on: ubuntu-latest
+    needs: [pre-release-validation, release-tests]
+    if: always() && needs.pre-release-validation.outputs.should-release == 'true'
+    outputs:
+      changelog: ${{ steps.generate-changelog.outputs.changelog }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: generate-changelog
+        run: |
+          NEXT_VERSION="${{ needs.pre-release-validation.outputs.next-version }}"
+          CURRENT_VERSION="${{ needs.pre-release-validation.outputs.current-version }}"
+          
+          echo "📝 Generating changelog for version ${NEXT_VERSION}..."
+          
+          # Get commits since last tag
+          if git rev-list --count HEAD >/dev/null 2>&1; then
+            if [[ "$CURRENT_VERSION" != "0.0.0" ]]; then
+              LAST_TAG="v${CURRENT_VERSION}"
+              if git tag -l | grep -q "^${LAST_TAG}$"; then
+                COMMITS=$(git log ${LAST_TAG}..HEAD --oneline --no-merges)
+              else
+                COMMITS=$(git log --oneline --no-merges -10)  # Last 10 commits if no tag found
+              fi
+            else
+              COMMITS=$(git log --oneline --no-merges -10)  # Last 10 commits for first release
+            fi
+          else
+            COMMITS="Initial release"
+          fi
+          
+          # Create changelog
+          cat > CHANGELOG_SECTION.md << EOF
+          ## [${NEXT_VERSION}] - $(date +%Y-%m-%d)
+          
+          ### What's New in ${NEXT_VERSION}
+          
+          This release includes the following changes since ${CURRENT_VERSION}:
+          
+          ### 🚀 Features & Improvements
+          EOF
+          
+          # Parse commits and categorize
+          echo "$COMMITS" | while IFS= read -r commit; do
+            if [[ -n "$commit" ]]; then
+              # Categorize commits
+              if echo "$commit" | grep -qiE "(feat|feature)"; then
+                echo "- 🚀 $commit" >> CHANGELOG_SECTION.md
+              elif echo "$commit" | grep -qiE "(fix|bug)"; then
+                echo "- 🐛 $commit" >> CHANGELOG_SECTION.md
+              elif echo "$commit" | grep -qiE "(security|sec)"; then
+                echo "- 🔒 $commit" >> CHANGELOG_SECTION.md
+              elif echo "$commit" | grep -qiE "(perf|performance)"; then
+                echo "- ⚡ $commit" >> CHANGELOG_SECTION.md
+              elif echo "$commit" | grep -qiE "(doc|docs)"; then
+                echo "- 📚 $commit" >> CHANGELOG_SECTION.md
+              elif echo "$commit" | grep -qiE "(test|tests)"; then
+                echo "- 🧪 $commit" >> CHANGELOG_SECTION.md
+              elif echo "$commit" | grep -qiE "(ci|cd|github)"; then
+                echo "- 🔧 $commit" >> CHANGELOG_SECTION.md
+              else
+                echo "- 🔄 $commit" >> CHANGELOG_SECTION.md
+              fi
+            fi
+          done
+          
+          # Add technical details
+          cat >> CHANGELOG_SECTION.md << EOF
+          
+          ### 🔧 Technical Details
+          
+          - **Ansible Version**: Tested with Ansible ${{ env.ANSIBLE_VERSION }}
+          - **Python Version**: Compatible with Python ${{ env.PYTHON_VERSION }}+
+          - **Release Date**: $(date +%Y-%m-%d)
+          - **Commit Count**: $(echo "$COMMITS" | wc -l) commits since ${CURRENT_VERSION}
+          
+          ### 📦 Installation
+          
+          \`\`\`bash
+          # Clone the repository
+          git clone https://github.com/${{ github.repository }}.git
+          cd jenkins-ha
+          
+          # Checkout this version
+          git checkout v${NEXT_VERSION}
+          
+          # Set up development environment
+          ./scripts/pre-commit-setup.sh
+          \`\`\`
+          
+          ### 🚀 Quick Start
+          
+          \`\`\`bash
+          # Deploy locally
+          make local
+          
+          # Deploy to production
+          make deploy-production
+          \`\`\`
+          
+          ### 🔗 Full Changelog
+          
+          **Full diff**: https://github.com/${{ github.repository }}/compare/v${CURRENT_VERSION}...v${NEXT_VERSION}
+          EOF
+          
+          # Output for later use
+          CHANGELOG_CONTENT=$(cat CHANGELOG_SECTION.md)
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG_CONTENT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  # Create release
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [pre-release-validation, release-tests, generate-changelog]
+    if: always() && needs.pre-release-validation.outputs.should-release == 'true' && (needs.release-tests.result == 'success' || needs.release-tests.result == 'skipped')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "action@github.com"
+
+      - name: Update CHANGELOG.md
+        run: |
+          NEXT_VERSION="${{ needs.pre-release-validation.outputs.next-version }}"
+          
+          # Create or update CHANGELOG.md
+          if [[ ! -f CHANGELOG.md ]]; then
+            cat > CHANGELOG.md << 'EOF'
+          # Changelog
+          
+          All notable changes to Jenkins HA Infrastructure will be documented in this file.
+          
+          The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+          and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+          
+          EOF
+          fi
+          
+          # Add new version to changelog
+          {
+            head -n 7 CHANGELOG.md
+            echo ""
+            echo "${{ needs.generate-changelog.outputs.changelog }}"
+            echo ""
+            tail -n +8 CHANGELOG.md
+          } > CHANGELOG_NEW.md
+          
+          mv CHANGELOG_NEW.md CHANGELOG.md
+
+      - name: Create version file
+        run: |
+          NEXT_VERSION="${{ needs.pre-release-validation.outputs.next-version }}"
+          
+          # Create VERSION file
+          echo "$NEXT_VERSION" > VERSION
+          
+          # Update version in any Python files if they exist
+          if find . -name "*.py" -exec grep -l "__version__" {} \; 2>/dev/null; then
+            find . -name "*.py" -exec sed -i "s/__version__ = .*/__version__ = \"$NEXT_VERSION\"/" {} \;
+          fi
+
+      - name: Commit version updates
+        run: |
+          NEXT_VERSION="${{ needs.pre-release-validation.outputs.next-version }}"
+          
+          git add CHANGELOG.md VERSION
+          if find . -name "*.py" -exec grep -l "__version__" {} \; 2>/dev/null; then
+            git add $(find . -name "*.py" -exec grep -l "__version__" {} \;)
+          fi
+          
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: release v${NEXT_VERSION}
+
+          - Updated CHANGELOG.md with release notes
+          - Bumped version to ${NEXT_VERSION}
+          
+          [skip ci]"
+          fi
+
+      - name: Create and push tag
+        run: |
+          NEXT_VERSION="${{ needs.pre-release-validation.outputs.next-version }}"
+          TAG_NAME="v${NEXT_VERSION}"
+          
+          # Create annotated tag
+          git tag -a "$TAG_NAME" -m "Release $TAG_NAME
+
+          $(echo '${{ needs.generate-changelog.outputs.changelog }}' | head -20)
+          
+          See CHANGELOG.md for full details."
+          
+          # Push changes and tag
+          git push origin main
+          git push origin "$TAG_NAME"
+          
+          echo "✅ Created and pushed tag: $TAG_NAME"
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ needs.pre-release-validation.outputs.next-version }}
+          release_name: Jenkins HA Infrastructure v${{ needs.pre-release-validation.outputs.next-version }}
+          body: ${{ needs.generate-changelog.outputs.changelog }}
+          draft: false
+          prerelease: false
+
+      - name: Update development branch
+        if: github.ref == 'refs/heads/main'
+        run: |
+          # If there's a develop branch, merge the release back
+          if git show-ref --verify --quiet refs/remotes/origin/develop; then
+            git fetch origin develop
+            git checkout develop
+            git merge main --no-ff -m "chore: merge release v${{ needs.pre-release-validation.outputs.next-version }} into develop"
+            git push origin develop
+            echo "✅ Merged release back to develop branch"
+          else
+            echo "ℹ️ No develop branch found, skipping merge"
+          fi
+
+  # Post-release notifications and cleanup
+  post-release:
+    name: Post-Release Actions
+    runs-on: ubuntu-latest
+    needs: [create-release, pre-release-validation]
+    if: always() && needs.create-release.result == 'success'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate release summary
+        run: |
+          NEXT_VERSION="${{ needs.pre-release-validation.outputs.next-version }}"
+          REPO_URL="https://github.com/${{ github.repository }}"
+          
+          cat > release-summary.md << EOF
+          # 🎉 Release v${NEXT_VERSION} Published!
+          
+          Jenkins HA Infrastructure **v${NEXT_VERSION}** has been successfully released.
+          
+          ## 🔗 Links
+          
+          - **Release Page**: ${REPO_URL}/releases/tag/v${NEXT_VERSION}
+          - **Download**: ${REPO_URL}/archive/refs/tags/v${NEXT_VERSION}.tar.gz
+          - **Diff**: ${REPO_URL}/compare/v${{ needs.pre-release-validation.outputs.current-version }}...v${NEXT_VERSION}
+          
+          ## 📦 What's Included
+          
+          - Complete Jenkins HA infrastructure automation
+          - Blue-green deployment capabilities
+          - Enhanced monitoring and backup systems
+          - Security-hardened configurations
+          - Comprehensive testing framework
+          
+          ## 🚀 Quick Deploy
+          
+          \`\`\`bash
+          # Clone the release
+          git clone --branch v${NEXT_VERSION} ${REPO_URL}.git
+          cd jenkins-ha
+          
+          # Set up and deploy
+          ./scripts/pre-commit-setup.sh
+          make deploy-local
+          \`\`\`
+          
+          ## 🆕 What's New
+          
+          See the [full changelog](${REPO_URL}/blob/v${NEXT_VERSION}/CHANGELOG.md) for details.
+          
+          ---
+          
+          **Release created**: $(date)
+          **Automation**: GitHub Actions
+          EOF
+          
+          cat release-summary.md
+
+      - name: Create release announcement issue
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const version = '${{ needs.pre-release-validation.outputs.next-version }}';
+            
+            if (fs.existsSync('release-summary.md')) {
+              const summary = fs.readFileSync('release-summary.md', 'utf8');
+              
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `🎉 Release v${version} Announcement`,
+                body: summary,
+                labels: ['release', 'announcement']
+              });
+            }
+
+      - name: Display completion message
+        run: |
+          echo "🎉 Release pipeline completed successfully!"
+          echo ""
+          echo "✅ Version ${{ needs.pre-release-validation.outputs.next-version }} has been released"
+          echo "✅ Changelog updated"
+          echo "✅ Git tag created and pushed"
+          echo "✅ GitHub release published"
+          echo "✅ Release announcement created"
+          echo ""
+          echo "🔗 View the release: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.pre-release-validation.outputs.next-version }}"

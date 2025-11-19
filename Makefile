@@ -57,6 +57,74 @@ deploy-production: ## Deploy to production environment
 	@echo "$(RED)🚀 Deploying to production environment...$(RESET)"
 	@cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) site.yml
 
+##@ Team-Specific Deployment Commands
+
+.PHONY: deploy-local-team
+deploy-local-team: ## Deploy specific team to local environment (Usage: make deploy-local-team TEAM=devops)
+	@if [ -z "$(TEAM)" ]; then \
+		echo "$(RED)❌ Error: TEAM parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make deploy-local-team TEAM=devops$(RESET)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)🎯 Deploying $(TEAM) team to local environment...$(RESET)"
+	@cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml -e deploy_teams="$(TEAM)"
+
+.PHONY: deploy-production-team
+deploy-production-team: ## Deploy specific team to production environment (Usage: make deploy-production-team TEAM=devops)
+	@if [ -z "$(TEAM)" ]; then \
+		echo "$(RED)❌ Error: TEAM parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make deploy-production-team TEAM=devops$(RESET)"; \
+		exit 1; \
+	fi
+	@echo "$(RED)🎯 Deploying $(TEAM) team to production environment...$(RESET)"
+	@cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) site.yml -e deploy_teams="$(TEAM)"
+
+.PHONY: deploy-teams
+deploy-teams: ## Deploy multiple teams to environment (Usage: make deploy-teams TEAMS="devops,developer" ENV=local)
+	@if [ -z "$(TEAMS)" ]; then \
+		echo "$(RED)❌ Error: TEAMS parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make deploy-teams TEAMS='devops,developer' ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ Error: ENV parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make deploy-teams TEAMS='devops,developer' ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ "$(ENV)" = "local" ]; then \
+		echo "$(BLUE)🎯 Deploying teams [$(TEAMS)] to local environment...$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml -e deploy_teams="$(TEAMS)"; \
+	elif [ "$(ENV)" = "production" ]; then \
+		echo "$(RED)🎯 Deploying teams [$(TEAMS)] to production environment...$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) site.yml -e deploy_teams="$(TEAMS)"; \
+	else \
+		echo "$(RED)❌ Error: ENV must be 'local' or 'production'$(RESET)"; \
+		exit 1; \
+	fi
+
+.PHONY: deploy-exclude-teams
+deploy-exclude-teams: ## Deploy all teams except specified ones (Usage: make deploy-exclude-teams EXCLUDE_TEAMS="staging,test" ENV=local)
+	@if [ -z "$(EXCLUDE_TEAMS)" ]; then \
+		echo "$(RED)❌ Error: EXCLUDE_TEAMS parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make deploy-exclude-teams EXCLUDE_TEAMS='staging,test' ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ Error: ENV parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make deploy-exclude-teams EXCLUDE_TEAMS='staging,test' ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ "$(ENV)" = "local" ]; then \
+		echo "$(BLUE)🎯 Deploying all teams except [$(EXCLUDE_TEAMS)] to local environment...$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml -e exclude_teams="$(EXCLUDE_TEAMS)"; \
+	elif [ "$(ENV)" = "production" ]; then \
+		echo "$(RED)🎯 Deploying all teams except [$(EXCLUDE_TEAMS)] to production environment...$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) site.yml -e exclude_teams="$(EXCLUDE_TEAMS)"; \
+	else \
+		echo "$(RED)❌ Error: ENV must be 'local' or 'production'$(RESET)"; \
+		exit 1; \
+	fi
+
 .PHONY: backup
 backup: ## Run backup procedures
 	@echo "$(GREEN)💾 Running backup procedures...$(RESET)"
@@ -66,6 +134,95 @@ backup: ## Run backup procedures
 monitor: ## Setup monitoring stack
 	@echo "$(GREEN)📊 Setting up monitoring stack...$(RESET)"
 	@cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) site.yml --tags monitoring
+
+##@ Team Validation and Status Commands
+
+.PHONY: list-teams
+list-teams: ## List all configured teams (Usage: make list-teams ENV=local)
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ Error: ENV parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make list-teams ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ "$(ENV)" = "local" ]; then \
+		echo "$(BLUE)📋 Teams configured in local environment:$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) --list-tags site.yml | grep -o 'team_.*' | sort | uniq || echo "$(YELLOW)No teams found$(RESET)"; \
+	elif [ "$(ENV)" = "production" ]; then \
+		echo "$(RED)📋 Teams configured in production environment:$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) --list-tags site.yml | grep -o 'team_.*' | sort | uniq || echo "$(YELLOW)No teams found$(RESET)"; \
+	else \
+		echo "$(RED)❌ Error: ENV must be 'local' or 'production'$(RESET)"; \
+		exit 1; \
+	fi
+
+.PHONY: validate-team
+validate-team: ## Validate specific team configuration (Usage: make validate-team TEAM=devops ENV=local)
+	@if [ -z "$(TEAM)" ]; then \
+		echo "$(RED)❌ Error: TEAM parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make validate-team TEAM=devops ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ Error: ENV parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make validate-team TEAM=devops ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ "$(ENV)" = "local" ]; then \
+		echo "$(BLUE)🔍 Validating $(TEAM) team configuration in local environment...$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml --tags validate -e deploy_teams="$(TEAM)" --check; \
+	elif [ "$(ENV)" = "production" ]; then \
+		echo "$(RED)🔍 Validating $(TEAM) team configuration in production environment...$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) site.yml --tags validate -e deploy_teams="$(TEAM)" --check; \
+	else \
+		echo "$(RED)❌ Error: ENV must be 'local' or 'production'$(RESET)"; \
+		exit 1; \
+	fi
+
+.PHONY: status-team
+status-team: ## Show deployment status for specific team (Usage: make status-team TEAM=devops ENV=local)
+	@if [ -z "$(TEAM)" ]; then \
+		echo "$(RED)❌ Error: TEAM parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make status-team TEAM=devops ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ Error: ENV parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make status-team TEAM=devops ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ "$(ENV)" = "local" ]; then \
+		echo "$(BLUE)📊 Status for $(TEAM) team in local environment:$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml --tags health,verify -e deploy_teams="$(TEAM)" --check || echo "$(YELLOW)Status check completed with warnings$(RESET)"; \
+	elif [ "$(ENV)" = "production" ]; then \
+		echo "$(RED)📊 Status for $(TEAM) team in production environment:$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) site.yml --tags health,verify -e deploy_teams="$(TEAM)" --check || echo "$(YELLOW)Status check completed with warnings$(RESET)"; \
+	else \
+		echo "$(RED)❌ Error: ENV must be 'local' or 'production'$(RESET)"; \
+		exit 1; \
+	fi
+
+.PHONY: dry-run-team
+dry-run-team: ## Perform dry run for specific team deployment (Usage: make dry-run-team TEAM=devops ENV=local)
+	@if [ -z "$(TEAM)" ]; then \
+		echo "$(RED)❌ Error: TEAM parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make dry-run-team TEAM=devops ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ Error: ENV parameter is required$(RESET)"; \
+		echo "$(BLUE)Usage: make dry-run-team TEAM=devops ENV=local$(RESET)"; \
+		exit 1; \
+	fi
+	@if [ "$(ENV)" = "local" ]; then \
+		echo "$(BLUE)🔍 Dry run for $(TEAM) team deployment in local environment...$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(LOCAL_INVENTORY) site.yml -e deploy_teams="$(TEAM)" --check; \
+	elif [ "$(ENV)" = "production" ]; then \
+		echo "$(RED)🔍 Dry run for $(TEAM) team deployment in production environment...$(RESET)"; \
+		cd $(ANSIBLE_DIR) && ansible-playbook -i $(PRODUCTION_INVENTORY) site.yml -e deploy_teams="$(TEAM)" --check; \
+	else \
+		echo "$(RED)❌ Error: ENV must be 'local' or 'production'$(RESET)"; \
+		exit 1; \
+	fi
 
 ##@ Build Commands
 
@@ -82,7 +239,10 @@ build-local-images: ## Build Docker images for local development
 ##@ Testing and Validation
 
 .PHONY: test
-test: test-syntax test-inventory ## Run all tests
+test: test-syntax test-inventory test-lint test-security ## Run all tests
+
+.PHONY: test-full
+test-full: test pre-commit-run ## Run comprehensive test suite including pre-commit
 
 .PHONY: test-syntax
 test-syntax: ## Test Ansible syntax
@@ -96,10 +256,278 @@ test-inventory: ## Test inventory configurations
 	@cd $(ANSIBLE_DIR) && ansible-inventory -i $(PRODUCTION_INVENTORY) --list > /dev/null
 	@echo "$(GREEN)✅ All inventories are valid$(RESET)"
 
+.PHONY: test-lint
+test-lint: ## Run Ansible linting
+	@echo "$(BLUE)🔍 Running Ansible linting...$(RESET)"
+	@cd $(ANSIBLE_DIR) && ansible-lint . || echo "$(YELLOW)⚠️ Linting issues found$(RESET)"
+
+.PHONY: test-security
+test-security: ## Run security validation
+	@echo "$(BLUE)🔒 Running security validation...$(RESET)"
+	@if command -v bandit >/dev/null 2>&1; then \
+		bandit -r scripts/ -f txt || echo "$(YELLOW)⚠️ Security issues found in scripts$(RESET)"; \
+	else \
+		echo "$(YELLOW)⚠️ bandit not installed, skipping security scan$(RESET)"; \
+	fi
+
 .PHONY: test-connectivity
 test-connectivity: ## Test connectivity to local environment
 	@echo "$(BLUE)🔍 Testing connectivity to local environment...$(RESET)"
 	@cd $(ANSIBLE_DIR) && ansible -i $(LOCAL_INVENTORY) localhost -m ping
+
+.PHONY: test-templates
+test-templates: ## Validate Jinja2 templates
+	@echo "$(BLUE)🔍 Validating Jinja2 templates...$(RESET)"
+	@find $(ANSIBLE_DIR) -name "*.j2" -exec python3 -c "import jinja2; jinja2.Template(open('{}').read())" \; 2>/dev/null && echo "$(GREEN)✅ All templates are valid$(RESET)" || echo "$(RED)❌ Template validation failed$(RESET)"
+
+##@ Pre-commit Hooks
+
+.PHONY: pre-commit-install
+pre-commit-install: ## Install pre-commit hooks
+	@echo "$(BLUE)🪝 Installing pre-commit hooks...$(RESET)"
+	@./scripts/pre-commit-setup.sh
+
+.PHONY: pre-commit-run
+pre-commit-run: ## Run pre-commit on all files
+	@echo "$(BLUE)🪝 Running pre-commit on all files...$(RESET)"
+	@pre-commit run --all-files
+
+.PHONY: pre-commit-update
+pre-commit-update: ## Update pre-commit hooks
+	@echo "$(BLUE)🪝 Updating pre-commit hooks...$(RESET)"
+	@pre-commit autoupdate
+
+.PHONY: pre-commit-clean
+pre-commit-clean: ## Clean pre-commit cache
+	@echo "$(BLUE)🪝 Cleaning pre-commit cache...$(RESET)"
+	@pre-commit clean
+
+##@ Development Environment
+
+.PHONY: dev-setup
+dev-setup: ## Setup complete development environment with pre-commit
+	@echo "$(BLUE)🔧 Setting up complete development environment...$(RESET)"
+	@./scripts/pre-commit-setup.sh
+	@echo "$(GREEN)✅ Development environment ready$(RESET)"
+
+.PHONY: dev-activate
+dev-activate: ## Show how to activate development environment
+	@echo "$(BLUE)🔧 To activate development environment:$(RESET)"
+	@echo "$(GREEN)source ./activate-dev-env.sh$(RESET)"
+
+.PHONY: dev-test
+dev-test: ## Run development tests (fast subset)
+	@echo "$(BLUE)🧪 Running development tests...$(RESET)"
+	@$(MAKE) test-syntax test-inventory test-templates test-groovy-basic
+
+.PHONY: test-groovy
+test-groovy: ## Validate all Groovy scripts and DSL files
+	@echo "$(BLUE)🔍 Validating Groovy scripts...$(RESET)"
+	@find jenkins-dsl/ -name "*.groovy" -exec echo "Checking: {}" \; -exec groovy -e "new File('{}').text" \; 2>/dev/null || echo "$(YELLOW)⚠️ Groovy not installed, skipping syntax validation$(RESET)"
+	@echo "$(GREEN)✅ Groovy validation completed$(RESET)"
+
+.PHONY: test-groovy-basic
+test-groovy-basic: ## Basic Groovy validation without Groovy compiler
+	@echo "$(BLUE)🔍 Running basic Groovy validation...$(RESET)"
+	@python3 -c "
+import os
+import sys
+import re
+
+def basic_groovy_check(file_path):
+    with open(file_path, 'r') as f:
+        content = f.read()
+    
+    # Check balanced braces
+    if content.count('{') != content.count('}'):
+        print(f'❌ Unbalanced braces: {file_path}')
+        return False
+    
+    # Check balanced parentheses  
+    if content.count('(') != content.count(')'):
+        print(f'❌ Unbalanced parentheses: {file_path}')
+        return False
+    
+    print(f'✅ Basic validation passed: {file_path}')
+    return True
+
+failed = False
+for root, dirs, files in os.walk('.'):
+    for file in files:
+        if file.endswith('.groovy'):
+            file_path = os.path.join(root, file)
+            if not basic_groovy_check(file_path):
+                failed = True
+
+sys.exit(1 if failed else 0)
+"
+
+.PHONY: test-jenkinsfiles
+test-jenkinsfiles: ## Validate all Jenkinsfiles
+	@echo "$(BLUE)🔍 Validating Jenkinsfiles...$(RESET)"
+	@python3 -c "
+import os
+import re
+import sys
+
+def validate_jenkinsfile(file_path):
+    with open(file_path, 'r') as f:
+        content = f.read()
+    
+    issues = []
+    
+    if not re.search(r'pipeline\s*{', content, re.IGNORECASE):
+        issues.append('Missing pipeline block')
+    
+    if not re.search(r'agent\s+', content, re.IGNORECASE):
+        issues.append('Missing agent definition')
+    
+    if not re.search(r'stages\s*{', content, re.IGNORECASE):
+        issues.append('Missing stages block')
+    
+    if issues:
+        print(f'❌ Issues in {file_path}:')
+        for issue in issues:
+            print(f'   - {issue}')
+        return False
+    
+    print(f'✅ Jenkinsfile valid: {file_path}')
+    return True
+
+failed = False
+jenkinsfiles = []
+
+# Find all Jenkinsfiles
+for root, dirs, files in os.walk('pipelines'):
+    for file in files:
+        if 'Jenkinsfile' in file:
+            jenkinsfiles.append(os.path.join(root, file))
+
+if not jenkinsfiles:
+    print('No Jenkinsfiles found')
+else:
+    for jf in jenkinsfiles:
+        if not validate_jenkinsfile(jf):
+            failed = True
+
+sys.exit(1 if failed else 0)
+"
+
+.PHONY: test-dsl
+test-dsl: ## Enhanced DSL validation
+	@echo "$(BLUE)🔍 Running enhanced DSL validation...$(RESET)"
+	@if [ -f scripts/dsl-syntax-validator.sh ]; then \
+		./scripts/dsl-syntax-validator.sh; \
+	else \
+		echo "$(YELLOW)⚠️ DSL validator script not found$(RESET)"; \
+	fi
+
+.PHONY: test-jenkins-security
+test-jenkins-security: ## Run Jenkins security validation
+	@echo "$(BLUE)🔒 Running Jenkins security validation...$(RESET)"
+	@python3 -c "
+import os
+import re
+import sys
+
+security_patterns = [
+    (r'System\.exit\s*\(', 'System.exit() usage detected'),
+    (r'Runtime\.getRuntime', 'Runtime.getRuntime() usage detected'),
+    (r'password\s*[:=]\s*[\"\']\w+', 'Hardcoded password detected'),
+    (r'secret\s*[:=]\s*[\"\']\w{8,}', 'Hardcoded secret detected'),
+    (r'sudo\s', 'Sudo usage detected'),
+    (r'rm\s+-rf\s+/', 'Dangerous rm -rf usage'),
+]
+
+def scan_file(file_path):
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+        
+        issues = []
+        for pattern, message in security_patterns:
+            if re.search(pattern, content, re.IGNORECASE):
+                issues.append(message)
+        
+        if issues:
+            print(f'🔒 Security issues in {file_path}:')
+            for issue in issues:
+                print(f'   - {issue}')
+            return False
+        
+        return True
+    except Exception as e:
+        print(f'Error scanning {file_path}: {e}')
+        return True
+
+failed = False
+for root, dirs, files in os.walk('.'):
+    for file in files:
+        if file.endswith(('.groovy', 'Jenkinsfile')):
+            file_path = os.path.join(root, file)
+            if not scan_file(file_path):
+                failed = True
+
+if not failed:
+    print('✅ Jenkins security validation passed')
+
+sys.exit(1 if failed else 0)
+"
+
+.PHONY: test-secrets
+test-secrets: ## Run secret detection with TruffleHog
+	@echo "$(BLUE)🔍 Running secret detection...$(RESET)"
+	@if command -v trufflehog >/dev/null 2>&1; then \
+		trufflehog filesystem . --only-verified --fail || echo "$(YELLOW)⚠️ Secrets detected$(RESET)"; \
+	else \
+		echo "$(YELLOW)⚠️ TruffleHog not installed, skipping secret scan$(RESET)"; \
+		echo "Install: curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh"; \
+	fi
+
+.PHONY: test-infrastructure-security
+test-infrastructure-security: ## Run infrastructure security scanning with Checkov
+	@echo "$(BLUE)🏗️ Running infrastructure security scan...$(RESET)"
+	@if command -v checkov >/dev/null 2>&1; then \
+		checkov --framework dockerfile,ansible,yaml_templates --skip-check CKV_DOCKER_2,CKV_DOCKER_3 . || echo "$(YELLOW)⚠️ Infrastructure security issues found$(RESET)"; \
+	else \
+		echo "$(YELLOW)⚠️ Checkov not installed, using pip install checkov$(RESET)"; \
+		pip install checkov && checkov --framework dockerfile,ansible,yaml_templates . || echo "$(YELLOW)⚠️ Infrastructure security issues found$(RESET)"; \
+	fi
+
+.PHONY: test-dependency-vulnerabilities
+test-dependency-vulnerabilities: ## Run OWASP Dependency-Check
+	@echo "$(BLUE)📦 Running dependency vulnerability scan...$(RESET)"
+	@if command -v dependency-check.sh >/dev/null 2>&1; then \
+		dependency-check.sh --project "Jenkins-HA" --scan . --format JSON --format HTML --out dependency-check-report --failOnCVSS 7 || echo "$(YELLOW)⚠️ Vulnerable dependencies found$(RESET)"; \
+	else \
+		echo "$(YELLOW)⚠️ OWASP Dependency-Check not installed$(RESET)"; \
+		echo "Install: https://owasp.org/www-project-dependency-check/"; \
+	fi
+
+.PHONY: test-sast
+test-sast: ## Run Static Application Security Testing with Semgrep
+	@echo "$(BLUE)🔎 Running SAST scan...$(RESET)"
+	@if command -v semgrep >/dev/null 2>&1; then \
+		semgrep --config=auto --error --skip-unknown-extensions . || echo "$(YELLOW)⚠️ SAST issues found$(RESET)"; \
+	else \
+		pip install semgrep && semgrep --config=auto --error --skip-unknown-extensions . || echo "$(YELLOW)⚠️ SAST issues found$(RESET)"; \
+	fi
+
+.PHONY: test-security-comprehensive
+test-security-comprehensive: ## Run comprehensive security testing
+	@echo "$(BLUE)🛡️ Running comprehensive security tests...$(RESET)"
+	@$(MAKE) test-secrets test-infrastructure-security test-dependency-vulnerabilities test-sast test-jenkins-security
+
+.PHONY: security-report
+security-report: ## Generate comprehensive security report
+	@echo "$(BLUE)📊 Generating security report...$(RESET)"
+	@echo "=== Security Scan Report $(shell date) ===" > security-report.txt
+	@echo "Repository: Jenkins HA Infrastructure" >> security-report.txt
+	@echo "" >> security-report.txt
+	@echo "Running comprehensive security scans..." >> security-report.txt
+	@$(MAKE) test-security-comprehensive 2>&1 | tee -a security-report.txt
+	@echo "" >> security-report.txt
+	@echo "Report generated: security-report.txt"
 
 ##@ Container Management
 

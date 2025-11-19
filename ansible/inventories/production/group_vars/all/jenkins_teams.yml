@@ -1,0 +1,132 @@
+---
+# Jenkins Teams Configuration
+# Single source of truth for all team definitions
+# This file is used by monitoring, jenkins masters, and HAProxy roles
+# to auto-generate team-specific configurations
+
+jenkins_teams:
+  # DevOps Team - Default team
+  - team_name: "devops"
+    display_name: "DevOps Team"
+    description: "Core DevOps operations and infrastructure"
+    blue_green_enabled: true
+    active_environment: "green"
+    ports:
+      web: 8080
+      agent: 50000
+    resources:
+      memory: "2g"
+      cpu: "1.0"
+    env_vars: {}
+    labels:
+      tier: "production"
+      environment: "prod"
+      role: "default"
+    monitoring:
+      alert_severity_threshold: "warning"
+      dashboard_type: "infrastructure"
+      slo_target_availability: "99.5"
+      slo_target_mttr: "15m"
+    jenkins_dsl_repos:
+      - repo_url: "https://github.com/devops-team/jenkins-dsl.git"
+        repo_branch: "main"
+        dsl_directory: "dsl"
+        credentials_id: "devops-git-credentials"
+        scan_schedule: "H/30 * * * *"
+        description: "DevOps team job definitions and pipelines"
+      - repo_url: "https://github.com/shared/common-dsl.git"
+        repo_branch: "main"
+        dsl_directory: "common"
+        credentials_id: "shared-git-credentials"
+        scan_schedule: "H H/4 * * *"
+        description: "Shared common DSL templates and utilities"
+
+  # Marketing Analytics Team
+  - team_name: "ma"
+    display_name: "Marketing Analytics"
+    description: "Marketing analytics and metrics team"
+    blue_green_enabled: true
+    active_environment: "blue"
+    ports:
+      web: 8081
+      agent: 50001
+    resources:
+      memory: "2g"
+      cpu: "1.0"
+    env_vars: {}
+    labels:
+      tier: "production"
+      environment: "prod"
+      role: "marketing-analytics"
+    monitoring:
+      alert_severity_threshold: "warning"
+      dashboard_type: "analytics"
+      slo_target_availability: "99.0"
+      slo_target_mttr: "30m"
+    jenkins_dsl_repos:
+      - repo_url: "https://github.com/ma-team/jenkins-dsl.git"
+        repo_branch: "main"
+        dsl_directory: "dsl"
+        credentials_id: "ma-git-credentials"
+        scan_schedule: "H/45 * * * *"
+        description: "Marketing Analytics team job definitions"
+
+  # Business Analytics Team
+  - team_name: "ba"
+    display_name: "Business Analytics"
+    description: "Business analytics and reporting team"
+    blue_green_enabled: true
+    active_environment: "blue"
+    ports:
+      web: 8082
+      agent: 50002
+    resources:
+      memory: "2g"
+      cpu: "1.0"
+    env_vars: {}
+    labels:
+      tier: "production"
+      environment: "prod"
+      role: "business-analytics"
+    monitoring:
+      alert_severity_threshold: "warning"
+      dashboard_type: "analytics"
+      slo_target_availability: "99.0"
+      slo_target_mttr: "30m"
+    jenkins_dsl_repos:
+      - repo_url: "https://github.com/ba-team/jenkins-dsl.git"
+        repo_branch: "main"
+        dsl_directory: "dsl"
+        credentials_id: "ba-git-credentials"
+        scan_schedule: "H/15 * * * *"
+        description: "Business Analytics team job definitions"
+
+  # Test/QA Team
+  - team_name: "tw"
+    display_name: "Test/QA"
+    description: "Testing, QA, and quality assurance team"
+    blue_green_enabled: true
+    active_environment: "blue"
+    ports:
+      web: 8083
+      agent: 50003
+    resources:
+      memory: "2g"
+      cpu: "1.0"
+    env_vars: {}
+    labels:
+      tier: "production"
+      environment: "prod"
+      role: "test-qa"
+    monitoring:
+      alert_severity_threshold: "info"
+      dashboard_type: "qa"
+      slo_target_availability: "99.5"
+      slo_target_mttr: "20m"
+    jenkins_dsl_repos:
+      - repo_url: "https://github.com/tw-team/jenkins-dsl.git"
+        repo_branch: "main"
+        dsl_directory: "dsl"
+        credentials_id: "tw-git-credentials"
+        scan_schedule: "H/20 * * * *"
+        description: "Test/QA team job definitions and test automation"

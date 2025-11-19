@@ -1,0 +1,511 @@
+# Pre-commit hooks for Jenkins HA Infrastructure
+# Run: pre-commit install to set up hooks
+# Run: pre-commit run --all-files to test all files
+
+fail_fast: false
+minimum_pre_commit_version: '3.0.0'
+
+repos:
+  # Python code quality and formatting
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.md$'
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: ['--unsafe']  # Allow custom YAML tags used in Ansible
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=1024']
+      - id: check-case-conflict
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+      - id: mixed-line-ending
+      - id: requirements-txt-fixer
+
+  # Python formatting
+  - repo: https://github.com/psf/black
+    rev: 23.9.1
+    hooks:
+      - id: black
+        language_version: python3
+        files: '^tests/.*\.py$'
+
+  # Python import sorting
+  - repo: https://github.com/pycqa/isort
+    rev: 5.12.0
+    hooks:
+      - id: isort
+        args: ["--profile", "black"]
+        files: '^tests/.*\.py$'
+
+  # Python linting
+  - repo: https://github.com/pycqa/flake8
+    rev: 6.1.0
+    hooks:
+      - id: flake8
+        args:
+          - '--max-line-length=120'
+          - '--extend-ignore=E203,W503,E501'
+          - '--exclude=.git,__pycache__,venv,build'
+        files: '^tests/.*\.py$'
+
+  # Python security scanning
+  - repo: https://github.com/pycqa/bandit
+    rev: 1.7.5
+    hooks:
+      - id: bandit
+        args: ['-r', 'tests/', '-f', 'json']
+        files: '^tests/.*\.py$'
+
+  # Secret detection
+  - repo: https://github.com/trufflesecurity/trufflehog
+    rev: v3.63.2
+    hooks:
+      - id: trufflehog
+        name: TruffleHog Secret Scanner
+        description: Detect secrets in code
+        entry: trufflehog
+        args:
+          - 'filesystem'
+          - '--directory=.'
+          - '--only-verified'
+          - '--fail'
+        language: system
+        stages: [commit]
+
+  # Infrastructure as Code security
+  - repo: https://github.com/bridgecrewio/checkov
+    rev: 3.1.34
+    hooks:
+      - id: checkov
+        name: Checkov IaC Security Scanner
+        description: Static analysis for infrastructure as code
+        args:
+          - '--framework'
+          - 'dockerfile,ansible,yaml_templates'
+          - '--skip-check'
+          - 'CKV_DOCKER_2,CKV_DOCKER_3'  # Skip some Docker checks that may not apply
+        files: '^(ansible/.*\.(yml|yaml)|.*Dockerfile.*|docker-compose\.yml)$'
+
+  # Advanced SAST scanning
+  - repo: https://github.com/returntocorp/semgrep
+    rev: v1.45.0
+    hooks:
+      - id: semgrep
+        name: Semgrep SAST Scanner
+        description: Static analysis security testing
+        args:
+          - '--config=auto'
+          - '--error'
+          - '--skip-unknown-extensions'
+          - '--exclude=.git'
+          - '--exclude=node_modules'
+        files: '\.(py|js|ts|java|go|rb|php|scala|yaml|yml|json|sh)$'
+
+  # Shell script linting
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.9.0
+    hooks:
+      - id: shellcheck
+        args: ['-e', 'SC1091,SC2034,SC2154']  # Exclude common Ansible/sourcing issues
+        files: '^scripts/.*\.sh$'
+
+  # Shell script formatting
+  - repo: https://github.com/mvdan/sh
+    rev: v3.7.0
+    hooks:
+      - id: shfmt
+        args: ['-i', '2', '-ci', '-w']
+        files: '^scripts/.*\.sh$'
+
+  # Ansible linting
+  - repo: https://github.com/ansible/ansible-lint
+    rev: v6.20.3
+    hooks:
+      - id: ansible-lint
+        files: '^ansible/.*\.(yml|yaml)$'
+        args:
+          - '--exclude=.github/'
+          - '--exclude=tests/'
+          - '--skip-list=yaml[line-length],name[casing],risky-file-permissions'
+
+  # YAML formatting and validation
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.32.0
+    hooks:
+      - id: yamllint
+        args:
+          - '-d'
+          - '{extends: relaxed, rules: {line-length: {max: 120}, document-start: {present: false}}}'
+        files: '^(ansible|tests|\.github)/.*\.(yml|yaml)$'
+
+  # Markdown linting
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.37.0
+    hooks:
+      - id: markdownlint
+        args: ['--fix']
+        files: '^.*\.md$'
+
+  # Local custom hooks
+  - repo: local
+    hooks:
+      # Ansible playbook syntax check
+      - id: ansible-syntax
+        name: Ansible Playbook Syntax Check
+        entry: bash -c 'cd ansible && ansible-playbook --syntax-check site.yml'
+        language: system
+        files: '^ansible/.*\.(yml|yaml)$'
+        pass_filenames: false
+
+      # Ansible inventory validation
+      - id: ansible-inventory
+        name: Ansible Inventory Validation
+        entry: bash -c 'cd ansible && ansible-inventory -i inventories/local/hosts.yml --list > /dev/null'
+        language: system
+        files: '^ansible/inventories/.*\.(yml|yaml)$'
+        pass_filenames: false
+
+      # Groovy syntax validation (all .groovy files)
+      - id: groovy-syntax
+        name: Groovy Syntax Validation
+        entry: python3 -c "
+import sys
+import subprocess
+import tempfile
+import os
+
+def validate_groovy_syntax(file_path):
+    '''Validate Groovy syntax using groovyc compiler'''
+    try:
+        # Check if groovy is available
+        result = subprocess.run(['groovy', '--version'], capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            print(f'WARNING: Groovy not installed, skipping syntax check for {file_path}')
+            return True
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        print(f'WARNING: Groovy not available, skipping syntax check for {file_path}')
+        return True
+    
+    try:
+        # Use groovy to check syntax
+        result = subprocess.run(['groovy', '-e', f'new File(\"{file_path}\").text'], 
+                              capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            print(f'✅ Groovy syntax valid: {file_path}')
+            return True
+        else:
+            print(f'❌ Groovy syntax error in {file_path}: {result.stderr}')
+            return False
+    except subprocess.TimeoutExpired:
+        print(f'❌ Groovy syntax check timeout for {file_path}')
+        return False
+    except Exception as e:
+        print(f'❌ Error validating Groovy syntax in {file_path}: {e}')
+        return False
+
+failed = False
+for file_path in sys.argv[1:]:
+    if not validate_groovy_syntax(file_path):
+        failed = True
+
+sys.exit(1 if failed else 0)
+"
+        language: system
+        files: '^.*\.groovy$'
+
+      # Jenkinsfile validation
+      - id: jenkinsfile-validation
+        name: Jenkinsfile Pipeline Validation
+        entry: python3 -c "
+import sys
+import re
+import os
+
+def validate_jenkinsfile(file_path):
+    '''Basic Jenkinsfile structure and syntax validation'''
+    try:
+        with open(file_path, 'r') as f:
+            content = f.read()
+        
+        # Check for basic pipeline structure
+        if not re.search(r'pipeline\s*{', content, re.IGNORECASE):
+            print(f'❌ Jenkinsfile missing pipeline block: {file_path}')
+            return False
+        
+        # Check for agent definition
+        if not re.search(r'agent\s+{|agent\s+\w+', content, re.IGNORECASE):
+            print(f'⚠️ Jenkinsfile missing agent definition: {file_path}')
+        
+        # Check for stages
+        if not re.search(r'stages\s*{', content, re.IGNORECASE):
+            print(f'❌ Jenkinsfile missing stages block: {file_path}')
+            return False
+        
+        # Check for stage definitions
+        if not re.search(r'stage\s*\([^)]+\)', content, re.IGNORECASE):
+            print(f'❌ Jenkinsfile missing stage definitions: {file_path}')
+            return False
+        
+        # Security checks
+        security_issues = []
+        
+        # Check for hardcoded credentials
+        if re.search(r'password\s*[:=]\s*[\"\']\w+', content, re.IGNORECASE):
+            security_issues.append('Potential hardcoded password')
+        
+        if re.search(r'token\s*[:=]\s*[\"\']\w{8,}', content, re.IGNORECASE):
+            security_issues.append('Potential hardcoded token')
+        
+        # Check for unsafe shell operations
+        if re.search(r'sh\s+[\"\']\s*rm\s+-rf\s+/', content):
+            security_issues.append('Dangerous rm -rf / command detected')
+        
+        if re.search(r'sudo.*sh|sh.*sudo', content):
+            security_issues.append('Sudo usage in shell commands')
+        
+        if security_issues:
+            for issue in security_issues:
+                print(f'🔒 SECURITY: {file_path}: {issue}')
+            return False
+        
+        print(f'✅ Jenkinsfile structure valid: {file_path}')
+        return True
+        
+    except Exception as e:
+        print(f'❌ Error validating Jenkinsfile {file_path}: {e}')
+        return False
+
+failed = False
+for file_path in sys.argv[1:]:
+    if not validate_jenkinsfile(file_path):
+        failed = True
+
+sys.exit(1 if failed else 0)
+"
+        language: system
+        files: '^.*Jenkinsfile.*$'
+
+      # Enhanced DSL syntax validation
+      - id: dsl-validation
+        name: Jenkins DSL Syntax Validation
+        entry: scripts/dsl-syntax-validator.sh
+        language: system
+        files: '^jenkins-dsl/.*\.groovy$'
+        pass_filenames: false
+
+      # OWASP Dependency Check
+      - id: owasp-dependency-check
+        name: OWASP Dependency Check
+        entry: python3 -c "
+import subprocess
+import sys
+import os
+
+def run_dependency_check():
+    '''Run OWASP Dependency Check for known vulnerabilities'''
+    try:
+        # Check if dependency-check is available
+        result = subprocess.run(['dependency-check.sh', '--version'], capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            print('INFO: OWASP Dependency-Check not installed, skipping scan')
+            print('Install: https://owasp.org/www-project-dependency-check/')
+            return True
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        print('INFO: OWASP Dependency-Check not available, skipping scan')
+        return True
+    
+    try:
+        # Scan project dependencies
+        scan_dirs = ['requirements.txt', 'package.json', 'pom.xml', 'build.gradle']
+        found_deps = False
+        
+        for dep_file in scan_dirs:
+            if os.path.exists(dep_file):
+                found_deps = True
+                break
+        
+        if not found_deps:
+            print('INFO: No dependency files found to scan')
+            return True
+        
+        print('🔍 Running OWASP Dependency-Check scan...')
+        result = subprocess.run([
+            'dependency-check.sh',
+            '--project', 'Jenkins-HA-Infrastructure',
+            '--scan', '.',
+            '--format', 'JSON',
+            '--format', 'HTML',
+            '--out', 'dependency-check-report',
+            '--failOnCVSS', '7',
+            '--exclude', '**/*.git/**',
+            '--exclude', '**/node_modules/**',
+            '--exclude', '**/.venv/**'
+        ], capture_output=True, text=True, timeout=300)
+        
+        if result.returncode == 0:
+            print('✅ OWASP Dependency-Check passed')
+            return True
+        else:
+            print(f'❌ OWASP Dependency-Check found vulnerabilities: {result.stdout}')
+            print(f'Error output: {result.stderr}')
+            return False
+            
+    except subprocess.TimeoutExpired:
+        print('❌ OWASP Dependency-Check timeout')
+        return False
+    except Exception as e:
+        print(f'❌ Error running OWASP Dependency-Check: {e}')
+        return False
+
+if not run_dependency_check():
+    sys.exit(1)
+"
+        language: system
+        pass_filenames: false
+        files: '^(requirements\.txt|package\.json|pom\.xml|build\.gradle)$'
+
+      # Jenkins pipeline security scan
+      - id: jenkins-security-scan
+        name: Jenkins Pipeline Security Scan
+        entry: python3 -c "
+import sys
+import re
+
+# Enhanced security patterns for Jenkins pipelines
+JENKINS_SECURITY_PATTERNS = [
+    (r'System\.exit\s*\(', 'System.exit() usage (can terminate Jenkins)'),
+    (r'Runtime\.getRuntime\s*\(\)', 'Runtime.getRuntime() usage detected'),
+    (r'ProcessBuilder', 'ProcessBuilder usage (potential security risk)'),
+    (r'@Grab\s*\(', 'Dynamic dependency loading with @Grab'),
+    (r'evaluate\s*\(', 'Code evaluation with evaluate()'),
+    (r'GroovyShell\s*\(\)', 'GroovyShell instantiation'),
+    (r'script\s*\{[^}]*sh\s+[\"\']\s*curl.*\|.*sh', 'Piping curl to shell'),
+    (r'withCredentials.*password.*echo', 'Potential credential exposure in echo'),
+    (r'env\.[A-Z_]*PASSWORD', 'Password in environment variable'),
+    (r'params\.[A-Z_]*SECRET', 'Secret in pipeline parameter'),
+    (r'sh\s+[\"\']\s*rm\s+-rf\s+\$\{', 'Dangerous rm -rf with variable expansion'),
+    (r'deleteDir\s*\(\s*\)', 'Workspace deletion without safeguards'),
+    (r'checkout.*credentialsId.*password', 'Checkout with password credentials'),
+    (r'node\s*\(\s*[\"\']\s*master', 'Execution on master node'),
+    (r'agent\s+any.*sh.*sudo', 'Sudo usage with any agent'),
+]
+
+failed = False
+for file_path in sys.argv[1:]:
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+            for pattern, message in JENKINS_SECURITY_PATTERNS:
+                matches = re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE)
+                for match in matches:
+                    line_num = content[:match.start()].count('\n') + 1
+                    print(f'🔒 JENKINS_SECURITY: {file_path}:{line_num}: {message}')
+                    failed = True
+    except Exception as e:
+        print(f'Error scanning {file_path}: {e}')
+
+sys.exit(1 if failed else 0)
+"
+        language: system
+        files: '^(.*Jenkinsfile.*|jenkins-dsl/.*\.groovy|pipelines/.*\.groovy)$'
+
+      # Template validation (Jinja2)
+      - id: jinja2-validation
+        name: Jinja2 Template Validation
+        entry: python3 -c "
+import sys
+import jinja2
+from pathlib import Path
+
+def validate_template(file_path):
+    try:
+        with open(file_path, 'r') as f:
+            template_content = f.read()
+        # Basic syntax validation
+        jinja2.Template(template_content, undefined=jinja2.StrictUndefined)
+        return True
+    except jinja2.exceptions.TemplateError as e:
+        print(f'Template error in {file_path}: {e}')
+        return False
+    except Exception as e:
+        print(f'Error validating {file_path}: {e}')
+        return False
+
+failed = False
+for file_path in sys.argv[1:]:
+    if not validate_template(file_path):
+        failed = True
+
+sys.exit(1 if failed else 0)
+"
+        language: system
+        files: '^ansible/roles/.*/templates/.*\.j2$'
+
+      # Security pattern detection
+      - id: security-patterns
+        name: Security Pattern Detection
+        entry: python3 -c "
+import sys
+import re
+
+# Security patterns to detect
+SECURITY_PATTERNS = [
+    (r'password\s*=\s*[\"\\'][^\"\\']', 'Hardcoded password detected'),
+    (r'secret\s*=\s*[\"\\'][^\"\\']', 'Hardcoded secret detected'),
+    (r'api[_-]?key\s*=\s*[\"\\'][^\"\\']', 'Hardcoded API key detected'),
+    (r'token\s*=\s*[\"\\'][^\"\\']', 'Hardcoded token detected'),
+    (r'(?i)(aws_access_key_id|aws_secret_access_key)', 'AWS credentials detected'),
+    (r'(?i)(private[_-]?key)', 'Private key reference detected'),
+    (r'System\.exit\(', 'System.exit() usage detected in Groovy'),
+    (r'Runtime\.getRuntime\(\)', 'Runtime.getRuntime() usage detected'),
+    (r'eval\s*\(', 'eval() usage detected'),
+]
+
+failed = False
+for file_path in sys.argv[1:]:
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+            for pattern, message in SECURITY_PATTERNS:
+                if re.search(pattern, content, re.IGNORECASE):
+                    print(f'SECURITY: {file_path}: {message}')
+                    failed = True
+    except Exception as e:
+        print(f'Error scanning {file_path}: {e}')
+
+sys.exit(1 if failed else 0)
+"
+        language: system
+        files: '\.(py|groovy|yml|yaml|sh|j2)$'
+
+      # Makefile validation
+      - id: makefile-validation
+        name: Makefile Syntax Validation
+        entry: bash -c 'make -n help > /dev/null'
+        language: system
+        files: '^Makefile$'
+        pass_filenames: false
+
+      # Large file detection
+      - id: large-files
+        name: Large File Detection
+        entry: python3 -c "
+import sys
+import os
+
+MAX_SIZE = 1024 * 1024  # 1MB
+
+failed = False
+for file_path in sys.argv[1:]:
+    if os.path.getsize(file_path) > MAX_SIZE:
+        print(f'Large file detected: {file_path} ({os.path.getsize(file_path)} bytes)')
+        failed = True
+
+sys.exit(1 if failed else 0)
+"
+        language: system
+        exclude: '\.(zip|tar|gz|jpg|png|pdf)$'

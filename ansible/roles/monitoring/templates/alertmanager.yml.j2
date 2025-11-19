@@ -1,33 +1,345 @@
 global:
-  smtp_smarthost: 'localhost:587'
-  smtp_from: 'alerts@{{ inventory_hostname | default("jenkins-infrastructure") }}'
+  resolve_timeout: 5m
 
+# Main routing configuration
 route:
-  group_by: ['alertname', 'service']
-  group_wait: 10s
-  group_interval: 10s
-  repeat_interval: 1h
-  receiver: 'default-receiver'
+  receiver: 'default-teams'
+  group_by: ['alertname', 'service', 'team']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 12h
+
   routes:
-  - match:
-      severity: critical
-    receiver: 'critical-receiver'
+{% if teams_notifications_enabled | default(true) %}
+    # Jenkins build failure alerts (immediate notification)
+    - match:
+        alert_type: build_failure
+      receiver: 'jenkins-build-failures'
+      group_by: ['team', 'job_name']
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 1h
+      continue: false
 
+    # Jenkins error rate alerts
+    - match:
+        alert_type: error_rate
+      receiver: 'jenkins-errors'
+      group_by: ['team', 'job_name']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      continue: false
+
+    # Severity-based routing
+    - match:
+        severity: critical
+      receiver: '{% if teams_notification_strategy == "single" %}teams-critical{% else %}teams-critical-multi{% endif %}'
+      continue: true
+      group_wait: 10s
+      repeat_interval: 4h
+
+    - match:
+        severity: warning
+      receiver: '{% if teams_notification_strategy == "single" %}teams-warning{% else %}teams-warning-multi{% endif %}'
+      continue: false
+      repeat_interval: 12h
+
+    - match:
+        severity: info
+      receiver: '{% if teams_notification_strategy == "single" %}teams-info{% else %}teams-info-multi{% endif %}'
+      continue: false
+      repeat_interval: 24h
+
+{% if teams_notification_strategy in ["per-team", "hybrid"] %}
+    # Per-team routing (for hybrid/per-team strategies)
+{% for team_name, team_config in teams_webhooks.items() %}
+{% if team_config.enabled | default(true) %}
+    - match:
+        team: {{ team_name }}
+      receiver: 'teams-{{ team_name }}'
+      continue: {{ 'true' if teams_notification_strategy == "hybrid" else 'false' }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endif %}
+
+# Receiver definitions
 receivers:
-- name: 'default-receiver'
-  webhook_configs:
-  - url: 'http://localhost:5001/webhook'
-    send_resolved: true
+  # Jenkins build failure receiver
+  - name: 'jenkins-build-failures'
+{% if teams_webhook_warning %}
+    msteams_configs:
+      - webhook_url: '{{ teams_webhook_warning }}'
+        send_resolved: true
+        title: '❌ Jenkins Build Failed'
+        text: |
+          **Job:** {{ '{{' }} .CommonLabels.job_name {{ '}}' }}
+          **Build Number:** {{ '{{' }} .CommonLabels.build_number {{ '}}' }}
+          **Team:** {{ '{{' }} .CommonLabels.team | title {{ '}}' }}
+          **Environment:** {{ '{{' }} .CommonLabels.environment {{ '}}' }}
 
-- name: 'critical-receiver'
-  webhook_configs:
-  - url: 'http://localhost:5001/webhook'
-    send_resolved: true
-  # Add email or other notification methods here as needed
+          **Summary:** {{ '{{' }} .CommonAnnotations.summary {{ '}}' }}
+          **Description:** {{ '{{' }} .CommonAnnotations.description {{ '}}' }}
 
+          **Jenkins Console:** {{ '{{' }} .CommonAnnotations.jenkins_url {{ '}}' }}
+          **Grafana Logs:** {{ '{{' }} .CommonAnnotations.dashboard_url {{ '}}' }}
+
+          **Time:** {{ '{{' }} .CommonAnnotations.timestamp | default "now" {{ '}}' }}
+{% else %}
+    webhook_configs:
+      - url: 'http://localhost:5001/webhook'
+        send_resolved: true
+{% endif %}
+
+  # Jenkins error rate receiver
+  - name: 'jenkins-errors'
+{% if teams_webhook_warning %}
+    msteams_configs:
+      - webhook_url: '{{ teams_webhook_warning }}'
+        send_resolved: true
+        title: '⚠️ High Error Rate in Jenkins Build'
+        text: |
+          **Job:** {{ '{{' }} .CommonLabels.job_name {{ '}}' }}
+          **Team:** {{ '{{' }} .CommonLabels.team | title {{ '}}' }}
+
+          **Summary:** {{ '{{' }} .CommonAnnotations.summary {{ '}}' }}
+          **Description:** {{ '{{' }} .CommonAnnotations.description {{ '}}' }}
+
+          **Dashboard:** {{ '{{' }} .CommonAnnotations.dashboard_url {{ '}}' }}
+{% else %}
+    webhook_configs:
+      - url: 'http://localhost:5001/webhook'
+        send_resolved: true
+{% endif %}
+
+  # Default receiver
+  - name: 'default-teams'
+{% if teams_notifications_enabled | default(true) and teams_webhook_info %}
+    msteams_configs:
+      - webhook_url: '{{ teams_webhook_info }}'
+        send_resolved: true
+        title: 'Jenkins Infrastructure Alert'
+        text: |
+          **Alert:** {{ '{{' }} .GroupLabels.alertname {{ '}}' }}
+          **Severity:** {{ '{{' }} .GroupLabels.severity | toUpper {{ '}}' }}
+          **Summary:** {{ '{{' }} .CommonAnnotations.summary {{ '}}' }}
+          **Description:** {{ '{{' }} .CommonAnnotations.description {{ '}}' }}
+{% else %}
+    webhook_configs:
+      - url: 'http://localhost:5001/webhook'
+        send_resolved: true
+{% endif %}
+
+{% if teams_notifications_enabled | default(true) %}
+{% if teams_notification_strategy == "single" %}
+  # Single webhook per severity level
+  - name: 'teams-critical'
+{% if teams_webhook_critical %}
+    msteams_configs:
+      - webhook_url: '{{ teams_webhook_critical }}'
+        send_resolved: true
+        title: '🚨 CRITICAL ALERT - Jenkins Infrastructure'
+        text: |
+          **Alert:** {{ '{{' }} .GroupLabels.alertname {{ '}}' }}
+          **Severity:** CRITICAL
+          **Team:** {{ '{{' }} .CommonLabels.team | default "infrastructure" | title {{ '}}' }}
+          **Service:** {{ '{{' }} .CommonLabels.service | default "unknown" {{ '}}' }}
+          **Instance:** {{ '{{' }} .CommonLabels.instance | default "N/A" {{ '}}' }}
+
+          **Summary:** {{ '{{' }} .CommonAnnotations.summary {{ '}}' }}
+          **Description:** {{ '{{' }} .CommonAnnotations.description {{ '}}' }}
+
+          **Firing Alerts:** {{ '{{' }} .Alerts.Firing | len {{ '}}' }}
+          **Time:** {{ '{{' }} .CommonAnnotations.timestamp | default "now" {{ '}}' }}
+{% else %}
+    webhook_configs:
+      - url: 'http://localhost:5001/webhook'
+        send_resolved: true
+{% endif %}
+
+  - name: 'teams-warning'
+{% if teams_webhook_warning %}
+    msteams_configs:
+      - webhook_url: '{{ teams_webhook_warning }}'
+        send_resolved: true
+        title: '⚠️ WARNING - Jenkins Infrastructure'
+        text: |
+          **Alert:** {{ '{{' }} .GroupLabels.alertname {{ '}}' }}
+          **Severity:** WARNING
+          **Team:** {{ '{{' }} .CommonLabels.team | default "infrastructure" | title {{ '}}' }}
+          **Service:** {{ '{{' }} .CommonLabels.service | default "unknown" {{ '}}' }}
+          **Instance:** {{ '{{' }} .CommonLabels.instance | default "N/A" {{ '}}' }}
+
+          **Summary:** {{ '{{' }} .CommonAnnotations.summary {{ '}}' }}
+          **Description:** {{ '{{' }} .CommonAnnotations.description {{ '}}' }}
+
+          **Firing Alerts:** {{ '{{' }} .Alerts.Firing | len {{ '}}' }}
+{% else %}
+    webhook_configs:
+      - url: 'http://localhost:5001/webhook'
+        send_resolved: true
+{% endif %}
+
+  - name: 'teams-info'
+{% if teams_webhook_info %}
+    msteams_configs:
+      - webhook_url: '{{ teams_webhook_info }}'
+        send_resolved: true
+        title: 'ℹ️ INFO - Jenkins Infrastructure'
+        text: |
+          **Alert:** {{ '{{' }} .GroupLabels.alertname {{ '}}' }}
+          **Severity:** INFO
+          **Team:** {{ '{{' }} .CommonLabels.team | default "infrastructure" | title {{ '}}' }}
+          **Service:** {{ '{{' }} .CommonLabels.service | default "unknown" {{ '}}' }}
+
+          **Summary:** {{ '{{' }} .CommonAnnotations.summary {{ '}}' }}
+{% else %}
+    webhook_configs:
+      - url: 'http://localhost:5001/webhook'
+        send_resolved: true
+{% endif %}
+
+{% else %}
+  # Multi-webhook strategy (per-team or hybrid)
+  - name: 'teams-critical-multi'
+    msteams_configs:
+{% if teams_webhook_critical %}
+      - webhook_url: '{{ teams_webhook_critical }}'
+        send_resolved: true
+        title: '🚨 CRITICAL ALERT - Jenkins Infrastructure'
+        text: |
+          **Alert:** {{ '{{' }} .GroupLabels.alertname {{ '}}' }}
+          **Severity:** CRITICAL
+          **Team:** {{ '{{' }} .CommonLabels.team | default "infrastructure" | title {{ '}}' }}
+          **Service:** {{ '{{' }} .CommonLabels.service | default "unknown" {{ '}}' }}
+          **Instance:** {{ '{{' }} .CommonLabels.instance | default "N/A" {{ '}}' }}
+
+          **Summary:** {{ '{{' }} .CommonAnnotations.summary {{ '}}' }}
+          **Description:** {{ '{{' }} .CommonAnnotations.description {{ '}}' }}
+
+          **Firing Alerts:** {{ '{{' }} .Alerts.Firing | len {{ '}}' }}
+          **Time:** {{ '{{' }} .CommonAnnotations.timestamp | default "now" {{ '}}' }}
+{% endif %}
+{% for team_name, team_config in teams_webhooks.items() %}
+{% if team_config.enabled | default(true) and team_config.webhook_url %}
+      - webhook_url: '{{ team_config.webhook_url }}'
+        send_resolved: true
+        title: '🚨 CRITICAL - {{ team_name | title }} Team'
+        text: |
+          **Alert:** {{ '{{' }} .GroupLabels.alertname {{ '}}' }}
+          **Severity:** CRITICAL
+          **Team:** {{ team_name | title }}
+          **Service:** {{ '{{' }} .CommonLabels.service | default "unknown" {{ '}}' }}
+          **Instance:** {{ '{{' }} .CommonLabels.instance | default "N/A" {{ '}}' }}
+
+          **Summary:** {{ '{{' }} .CommonAnnotations.summary {{ '}}' }}
+          **Description:** {{ '{{' }} .CommonAnnotations.description {{ '}}' }}
+{% endif %}
+{% endfor %}
+
+  - name: 'teams-warning-multi'
+    msteams_configs:
+{% if teams_webhook_warning %}
+      - webhook_url: '{{ teams_webhook_warning }}'
+        send_resolved: true
+        title: '⚠️ WARNING - Jenkins Infrastructure'
+        text: |
+          **Alert:** {{ '{{' }} .GroupLabels.alertname {{ '}}' }}
+          **Severity:** WARNING
+          **Team:** {{ '{{' }} .CommonLabels.team | default "infrastructure" | title {{ '}}' }}
+          **Service:** {{ '{{' }} .CommonLabels.service | default "unknown" {{ '}}' }}
+
+          **Summary:** {{ '{{' }} .CommonAnnotations.summary {{ '}}' }}
+{% endif %}
+{% for team_name, team_config in teams_webhooks.items() %}
+{% if team_config.enabled | default(true) and team_config.webhook_url %}
+      - webhook_url: '{{ team_config.webhook_url }}'
+        send_resolved: true
+        title: '⚠️ WARNING - {{ team_name | title }} Team'
+        text: |
+          **Alert:** {{ '{{' }} .GroupLabels.alertname {{ '}}' }}
+          **Severity:** WARNING
+          **Team:** {{ team_name | title }}
+          **Service:** {{ '{{' }} .CommonLabels.service | default "unknown" {{ '}}' }}
+
+          **Summary:** {{ '{{' }} .CommonAnnotations.summary {{ '}}' }}
+{% endif %}
+{% endfor %}
+
+  - name: 'teams-info-multi'
+    msteams_configs:
+{% if teams_webhook_info %}
+      - webhook_url: '{{ teams_webhook_info }}'
+        send_resolved: true
+        title: 'ℹ️ INFO - Jenkins Infrastructure'
+        text: |
+          **Alert:** {{ '{{' }} .GroupLabels.alertname {{ '}}' }}
+          **Team:** {{ '{{' }} .CommonLabels.team | default "infrastructure" | title {{ '}}' }}
+          **Summary:** {{ '{{' }} .CommonAnnotations.summary {{ '}}' }}
+{% endif %}
+
+{% for team_name, team_config in teams_webhooks.items() %}
+  # Per-team receiver for {{ team_name }}
+  - name: 'teams-{{ team_name }}'
+{% if team_config.enabled | default(true) and team_config.webhook_url %}
+    msteams_configs:
+      - webhook_url: '{{ team_config.webhook_url }}'
+        send_resolved: true
+        title: '📢 {{ team_name | title }} Team Alert'
+        text: |
+          **Alert:** {{ '{{' }} .GroupLabels.alertname {{ '}}' }}
+          **Severity:** {{ '{{' }} .GroupLabels.severity | toUpper {{ '}}' }}
+          **Team:** {{ team_name | title }}
+          **Service:** {{ '{{' }} .CommonLabels.service | default "unknown" {{ '}}' }}
+          **Instance:** {{ '{{' }} .CommonLabels.instance | default "N/A" {{ '}}' }}
+
+          **Summary:** {{ '{{' }} .CommonAnnotations.summary {{ '}}' }}
+          **Description:** {{ '{{' }} .CommonAnnotations.description {{ '}}' }}
+
+          **Firing Alerts:** {{ '{{' }} .Alerts.Firing | len {{ '}}' }}
+{% else %}
+    webhook_configs:
+      - url: 'http://localhost:5001/webhook'
+        send_resolved: true
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endif %}
+
+# Inhibition rules - prevent alert storms
 inhibit_rules:
-- source_match:
-    severity: 'critical'
-  target_match:
-    severity: 'warning'
-  equal: ['alertname', 'service']
+  # Critical alerts suppress warnings for same service
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'service', 'instance']
+
+  # Critical alerts suppress info alerts
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'info'
+    equal: ['alertname', 'service', 'instance']
+
+  # Warning alerts suppress info alerts
+  - source_match:
+      severity: 'warning'
+    target_match:
+      severity: 'info'
+    equal: ['alertname', 'service', 'instance']
+
+  # Service down suppresses all related alerts
+  - source_match:
+      alertname: 'ServiceDown'
+    target_match_re:
+      alertname: '.*'
+    equal: ['service', 'instance']
+
+  # Jenkins master down suppresses build/job alerts
+  - source_match:
+      alertname: 'JenkinsMasterDown'
+    target_match_re:
+      alertname: 'Jenkins.*'
+    equal: ['team', 'environment']

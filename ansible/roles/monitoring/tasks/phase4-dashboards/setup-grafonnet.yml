@@ -1,0 +1,202 @@
+---
+# Phase 2 Modernization: Dashboard-as-Code with Grafonnet
+# Setup Grafonnet environment and install required tools
+
+- name: Create Grafonnet working directory
+  file:
+    path: "{{ grafonnet_project_dir }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Create Grafonnet output directory
+  file:
+    path: "{{ grafonnet_output_dir }}"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Create Grafonnet backup directory
+  file:
+    path: "{{ grafonnet_output_dir }}/.backups"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Check if jsonnet is installed
+  command: which jsonnet
+  register: jsonnet_check
+  changed_when: false
+  failed_when: false
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Check if jb (jsonnet-bundler) is installed
+  command: which jb
+  register: jb_check
+  changed_when: false
+  failed_when: false
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Check if git is installed
+  command: which git
+  register: git_check
+  changed_when: false
+  failed_when: false
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Install git (CentOS/RHEL)
+  yum:
+    name: git
+    state: present
+  when:
+    - ansible_os_family == 'RedHat'
+    - git_check.rc != 0
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Install git (Debian/Ubuntu)
+  apt:
+    name: git
+    state: present
+  when:
+    - ansible_os_family == 'Debian'
+    - git_check.rc != 0
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Install jsonnet compiler (CentOS/RHEL)
+  yum:
+    name: jsonnet
+    state: present
+  when:
+    - ansible_os_family == 'RedHat'
+    - jsonnet_check.rc != 0
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Install jsonnet compiler (Debian/Ubuntu)
+  apt:
+    name: jsonnet
+    state: present
+  when:
+    - ansible_os_family == 'Debian'
+    - jsonnet_check.rc != 0
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Install jsonnet-bundler (jb) from pre-built binary
+  shell: |
+    set -e
+    if [ ! -f /usr/local/bin/jb ]; then
+      TEMP_DIR=$(mktemp -d)
+      cd $TEMP_DIR
+      # Detect architecture
+      ARCH=$(uname -m)
+      if [ "$ARCH" = "x86_64" ]; then
+        BINARY_NAME="jb-linux-amd64"
+      elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+        BINARY_NAME="jb-linux-arm64"
+      else
+        echo "Unsupported architecture: $ARCH"
+        exit 1
+      fi
+      # Download latest release
+      echo "Downloading jsonnet-bundler for $ARCH..."
+      curl -fsSL -o jb "https://github.com/jsonnet-bundler/jsonnet-bundler/releases/latest/download/${BINARY_NAME}"
+      chmod +x jb
+      mv jb /usr/local/bin/jb
+      rm -rf $TEMP_DIR
+      echo "jb installed successfully to /usr/local/bin/jb"
+    else
+      echo "jb already installed at /usr/local/bin/jb"
+    fi
+  args:
+    executable: /bin/bash
+  register: jb_install_output
+  when: jb_check.rc != 0
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Display jb installation output
+  debug:
+    var: jb_install_output.stdout_lines
+  when:
+    - jb_install_output is defined
+    - jb_install_output.stdout_lines is defined
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Verify jb binary exists and is executable
+  stat:
+    path: /usr/local/bin/jb
+  register: jb_binary_stat
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Fail if jb binary not found
+  fail:
+    msg: "jb binary not found at /usr/local/bin/jb after installation"
+  when:
+    - not jb_binary_stat.stat.exists or not jb_binary_stat.stat.executable
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Verify jb installation with version check
+  command: /usr/local/bin/jb --version
+  register: jb_version_check
+  changed_when: false
+  failed_when: jb_version_check.rc != 0
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Display jb version
+  debug:
+    msg: "jsonnet-bundler installed: {{ jb_version_check.stdout }}"
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Copy Grafonnet project files to working directory
+  copy:
+    src: "{{ role_path }}/files/dashboards/jsonnet/"
+    dest: "{{ grafonnet_project_dir }}/"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Install Grafonnet dependencies with jsonnet-bundler
+  shell: |
+    cd "{{ grafonnet_project_dir }}"
+    /usr/local/bin/jb install
+  environment:
+    HOME: "{{ grafonnet_project_dir }}"
+    PATH: "/usr/local/bin:{{ ansible_env.PATH }}"
+  register: jb_install_deps_output
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Display jb install dependencies output
+  debug:
+    var: jb_install_deps_output.stdout_lines
+  when:
+    - jb_install_deps_output is defined
+    - jb_install_deps_output.stdout_lines is defined
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']
+
+- name: Display Grafonnet setup summary
+  debug:
+    msg: |
+      ========================================================
+      ✅ Grafonnet Environment Setup Complete
+      ========================================================
+      Project Directory: {{ grafonnet_project_dir }}
+      Output Directory: {{ grafonnet_output_dir }}
+
+      Tools Installed:
+      • jsonnet compiler
+      • jsonnet-bundler (jb)
+
+      Grafonnet Files:
+      • jsonnetfile.json (dependencies)
+      • lib/common.libsonnet (shared library)
+      • infrastructure-health.jsonnet (dashboard)
+      • jenkins-overview.jsonnet (dashboard)
+
+      Next Step: Generate dashboards from Grafonnet source files
+      ========================================================
+  tags: ['monitoring', 'phase2-dashboards', 'grafonnet']

@@ -1,0 +1,138 @@
+# Team-Specific Jenkins Master Dockerfile
+# Built from base image created by jenkins-images role
+
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+# Build arguments
+ARG TEAM_NAME={{ item.team_name }}
+ARG BUILD_DATE
+ARG VCS_REF
+
+# Team-specific metadata
+LABEL maintainer="DevOps Team" \
+      org.label-schema.build-date=${BUILD_DATE} \
+      org.label-schema.vcs-ref=${VCS_REF} \
+      org.label-schema.schema-version="1.0" \
+      team="${TEAM_NAME}" \
+      description="Custom Jenkins Master for team ${TEAM_NAME}"
+
+# Switch to root for customizations
+USER root
+
+{% if jenkins_master_team_plugins_enabled | default(true) %}
+# Copy team-specific plugins list for runtime installation (use blue environment as they're identical)
+COPY blue/plugins.txt /usr/share/jenkins/ref/plugins.txt
+
+# Note: Plugins will be installed automatically at first startup via Jenkins plugin manager
+# This avoids network connectivity issues during Docker build
+# Jenkins will install plugins from /usr/share/jenkins/ref/plugins.txt automatically
+{% endif %}
+
+{% if jenkins_master_team_configs_enabled | default(true) %}
+# Copy team-specific Jenkins Configuration as Code for active environment
+# Create directories with proper permissions
+RUN mkdir -p /usr/share/jenkins/ref/casc_configs \
+    && mkdir -p /var/jenkins_home/casc_configs \
+    && chown -R jenkins:jenkins /usr/share/jenkins/ref/casc_configs \
+    && chown -R jenkins:jenkins /var/jenkins_home/casc_configs
+
+# Copy active environment configuration directly as jenkins.yaml
+# This eliminates symlink issues and ensures Jenkins finds the config
+COPY {{ item.active_environment | default('blue') }}/jenkins.yaml /usr/share/jenkins/ref/casc_configs/jenkins.yaml
+
+# Copy both configurations for reference (debugging purposes)
+COPY blue/jenkins.yaml /usr/share/jenkins/ref/casc_configs/blue-jenkins.yaml
+COPY green/jenkins.yaml /usr/share/jenkins/ref/casc_configs/green-jenkins.yaml
+
+# Set proper permissions on configuration files
+RUN chown -R jenkins:jenkins /usr/share/jenkins/ref/casc_configs
+{% endif %}
+
+{% if jenkins_master_team_seed_jobs_enabled | default(true) %}
+# Copy team-specific seed jobs to DSL directory (not init.groovy.d to prevent auto-execution)
+# DSL files can be loaded manually via Job DSL plugin UI when needed
+RUN mkdir -p /var/jenkins_home/dsl-scripts
+COPY blue/seedJob.groovy /var/jenkins_home/dsl-scripts/blue-seedJob.groovy
+COPY green/seedJob.groovy /var/jenkins_home/dsl-scripts/green-seedJob.groovy
+
+# Create symlink to active environment seed job (determined at runtime)
+RUN ln -sf blue-seedJob.groovy /var/jenkins_home/dsl-scripts/seedJob.groovy
+{% endif %}
+
+
+# Copy DSL approval initialization script
+COPY init-scripts/setup-dsl-approval.groovy /usr/share/jenkins/ref/init.groovy.d/01-setup-dsl-approval.groovy
+
+# Create team-specific directories
+RUN mkdir -p /var/jenkins_home/jobs \
+    && mkdir -p /var/jenkins_home/workspace \
+    && mkdir -p /var/jenkins_home/builds \
+    && mkdir -p /var/jenkins_home/logs \
+    && mkdir -p /var/jenkins_home/dsl-scripts
+
+# # Create environment switching via init script (safer than custom entrypoint)
+# RUN echo '#!/bin/bash' > /var/jenkins_home/init.groovy.d/00-switch-environment.groovy && \
+#     echo '// Groovy script to handle environment switching at Jenkins startup' >> /var/jenkins_home/init.groovy.d/00-switch-environment.groovy && \
+#     echo 'import jenkins.model.Jenkins' >> /var/jenkins_home/init.groovy.d/00-switch-environment.groovy && \
+#     echo 'def environment = System.getenv("JENKINS_ENVIRONMENT") ?: "blue"' >> /var/jenkins_home/init.groovy.d/00-switch-environment.groovy && \
+#     echo 'println "🔄 Switching to ${environment} environment configuration"' >> /var/jenkins_home/init.groovy.d/00-switch-environment.groovy && \
+#     echo 'println "🚀 Environment switch to ${environment} completed"' >> /var/jenkins_home/init.groovy.d/00-switch-environment.groovy
+
+# Set permissions for jenkins user
+RUN chown -R jenkins:jenkins /var/jenkins_home
+
+# Switch back to jenkins user
+USER jenkins
+
+# Team-specific environment variables including CASC configuration
+ENV JENKINS_TEAM="{{ item.team_name }}" \
+    JENKINS_TEAM_ENVIRONMENT="{{ item.active_environment | default('blue') }}" \
+    JENKINS_TEAM_PORTS_WEB="{{ item.ports.web | default('8080') }}" \
+    JENKINS_TEAM_PORTS_AGENT="{{ item.ports.agent | default('50000') }}" \
+    CASC_JENKINS_CONFIG="/usr/share/jenkins/ref/casc_configs/jenkins.yaml" \
+    JAVA_OPTS="-Djenkins.install.runSetupWizard=false -Dhudson.DNSMultiCast.disabled=true" \
+    JENKINS_OPTS="--httpPort={{ jenkins_master_port }} --httpListenAddress=0.0.0.0"
+
+{% if item.env_vars is defined and item.env_vars | length > 0 %}
+# Additional team-specific environment variables
+{% for key, value in item.env_vars.items() %}
+ENV {{ key }}="{{ value }}"
+{% endfor %}
+{% endif %}
+
+# Update Java options with team-specific settings
+ENV JAVA_OPTS="${JAVA_OPTS} \
+               -Djenkins.model.Jenkins.slaveAgentPort={{ item.ports.agent | default('50000') }} \
+               -Djenkins.team.name={{ item.team_name }} \
+               -Djenkins.team.environment={{ item.active_environment | default('blue') }}"
+
+{% if item.labels is defined and item.labels.get('tier') == 'production' %}
+# Production-specific optimizations
+ENV JAVA_OPTS="${JAVA_OPTS} \
+               -server \
+               -XX:+UseG1GC \
+               -XX:+UseStringDeduplication \
+               -XX:+OptimizeStringConcat"
+{% endif %}
+
+# Team-specific Jenkins options
+ENV JENKINS_OPTS="${JENKINS_OPTS} \
+                  --sessionTimeout={{ item.session_timeout | default('1440') }} \
+                  --sessionEviction={{ item.session_eviction | default('3600') }}"
+
+# Expose team-specific ports
+EXPOSE {{ jenkins_master_port }} {{ jenkins_jnlp_port }}
+
+# Health check with team-specific port
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5m --retries=3 \
+    CMD curl -f http://localhost:{{ jenkins_master_port }}/login || exit 1
+
+# Team-specific labels for container management
+LABEL jenkins.team="{{ item.team_name }}" \
+      jenkins.environment="{{ item.active_environment | default('blue') }}" \
+      jenkins.tier="{{ item.labels.tier | default('development') }}" \
+      jenkins.ports.web="{{ item.ports.web | default('8080') }}" \
+      jenkins.ports.agent="{{ item.ports.agent | default('50000') }}"
+
+# Use standard Jenkins entrypoint (environment switching handled via init.groovy.d)

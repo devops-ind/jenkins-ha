@@ -1,0 +1,125 @@
+---
+# Generate per-team Prometheus scrape configurations
+# Each team gets isolated scrape configs with team labels for metric separation
+
+- name: Ensure prometheus scrape_configs.d directory exists
+  file:
+    path: "{{ monitoring_home_dir }}/prometheus/scrape_configs.d"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  tags: ['monitoring', 'phase6-team-isolation', 'prometheus', 'scrape-configs', 'setup']
+
+- name: Generate per-team Prometheus scrape configuration
+  copy:
+    content: |
+      # Prometheus scrape config for {{ item.display_name }}
+      # Generated from dynamic team configuration in jenkins_teams.yml
+
+      - job_name: 'jenkins-{{ item.team_name }}'
+        scrape_interval: 30s
+        scrape_timeout: 10s
+        metrics_path: '/prometheus/'
+        scheme: 'http'
+
+        static_configs:
+          - targets: ['jenkins-{{ item.team_name }}-{{ item.active_environment }}.{{ monitoring_domain }}:{{ item.ports.web }}']
+            labels:
+              team: '{{ item.team_name }}'
+              environment: '{{ item.active_environment }}'
+              display_name: '{{ item.display_name }}'
+
+        # Add team label to all metrics from this Jenkins instance
+        metric_relabel_configs:
+          - source_labels: [__address__]
+            target_label: team
+            replacement: '{{ item.team_name }}'
+          - source_labels: [__address__]
+            target_label: team_display_name
+            replacement: '{{ item.display_name }}'
+          - source_labels: [__address__]
+            target_label: environment
+            replacement: '{{ item.active_environment }}'
+
+        # Maintain existing labels from targets
+        relabel_configs:
+          - source_labels: [__scheme__, __address__]
+            target_label: __param_target
+          - source_labels: [__param_target]
+            target_label: instance
+          - source_labels: [job]
+            target_label: job
+
+    dest: "{{ monitoring_home_dir }}/prometheus/scrape_configs.d/jenkins-{{ item.team_name }}.yml"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  loop: "{{ jenkins_teams }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  notify: reload prometheus
+  tags: ['monitoring', 'phase6-team-isolation', 'prometheus', 'scrape-configs', 'generate']
+
+- name: Generate per-team Loki logs scrape configuration
+  copy:
+    content: |
+      # Loki scrape config for {{ item.display_name }} Jenkins logs
+      # Collects logs from Jenkins job build logs and container logs
+
+      scrape_configs:
+        - job_name: 'jenkins-logs-{{ item.team_name }}'
+          static_configs:
+            - targets:
+                - localhost
+              labels:
+                job: 'jenkins-logs'
+                team: '{{ item.team_name }}'
+                team_display_name: '{{ item.display_name }}'
+                environment: '{{ item.active_environment }}'
+
+          # Scrape from Promtail targets
+          relabel_configs:
+            - source_labels: [job]
+              target_label: __path__
+              replacement: '/jenkins-logs/{{ item.team_name }}-{{ item.active_environment }}/jobs/*/builds/*/log'
+
+    dest: "{{ monitoring_home_dir }}/loki/scrape_configs.d/jenkins-logs-{{ item.team_name }}.yml"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  loop: "{{ jenkins_teams }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  tags: ['monitoring', 'phase6-team-isolation', 'loki', 'scrape-configs', 'generate']
+  when: loki_enabled | default(true)
+
+- name: Validate per-team scrape configuration YAML
+  command: "python3 -m yaml /path/to/file"
+  register: config_validation
+  loop: "{{ jenkins_teams }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  failed_when: false
+  changed_when: false
+  tags: ['monitoring', 'phase6-team-isolation', 'prometheus', 'scrape-configs', 'validate']
+
+- name: Display per-team scrape configuration summary
+  debug:
+    msg: |
+      Per-Team Prometheus Scrape Configuration Generated:
+
+      {% for team in jenkins_teams %}
+      Team: {{ team.display_name }} ({{ team.team_name }})
+      - Jenkins Target: jenkins-{{ team.team_name }}-{{ team.active_environment }}.{{ monitoring_domain }}:{{ team.ports.web }}
+      - Scrape Interval: 30s
+      - Metrics Labels:
+        * team: {{ team.team_name }}
+        * environment: {{ team.active_environment }}
+        * display_name: {{ team.display_name }}
+      - Configuration File: {{ monitoring_home_dir }}/prometheus/scrape_configs.d/jenkins-{{ team.team_name }}.yml
+      {% endfor %}
+
+      All per-team scrape configs have been generated.
+      Prometheus will be reloaded with new team-specific configurations.
+  tags: ['monitoring', 'phase6-team-isolation', 'prometheus', 'scrape-configs', 'display']

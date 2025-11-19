@@ -1,0 +1,131 @@
+---
+# HAProxy Team Environment Synchronization
+# Ensures HAProxy configuration matches current team active environments
+
+- name: Sync HAProxy configuration with current team environments
+  block:
+    - name: Read current team environment states from Jenkins masters
+      shell: |
+        if [[ -f "{{ jenkins_home_dir }}/{{ item.team_name }}/blue-green-state.json" ]]; then
+          cat "{{ jenkins_home_dir }}/{{ item.team_name }}/blue-green-state.json" | grep -o '"active_environment":\s*"[^"]*"' | cut -d'"' -f4
+        else
+          echo "{{ item.active_environment | default('blue') }}"
+        fi
+      register: team_current_environments
+      loop: "{{ jenkins_teams if (jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string) else [] }}"
+      loop_control:
+        label: "{{ item.team_name }}"
+      when:
+        - jenkins_teams is defined
+        - jenkins_teams is iterable
+        - jenkins_teams is not string
+        - jenkins_teams | length > 0
+      delegate_to: "{{ groups['jenkins_masters'][0] }}"
+      changed_when: false
+
+    - name: Create updated team configuration with current environments
+      set_fact:
+        jenkins_teams_synced: >-
+          {%- set updated_teams = [] -%}
+          {%- for i in range(jenkins_teams | length) -%}
+            {%- set team = jenkins_teams[i] -%}
+            {%- set current_env = team_current_environments.results[i].stdout.strip() -%}
+            {%- set updated_team = team | combine({'active_environment': current_env}) -%}
+            {%- set _ = updated_teams.append(updated_team) -%}
+          {%- endfor -%}
+          {{ updated_teams }}
+
+    - name: Check if any team environments have changed
+      set_fact:
+        environments_changed: >-
+          {%- set changes = [] -%}
+          {%- for i in range(jenkins_teams | length) -%}
+            {%- set original_env = jenkins_teams[i].active_environment | default('blue') -%}
+            {%- set current_env = jenkins_teams_synced[i].active_environment -%}
+            {%- if original_env != current_env -%}
+              {%- set _ = changes.append({'team': jenkins_teams[i].team_name, 'from': original_env, 'to': current_env}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ changes }}
+
+    - name: Display environment changes detected
+      debug:
+        msg: |
+          ====================================
+          Team Environment Changes Detected
+          ====================================
+          {% if environments_changed | length > 0 %}
+          {% for change in environments_changed %}
+          • {{ change.team }}: {{ change.from }} → {{ change.to }}
+          {% endfor %}
+          
+          HAProxy configuration will be regenerated to match current environments.
+          {% else %}
+          No environment changes detected. HAProxy configuration is up to date.
+          {% endif %}
+          ====================================
+
+    - name: Regenerate HAProxy configuration with updated team environments
+      template:
+        src: haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+        backup: yes
+        owner: root
+        group: "{{ haproxy_user }}"
+        mode: '0644'
+      vars:
+        jenkins_teams: "{{ jenkins_teams_synced }}"
+      become: yes
+      notify: reload haproxy config
+      when: environments_changed | length > 0
+
+    - name: Force HAProxy configuration reload
+      meta: flush_handlers
+      when: environments_changed | length > 0
+
+    - name: Verify HAProxy is routing to correct ports after sync
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ haproxy_frontend_port | default('8000') }}"
+        method: HEAD
+        timeout: 10
+        headers:
+          Host: "{{ item.team_name }}jenkins.{{ jenkins_domain | default('devops.local') }}"
+      loop: "{{ jenkins_teams_synced if (jenkins_teams_synced is defined and jenkins_teams_synced is iterable and jenkins_teams_synced is not string) else [] }}"
+      loop_control:
+        label: "{{ item.team_name }}:{{ 'port ' + (item.ports.web + 100) | string if item.active_environment == 'green' else 'port ' + item.ports.web | string }}"
+      register: team_routing_verification
+      retries: 3
+      delay: 5
+      failed_when: false
+      when: environments_changed | length > 0
+
+    - name: Display HAProxy routing verification results
+      debug:
+        msg: |
+          ====================================
+          HAProxy Routing Verification
+          ====================================
+          {% for result in team_routing_verification.results | default([]) %}
+          {% set team = jenkins_teams_synced[loop.index0] %}
+          {% set expected_port = team.ports.web if team.active_environment == 'blue' else team.ports.web + 100 %}
+          • {{ team.team_name }}: {{ 'OK' if result.status | default(0) in [200, 302, 404] else 'Failed' }} ({{ team.active_environment }} → port {{ expected_port }})
+          {% endfor %}
+          ====================================
+      when: environments_changed | length > 0
+
+  rescue:
+    - name: HAProxy sync failed - display troubleshooting info
+      debug:
+        msg: |
+          ❌ HAProxy team environment synchronization failed!
+          
+          Troubleshooting steps:
+          1. Check Jenkins state files: ls -la {{ jenkins_home_dir }}/*/blue-green-state.json
+          2. Verify HAProxy container: docker ps --filter "name=jenkins-haproxy"
+          3. Check HAProxy logs: docker logs jenkins-haproxy --tail 20
+          4. Test HAProxy config: docker exec jenkins-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+          
+          Manual recovery:
+          ansible-playbook -i inventory site.yml --tags haproxy --limit load_balancers
+
+  tags: ['haproxy', 'sync', 'blue-green']

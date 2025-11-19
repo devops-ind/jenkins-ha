@@ -1,0 +1,295 @@
+groups:
+  - name: jenkins.logs.critical
+    interval: 30s
+    rules:
+      # Critical Error Log Volume Alerts
+      - alert: JenkinsHighErrorLogVolume
+        expr: |
+          rate(count_over_time({job="jenkins"} |~ "(?i)(error|exception|failed|failure)" [1m])[5m:]) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: jenkins
+          component: logs
+          alert_type: log_volume
+        annotations:
+          summary: "High volume of error logs detected in Jenkins"
+          description: "Jenkins is generating {{ $value }} error log entries per second. This indicates potential system issues."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/high-error-logs"
+
+      - alert: JenkinsCriticalErrorLogVolume
+        expr: |
+          rate(count_over_time({job="jenkins"} |~ "(?i)(error|exception|failed|failure)" [1m])[5m:]) > 20
+        for: 2m
+        labels:
+          severity: critical
+          service: jenkins
+          component: logs
+          alert_type: log_volume
+        annotations:
+          summary: "Critical volume of error logs detected in Jenkins"
+          description: "Jenkins is generating {{ $value }} error log entries per second. System may be in critical state."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/critical-error-logs"
+
+      # Security Event Log Alerts
+      - alert: JenkinsSecurityLogEvents
+        expr: |
+          rate(count_over_time({job="jenkins"} |~ "(?i)(unauthorized|forbidden|authentication.*failed|security.*violation)" [1m])[5m:]) > 1
+        for: 0m
+        labels:
+          severity: warning
+          service: jenkins
+          component: security
+          alert_type: security_logs
+        annotations:
+          summary: "Security events detected in Jenkins logs"
+          description: "{{ $value }} security-related log events per second detected. Potential security threat."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/security-events"
+
+      - alert: JenkinsAuthenticationFailures
+        expr: |
+          rate(count_over_time({job="jenkins"} |~ "(?i)(login.*failed|authentication.*failed|invalid.*credentials)" [1m])[5m:]) > 2
+        for: 0m
+        labels:
+          severity: critical
+          service: jenkins
+          component: security
+          alert_type: auth_failure
+        annotations:
+          summary: "Multiple authentication failures detected in Jenkins"
+          description: "{{ $value }} authentication failures per second detected. Possible brute force attack."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/auth-failures"
+
+  - name: jenkins.logs.agent_issues
+    interval: 30s
+    rules:
+      # Agent Provisioning Issues
+      - alert: JenkinsAgentProvisioningErrors
+        expr: |
+          rate(count_over_time({job="jenkins"} |~ "(?i)(agent.*error|agent.*fail|launch.*fail|provisioning.*error)" [1m])[5m:]) > 1
+        for: 5m
+        labels:
+          severity: warning
+          service: jenkins
+          component: agents
+          alert_type: provisioning
+        annotations:
+          summary: "Agent provisioning errors detected"
+          description: "{{ $value }} agent provisioning errors per second. Build capacity may be affected."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/agent-provisioning"
+
+      - alert: JenkinsAgentConnectionLogs
+        expr: |
+          rate(count_over_time({job="jenkins"} |~ "(?i)(agent.*disconnect|connection.*lost|socket.*closed)" [1m])[5m:]) > 3
+        for: 3m
+        labels:
+          severity: warning
+          service: jenkins
+          component: agents
+          alert_type: connectivity
+        annotations:
+          summary: "Frequent agent connection issues detected"
+          description: "{{ $value }} agent connection issues per second. Network or agent stability problems."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/agent-connectivity"
+
+      # Docker/Container Issues
+      - alert: JenkinsDockerSocketErrors
+        expr: |
+          rate(count_over_time({job="jenkins"} |~ "(?i)(docker.*error|socket.*error|container.*fail)" [1m])[5m:]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          service: jenkins
+          component: docker
+          alert_type: container_issues
+        annotations:
+          summary: "Docker socket or container errors detected"
+          description: "{{ $value }} Docker/container errors per second. Agent provisioning may be impacted."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/docker-issues"
+
+  - name: jenkins.logs.build_issues
+    interval: 30s
+    rules:
+      # Build Failure Patterns
+      - alert: JenkinsBuildFailureSpike
+        expr: |
+          rate(count_over_time({job="jenkins"} |~ "(?i)(build.*failed|build.*error|compilation.*error)" [1m])[5m:]) > 2
+        for: 10m
+        labels:
+          severity: warning
+          service: jenkins
+          component: builds
+          alert_type: build_failures
+        annotations:
+          summary: "Build failure spike detected in logs"
+          description: "{{ $value }} build failures per second detected. May indicate infrastructure or code quality issues."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/build-failures"
+
+      # Performance Issues in Logs
+      - alert: JenkinsPerformanceLogs
+        expr: |
+          rate(count_over_time({job="jenkins"} |~ "(?i)(timeout|slow|performance|memory.*leak)" [1m])[5m:]) > 1
+        for: 15m
+        labels:
+          severity: warning
+          service: jenkins
+          component: performance
+          alert_type: performance_logs
+        annotations:
+          summary: "Performance issues detected in Jenkins logs"
+          description: "{{ $value }} performance-related log entries per second. System may be under stress."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/performance-issues"
+
+      # Plugin Issues
+      - alert: JenkinsPluginLogs
+        expr: |
+          rate(count_over_time({job="jenkins"} |~ "(?i)(plugin.*error|plugin.*fail|plugin.*exception)" [1m])[5m:]) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          service: jenkins
+          component: plugins
+          alert_type: plugin_issues
+        annotations:
+          summary: "Plugin errors detected in Jenkins logs"
+          description: "{{ $value }} plugin errors per second detected. Plugin functionality may be impaired."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/plugin-errors"
+
+  - name: jenkins.logs.team_specific
+    interval: 30s
+    rules:
+      # Team-specific High Error Rates
+      - alert: JenkinsTeamHighErrorRate
+        expr: |
+          rate(count_over_time({job="jenkins", team!=""} |~ "(?i)(error|exception|failed)" [1m])[5m:]) > 3
+        for: 10m
+        labels:
+          severity: warning
+          service: jenkins
+          component: team_operations
+          alert_type: team_errors
+        annotations:
+          summary: "High error rate for team {{ $labels.team }}"
+          description: "Team {{ $labels.team }} is experiencing {{ $value }} errors per second. Team-specific investigation needed."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/team-errors"
+
+      # Team Environment Issues
+      - alert: JenkinsTeamEnvironmentIssues
+        expr: |
+          rate(count_over_time({job="jenkins", team!="", environment!=""} |~ "(?i)(deploy.*fail|environment.*error|config.*error)" [1m])[5m:]) > 1
+        for: 5m
+        labels:
+          severity: warning
+          service: jenkins
+          component: team_environments
+          alert_type: environment_issues
+        annotations:
+          summary: "Environment issues for team {{ $labels.team }} in {{ $labels.environment }}"
+          description: "Team {{ $labels.team }} environment {{ $labels.environment }} experiencing {{ $value }} issues per second."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/environment-issues"
+
+  - name: jenkins.logs.haproxy
+    interval: 30s
+    rules:
+      # HAProxy Error Patterns
+      - alert: JenkinsHAProxyErrors
+        expr: |
+          rate(count_over_time({job="haproxy"} |~ "(?i)(error|5[0-9][0-9]|backend.*down)" [1m])[5m:]) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: jenkins
+          component: loadbalancer
+          alert_type: haproxy_errors
+        annotations:
+          summary: "HAProxy errors detected for Jenkins"
+          description: "{{ $value }} HAProxy errors per second. Load balancer issues may affect Jenkins availability."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/haproxy-errors"
+
+      # Backend Health Issues
+      - alert: JenkinsHAProxyBackendIssues
+        expr: |
+          rate(count_over_time({job="haproxy"} |~ "(?i)(backend.*unhealthy|health.*check.*fail|server.*down)" [1m])[5m:]) > 0.5
+        for: 3m
+        labels:
+          severity: critical
+          service: jenkins
+          component: loadbalancer
+          alert_type: backend_health
+        annotations:
+          summary: "Jenkins backend health issues detected in HAProxy logs"
+          description: "{{ $value }} backend health issues per second. Jenkins service availability at risk."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/backend-health"
+
+  - name: jenkins.logs.system
+    interval: 30s
+    rules:
+      # System-level Issues
+      - alert: JenkinsSystemLogs
+        expr: |
+          rate(count_over_time({job="system"} |~ "(?i)(jenkins.*error|java.*error|out.*of.*memory)" [1m])[5m:]) > 1
+        for: 10m
+        labels:
+          severity: warning
+          service: jenkins
+          component: system
+          alert_type: system_logs
+        annotations:
+          summary: "System-level issues affecting Jenkins detected"
+          description: "{{ $value }} system-level issues per second affecting Jenkins. Infrastructure problems possible."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/system-issues"
+
+      # Disk Space Issues from Logs
+      - alert: JenkinsDiskSpaceLogs
+        expr: |
+          rate(count_over_time({job=~"jenkins|system"} |~ "(?i)(disk.*full|no.*space|filesystem.*full)" [1m])[5m:]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: jenkins
+          component: storage
+          alert_type: disk_space
+        annotations:
+          summary: "Disk space issues detected in Jenkins logs"
+          description: "Disk space issues detected. Immediate action required to prevent service disruption."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/disk-space"
+
+  - name: jenkins.logs.correlation
+    interval: 60s
+    rules:
+      # Log-Metric Correlation Alerts
+      - alert: JenkinsLogMetricCorrelation
+        expr: |
+          (
+            rate(count_over_time({job="jenkins"} |~ "(?i)(error|failed)" [1m])[5m:]) > 2
+          ) and (
+            rate(jenkins_builds_failure_build_count[5m]) > 0.1
+          )
+        for: 5m
+        labels:
+          severity: warning
+          service: jenkins
+          component: correlation
+          alert_type: log_metric_correlation
+        annotations:
+          summary: "High correlation between error logs and build failures"
+          description: "Both error logs ({{ $value.log_rate }}/sec) and build failures ({{ $value.metric_rate }}/sec) are elevated."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/correlation-analysis"
+
+      # Blue-Green Environment Log Issues
+      - alert: JenkinsBlueGreenLogIssues
+        expr: |
+          (
+            rate(count_over_time({job="jenkins", environment="blue"} |~ "(?i)(error|fail)" [1m])[5m:]) -
+            rate(count_over_time({job="jenkins", environment="green"} |~ "(?i)(error|fail)" [1m])[5m:])
+          ) > 3
+        for: 5m
+        labels:
+          severity: warning
+          service: jenkins
+          component: blue_green
+          alert_type: environment_disparity
+        annotations:
+          summary: "Significant error rate difference between blue and green environments"
+          description: "Blue environment has {{ $value }} more errors per second than green. Environment-specific issues detected."
+          runbook_url: "https://wiki.company.com/jenkins-ha/runbooks/environment-disparity"

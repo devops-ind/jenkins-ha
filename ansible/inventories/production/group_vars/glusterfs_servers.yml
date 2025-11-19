@@ -1,0 +1,82 @@
+---
+# GlusterFS Server Configuration for Production
+# This file configures GlusterFS replicated storage for Jenkins HA
+
+# GlusterFS Cluster Nodes
+# These should match the hosts in glusterfs_servers group
+glusterfs_cluster_nodes:
+  - 192.168.188.142  # VM1 - Primary
+  - 192.168.188.143  # VM2 - Secondary (add when you have second VM)
+
+# Primary node for volume operations (peer probing, volume creation)
+glusterfs_primary_node: "centos9-vm"
+
+# Replication configuration
+glusterfs_replica_count: 2  # 2-way replication for HA
+
+# Brick storage configuration
+glusterfs_brick_base_path: "/data/glusterfs"
+glusterfs_brick_owner: "root"
+glusterfs_brick_group: "root"
+
+# Team-based volume auto-creation
+glusterfs_create_team_volumes: true
+glusterfs_team_volume_prefix: "jenkins"
+glusterfs_team_volume_suffix: "data"
+
+# Firewall configuration
+glusterfs_firewall_enabled: true
+glusterfs_firewall_zone: "public"
+
+# Volume performance tuning
+glusterfs_performance_options:
+  performance.cache-size: "512MB"  # Increased for better performance
+  performance.write-behind-window-size: "4MB"
+  performance.io-thread-count: "32"
+  network.ping-timeout: "10"
+  network.remote-dio: "enable"
+  performance.write-behind: "on"
+  performance.read-ahead: "on"
+
+# Reliability options (split-brain prevention)
+glusterfs_reliability_options:
+  cluster.quorum-type: "auto"
+  cluster.server-quorum-ratio: "51%"
+
+# Self-healing configuration
+glusterfs_self_heal_options:
+  cluster.self-heal-daemon: "on"
+  cluster.metadata-self-heal: "on"
+  cluster.data-self-heal: "on"
+  cluster.entry-self-heal: "on"
+
+# Other volume options
+glusterfs_other_options:
+  nfs.disable: "on"
+  storage.owner-uid: "1000"  # Jenkins user UID
+  storage.owner-gid: "1000"  # Jenkins group GID
+
+# Health monitoring
+glusterfs_monitoring_enabled: true
+glusterfs_health_check_script: "/usr/local/bin/gluster-health-check.sh"
+glusterfs_health_check_cron: "*/5 * * * *"  # Every 5 minutes
+glusterfs_health_log: "/var/log/gluster-health.log"
+
+# Prometheus metrics
+glusterfs_metrics_enabled: true
+glusterfs_metrics_script: "/usr/local/bin/gluster-metrics-exporter.sh"
+glusterfs_metrics_file: "/var/lib/node_exporter/textfile_collector/gluster.prom"
+glusterfs_metrics_cron: "*/2 * * * *"  # Every 2 minutes
+
+# Service configuration
+glusterfs_service_name: "glusterd"
+glusterfs_service_enabled: true
+glusterfs_service_state: "started"
+
+# Volume management
+glusterfs_auto_start_volumes: true
+glusterfs_volume_force: true
+
+# Validation
+glusterfs_validate_after_creation: true
+glusterfs_validation_timeout: 60
