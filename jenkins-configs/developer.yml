@@ -1,0 +1,130 @@
+# Jenkins Configuration as Code for Developer Team
+# This file is managed in Git and deployed via the "Update Team Configuration" Jenkins job
+#
+# Workflow:
+#   1. Edit this file
+#   2. Create Pull Request
+#   3. DevOps team reviews and approves
+#   4. On merge: Auto-deploys to STANDBY environment (blue or green)
+#   5. Validates health on standby
+#   6. Manual blue-green switch when ready
+
+jenkins:
+  systemMessage: |
+    Jenkins Master for Developer Team
+    Managed via jenkins-configs/developer.yml in Git
+
+  numExecutors: 0  # Use only dynamic agents - DO NOT CHANGE
+  mode: EXCLUSIVE
+  scmCheckoutRetryCount: 3
+
+  # Security Configuration - MANAGED BY CORE AUTOMATION TEAM
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          password: "${JENKINS_ADMIN_PASSWORD}"
+
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+  # Cloud Configuration for Dynamic Agents
+  clouds:
+    - docker:
+        name: "developer-docker-agents"
+        dockerApi:
+          dockerHost:
+            uri: "unix:///var/run/docker.sock"
+        templates:
+          # Maven Agent Template
+          - labelString: "developer-maven maven build"
+            dockerTemplateBase:
+              image: "jenkins/maven-agent:latest"
+              network: "jenkins-network"
+              memoryLimit: 1073741824  # 1GB (smaller than devops)
+              cpuPeriod: 100000
+              cpuQuota: 100000  # 1 CPU core
+            remoteFs: "/home/jenkins/agent"
+            connector:
+              attach:
+                user: "jenkins"
+            instanceCapStr: "5"  # Max 5 concurrent agents
+            retentionStrategy:
+              idleMinutes: 10
+            nodeProperties:
+              - envVars:
+                  env:
+                    - key: "TEAM_NAME"
+                      value: "developer"
+
+          # Python Agent Template
+          - labelString: "developer-python python pytest"
+            dockerTemplateBase:
+              image: "jenkins/python-agent:latest"
+              network: "jenkins-network"
+              memoryLimit: 1073741824  # 1GB
+              cpuPeriod: 100000
+              cpuQuota: 100000  # 1 CPU core
+            remoteFs: "/home/jenkins/agent"
+            connector:
+              attach:
+                user: "jenkins"
+            instanceCapStr: "3"
+            retentionStrategy:
+              idleMinutes: 10
+            nodeProperties:
+              - envVars:
+                  env:
+                    - key: "TEAM_NAME"
+                      value: "developer"
+
+  # Global Environment Variables
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: "TEAM_NAME"
+            value: "developer"
+          - key: "JENKINS_URL"
+            value: "http://192.168.188.142:8081"  # Different port for developer team
+
+# Credentials Configuration
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: "developer-git-credentials"
+              username: "developer"
+              password: "${DEVELOPER_GIT_PASSWORD}"
+              description: "Developer Team Git Credentials"
+
+# Job DSL Configuration
+jobs:
+  - script: |
+      folder('Developer') {
+          displayName('Developer Team Jobs')
+          description('Jobs for the Developer team')
+      }
+
+      folder('Developer/Applications') {
+          displayName('Application Builds')
+          description('Application build and test jobs')
+      }
+
+# Unclassified Configuration
+unclassified:
+  prometheus:
+    collectingMetricsPeriodInSeconds: 120
+    defaultNamespace: "jenkins_developer"
+    path: "prometheus"
+    useAuthenticatedEndpoint: false
+
+security:
+  scriptApproval:
+    approvedSignatures:
+      - "method groovy.lang.GroovyObject invokeMethod java.lang.String java.lang.Object"
+      - "method jenkins.model.Jenkins getItemByFullName java.lang.String"
+      - "staticMethod jenkins.model.Jenkins getInstance"
