@@ -1,0 +1,561 @@
+#!/usr/bin/env groovy
+/**
+ * Jenkins Configuration Update Pipeline
+ *
+ * Self-service pipeline for updating team Jenkins configurations.
+ * Deploys config to standby environment, validates, and prepares for traffic switch.
+ *
+ * Workflow:
+ *   1. Validate configuration (YAML, JCasC, dry-run)
+ *   2. Determine standby environment (blue or green)
+ *   3. Deploy config to standby
+ *   4. Restart standby Jenkins container
+ *   5. Health check validation
+ *   6. Manual approval (optional)
+ *   7. Blue-green traffic switch (optional)
+ *
+ * Triggered by:
+ *   - Git webhook (on merge to main)
+ *   - Manual execution with parameters
+ */
+
+pipeline {
+    agent {
+        label 'built-in'  // Run on Jenkins master
+    }
+
+    parameters {
+        choice(
+            name: 'TEAM_NAME',
+            choices: ['devops', 'developer'],
+            description: 'Select team to update configuration'
+        )
+        string(
+            name: 'GIT_BRANCH',
+            defaultValue: 'main',
+            description: 'Git branch containing config changes'
+        )
+        booleanParam(
+            name: 'SKIP_DRY_RUN',
+            defaultValue: false,
+            description: 'Skip dry-run test in temporary container (faster but less safe)'
+        )
+        booleanParam(
+            name: 'AUTO_SWITCH',
+            defaultValue: false,
+            description: 'Automatically switch traffic after validation (zero-downtime)'
+        )
+        booleanParam(
+            name: 'REQUIRE_APPROVAL',
+            defaultValue: true,
+            description: 'Require manual approval before switching traffic'
+        )
+        choice(
+            name: 'NOTIFICATION_CHANNEL',
+            choices: ['none', 'email', 'slack', 'teams'],
+            description: 'Notification channel for deployment status'
+        )
+    }
+
+    environment {
+        // Paths
+        CONFIG_FILE = "jenkins-configs/${params.TEAM_NAME}.yml"
+        SCRIPTS_DIR = "${WORKSPACE}/scripts/config-validation"
+        DEPLOY_SCRIPT = "${WORKSPACE}/scripts/deploy-team-config.sh"
+
+        // Team information
+        TEAM = "${params.TEAM_NAME}"
+
+        // Validation flags
+        VALIDATION_PASSED = 'false'
+        DEPLOYMENT_PASSED = 'false'
+        HEALTH_CHECK_PASSED = 'false'
+
+        // Timestamps
+        DEPLOY_START_TIME = sh(script: 'date +%s', returnStdout: true).trim()
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+        disableConcurrentBuilds()
+        timeout(time: 1, unit: 'HOURS')
+        timestamps()
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                script {
+                    echo "=========================================="
+                    echo "Jenkins Configuration Update Pipeline"
+                    echo "=========================================="
+                    echo "Team: ${params.TEAM_NAME}"
+                    echo "Branch: ${params.GIT_BRANCH}"
+                    echo "Config File: ${CONFIG_FILE}"
+                    echo "Auto Switch: ${params.AUTO_SWITCH}"
+                    echo "Skip Dry-run: ${params.SKIP_DRY_RUN}"
+                    echo "=========================================="
+                }
+
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: "*/${params.GIT_BRANCH}"]],
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/your-org/jenkins-ha.git',
+                        credentialsId: "${params.TEAM_NAME}-git-credentials"
+                    ]]
+                ])
+
+                sh '''
+                    echo "Repository checked out successfully"
+                    git log -1 --oneline
+                    git diff --name-only HEAD~1 HEAD | grep -E "jenkins-configs/|scripts/" || true
+                '''
+            }
+        }
+
+        stage('Pre-flight Checks') {
+            steps {
+                script {
+                    echo "Running pre-flight checks..."
+
+                    // Check if config file exists
+                    if (!fileExists(CONFIG_FILE)) {
+                        error "Configuration file not found: ${CONFIG_FILE}"
+                    }
+
+                    // Check if validation scripts exist
+                    if (!fileExists(SCRIPTS_DIR)) {
+                        error "Validation scripts directory not found: ${SCRIPTS_DIR}"
+                    }
+
+                    // Verify Docker is available
+                    sh '''
+                        if ! command -v docker &>/dev/null; then
+                            echo "ERROR: Docker is not available"
+                            exit 1
+                        fi
+                        docker info > /dev/null 2>&1 || {
+                            echo "ERROR: Docker daemon is not accessible"
+                            exit 1
+                        }
+                        echo "Docker is available and accessible"
+                    '''
+
+                    echo "✅ Pre-flight checks passed"
+                }
+            }
+        }
+
+        stage('Validation') {
+            parallel {
+                stage('YAML Syntax') {
+                    steps {
+                        script {
+                            echo "Validating YAML syntax..."
+                            sh """
+                                ${SCRIPTS_DIR}/validate-yaml-syntax.sh ${CONFIG_FILE}
+                            """
+                            echo "✅ YAML syntax validation passed"
+                        }
+                    }
+                }
+
+                stage('JCasC Schema') {
+                    steps {
+                        script {
+                            echo "Validating JCasC schema..."
+                            sh """
+                                ${SCRIPTS_DIR}/validate-jcasc-schema.sh ${CONFIG_FILE}
+                            """
+                            echo "✅ JCasC schema validation passed"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Dry-run Test') {
+            when {
+                expression { params.SKIP_DRY_RUN == false }
+            }
+            steps {
+                script {
+                    echo "Running dry-run test in temporary container..."
+                    sh """
+                        ${SCRIPTS_DIR}/dry-run-test.sh ${CONFIG_FILE} --timeout 600
+                    """
+                    echo "✅ Dry-run test passed"
+                }
+            }
+        }
+
+        stage('Determine Standby Environment') {
+            steps {
+                script {
+                    echo "Determining standby environment for ${params.TEAM_NAME}..."
+
+                    def stateFile = "/var/jenkins/${params.TEAM_NAME}/blue-green-state.json"
+
+                    // Read current state
+                    def stateContent = sh(
+                        script: "cat ${stateFile} 2>/dev/null || echo '{}'",
+                        returnStdout: true
+                    ).trim()
+
+                    def state = readJSON text: stateContent
+                    def activeEnv = state.active_environment ?: 'blue'
+                    def standbyEnv = (activeEnv == 'blue') ? 'green' : 'blue'
+
+                    env.ACTIVE_ENV = activeEnv
+                    env.STANDBY_ENV = standbyEnv
+
+                    echo "Active Environment: ${activeEnv}"
+                    echo "Standby Environment: ${standbyEnv}"
+                    echo "Config will be deployed to: ${standbyEnv}"
+                }
+            }
+        }
+
+        stage('Deploy to Standby') {
+            steps {
+                script {
+                    echo "=========================================="
+                    echo "Deploying configuration to standby environment"
+                    echo "Team: ${params.TEAM_NAME}"
+                    echo "Standby: ${env.STANDBY_ENV}"
+                    echo "=========================================="
+
+                    sh """
+                        # Copy config to standby environment
+                        CONFIG_DIR="/var/jenkins/${params.TEAM_NAME}/${env.STANDBY_ENV}/casc_configs"
+
+                        echo "Creating config directory if not exists..."
+                        mkdir -p \${CONFIG_DIR}
+
+                        echo "Backing up existing config..."
+                        if [ -f "\${CONFIG_DIR}/jenkins.yaml" ]; then
+                            cp "\${CONFIG_DIR}/jenkins.yaml" "\${CONFIG_DIR}/jenkins.yaml.backup.\$(date +%Y%m%d_%H%M%S)"
+                        fi
+
+                        echo "Deploying new configuration..."
+                        cp ${CONFIG_FILE} \${CONFIG_DIR}/jenkins.yaml
+
+                        echo "Setting permissions..."
+                        chown 1000:1000 \${CONFIG_DIR}/jenkins.yaml
+                        chmod 644 \${CONFIG_DIR}/jenkins.yaml
+
+                        echo "✅ Configuration deployed to standby"
+                    """
+
+                    env.DEPLOYMENT_PASSED = 'true'
+                }
+            }
+        }
+
+        stage('Restart Standby Container') {
+            steps {
+                script {
+                    echo "Restarting standby Jenkins container..."
+
+                    def containerName = "jenkins-${params.TEAM_NAME}-${env.STANDBY_ENV}"
+
+                    sh """
+                        echo "Container: ${containerName}"
+
+                        # Check if container exists
+                        if docker ps -a --format '{{.Names}}' | grep -q "^${containerName}\$"; then
+                            echo "Restarting container ${containerName}..."
+                            docker restart ${containerName}
+                            echo "✅ Container restarted"
+                        else
+                            echo "ERROR: Container ${containerName} not found"
+                            echo "Available containers:"
+                            docker ps -a --format 'table {{.Names}}\\t{{.Status}}'
+                            exit 1
+                        fi
+                    """
+
+                    echo "Waiting for Jenkins to start (30 seconds initial wait)..."
+                    sleep 30
+                }
+            }
+        }
+
+        stage('Health Check - Standby') {
+            steps {
+                script {
+                    echo "Running health checks on standby environment..."
+
+                    def healthCheckScript = "/var/jenkins/scripts/blue-green-healthcheck-${params.TEAM_NAME}.sh"
+
+                    retry(3) {
+                        sh """
+                            if [ -f "${healthCheckScript}" ]; then
+                                ${healthCheckScript} ${env.STANDBY_ENV}
+                            else
+                                echo "WARNING: Health check script not found, running basic checks..."
+
+                                # Basic health check
+                                CONTAINER="jenkins-${params.TEAM_NAME}-${env.STANDBY_ENV}"
+
+                                # Check container is running
+                                if ! docker ps --format '{{.Names}}' | grep -q "^\${CONTAINER}\$"; then
+                                    echo "ERROR: Container \${CONTAINER} is not running"
+                                    exit 1
+                                fi
+
+                                echo "✅ Container is running"
+
+                                # Get port
+                                PORT=\$(docker port \${CONTAINER} 8080 | cut -d: -f2)
+
+                                if [ -z "\${PORT}" ]; then
+                                    echo "ERROR: Could not determine exposed port"
+                                    exit 1
+                                fi
+
+                                echo "Jenkins accessible on port: \${PORT}"
+
+                                # Check API accessibility
+                                for i in {1..30}; do
+                                    if curl -sf "http://localhost:\${PORT}/api/json" >/dev/null; then
+                                        echo "✅ Jenkins API is accessible"
+                                        exit 0
+                                    fi
+                                    echo "Attempt \$i/30: Jenkins not ready yet..."
+                                    sleep 10
+                                done
+
+                                echo "ERROR: Jenkins API not accessible after 5 minutes"
+                                exit 1
+                            fi
+                        """
+                    }
+
+                    env.HEALTH_CHECK_PASSED = 'true'
+                    echo "✅ Health checks passed on standby environment"
+                }
+            }
+        }
+
+        stage('Validation Summary') {
+            steps {
+                script {
+                    echo "=========================================="
+                    echo "Validation Summary"
+                    echo "=========================================="
+                    echo "Team: ${params.TEAM_NAME}"
+                    echo "Active Environment: ${env.ACTIVE_ENV}"
+                    echo "Standby Environment: ${env.STANDBY_ENV}"
+                    echo "Config Deployed: ${env.DEPLOYMENT_PASSED}"
+                    echo "Health Checks: ${env.HEALTH_CHECK_PASSED}"
+                    echo "=========================================="
+
+                    if (env.HEALTH_CHECK_PASSED == 'true') {
+                        echo "✅ Standby environment is ready for traffic switch"
+
+                        // Calculate deployment time
+                        def endTime = sh(script: 'date +%s', returnStdout: true).trim().toInteger()
+                        def startTime = env.DEPLOY_START_TIME.toInteger()
+                        def duration = endTime - startTime
+
+                        echo "Deployment duration: ${duration} seconds"
+                    } else {
+                        error "Health checks failed - cannot proceed with traffic switch"
+                    }
+                }
+            }
+        }
+
+        stage('Approval Gate') {
+            when {
+                expression { params.REQUIRE_APPROVAL == true && params.AUTO_SWITCH == true }
+            }
+            steps {
+                script {
+                    echo "Waiting for manual approval to switch traffic..."
+
+                    // Send notification
+                    sendNotification(
+                        "Config update ready for ${params.TEAM_NAME}",
+                        "Standby environment (${env.STANDBY_ENV}) is healthy and ready for traffic switch.",
+                        'warning'
+                    )
+
+                    timeout(time: 24, unit: 'HOURS') {
+                        input(
+                            message: "Switch traffic from ${env.ACTIVE_ENV} to ${env.STANDBY_ENV}?",
+                            ok: 'Switch Traffic',
+                            submitter: 'admin,devops-team'
+                        )
+                    }
+                }
+            }
+        }
+
+        stage('Blue-Green Switch') {
+            when {
+                expression { params.AUTO_SWITCH == true }
+            }
+            steps {
+                script {
+                    echo "=========================================="
+                    echo "Switching traffic to standby environment"
+                    echo "=========================================="
+
+                    def switchScript = "/var/jenkins/scripts/blue-green-switch-${params.TEAM_NAME}.sh"
+
+                    sh """
+                        if [ -f "${switchScript}" ]; then
+                            echo "Executing blue-green switch..."
+                            ${switchScript} switch
+                            echo "✅ Traffic switched to ${env.STANDBY_ENV}"
+                        else
+                            echo "ERROR: Blue-green switch script not found: ${switchScript}"
+                            exit 1
+                        fi
+                    """
+
+                    echo "✅ Blue-green switch completed"
+                }
+            }
+        }
+
+        stage('Post-Switch Validation') {
+            when {
+                expression { params.AUTO_SWITCH == true }
+            }
+            steps {
+                script {
+                    echo "Running post-switch validation..."
+
+                    sleep 30  // Wait for traffic to stabilize
+
+                    def healthCheckScript = "/var/jenkins/scripts/blue-green-healthcheck-${params.TEAM_NAME}.sh"
+
+                    sh """
+                        # Verify new active environment is healthy
+                        ${healthCheckScript} ${env.STANDBY_ENV}
+
+                        echo "✅ Post-switch validation passed"
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            script {
+                def message = params.AUTO_SWITCH
+                    ? "✅ Config update completed and traffic switched to ${env.STANDBY_ENV}"
+                    : "✅ Config deployed to standby (${env.STANDBY_ENV}) and validated. Ready for manual switch."
+
+                echo "=========================================="
+                echo message
+                echo "=========================================="
+
+                sendNotification(
+                    "Config Update Success - ${params.TEAM_NAME}",
+                    message,
+                    'good'
+                )
+            }
+        }
+
+        failure {
+            script {
+                echo "=========================================="
+                echo "❌ Config update failed"
+                echo "=========================================="
+
+                // Attempt automatic rollback if deployment failed
+                if (env.DEPLOYMENT_PASSED == 'true' && env.HEALTH_CHECK_PASSED == 'false') {
+                    echo "Attempting automatic rollback..."
+
+                    try {
+                        sh """
+                            # Restore backup config
+                            CONFIG_DIR="/var/jenkins/${params.TEAM_NAME}/${env.STANDBY_ENV}/casc_configs"
+                            BACKUP=\$(ls -t \${CONFIG_DIR}/jenkins.yaml.backup.* 2>/dev/null | head -1)
+
+                            if [ -n "\${BACKUP}" ]; then
+                                echo "Restoring backup: \${BACKUP}"
+                                cp "\${BACKUP}" "\${CONFIG_DIR}/jenkins.yaml"
+
+                                # Restart container
+                                docker restart "jenkins-${params.TEAM_NAME}-${env.STANDBY_ENV}"
+
+                                echo "✅ Rollback completed"
+                            else
+                                echo "WARNING: No backup found for rollback"
+                            fi
+                        """
+                    } catch (Exception e) {
+                        echo "WARNING: Automatic rollback failed: ${e.message}"
+                    }
+                }
+
+                sendNotification(
+                    "Config Update Failed - ${params.TEAM_NAME}",
+                    "Config update failed. Check Jenkins console output for details.",
+                    'danger'
+                )
+            }
+        }
+
+        always {
+            script {
+                // Cleanup
+                echo "Cleaning up..."
+
+                // Archive validation reports if any
+                archiveArtifacts artifacts: '**/validation-*.log', allowEmptyArchive: true
+
+                echo "Pipeline execution completed"
+            }
+        }
+    }
+}
+
+/**
+ * Send notification to configured channel
+ */
+def sendNotification(String title, String message, String color) {
+    if (params.NOTIFICATION_CHANNEL == 'none') {
+        return
+    }
+
+    switch (params.NOTIFICATION_CHANNEL) {
+        case 'slack':
+            if (env.SLACK_WEBHOOK) {
+                slackSend(
+                    color: color,
+                    message: "${title}\n${message}",
+                    channel: '#jenkins-notifications'
+                )
+            }
+            break
+
+        case 'email':
+            if (env.NOTIFICATION_EMAIL) {
+                emailext(
+                    subject: title,
+                    body: message,
+                    to: env.NOTIFICATION_EMAIL
+                )
+            }
+            break
+
+        case 'teams':
+            if (env.TEAMS_WEBHOOK) {
+                office365ConnectorSend(
+                    message: title,
+                    status: message,
+                    webhookUrl: env.TEAMS_WEBHOOK
+                )
+            }
+            break
+    }
+}
