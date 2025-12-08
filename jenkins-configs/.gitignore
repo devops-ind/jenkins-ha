@@ -1,0 +1,21 @@
+# Ignore temporary and generated files
+
+# Test/validation artifacts
+*.test.yml
+*.validated
+*.tmp
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local testing
+test-output/
+validation-reports/
