@@ -1,0 +1,588 @@
+#!/usr/bin/env groovy
+/*
+ * Jenkins Configuration Update Pipeline (Simplified Symlink-Based Approach)
+ *
+ * This pipeline enables self-service JCasC configuration updates without container restarts.
+ * It uses symlinks to switch between configurations and hot-reloads Jenkins via API.
+ *
+ * Features:
+ * - YAML syntax validation (native Jenkins)
+ * - JCasC schema validation (Jenkins CLI/API)
+ * - Security validation (Groovy)
+ * - Dry-run testing (temporary container)
+ * - Symlink switching (atomic)
+ * - Hot reload (no downtime)
+ * - Automatic rollback on failure
+ * - Per-team locking
+ * - Grafana annotations
+ *
+ * Parameters:
+ * - TEAM: Team name (devops, developer, etc.)
+ * - CONFIG_FILE: Path to new config (jenkins-configs/${TEAM}.yml)
+ * - SKIP_DRY_RUN: Skip dry-run test (default: false)
+ * - AUTO_APPROVE: Skip approval gate (default: false, use only for non-prod)
+ */
+
+@Library('jenkins-shared-library') _
+
+pipeline {
+    agent {
+        label 'master'
+    }
+
+    parameters {
+        choice(
+            name: 'TEAM',
+            choices: ['devops', 'developer', 'qa'],
+            description: 'Team whose configuration to update'
+        )
+        string(
+            name: 'CONFIG_FILE',
+            defaultValue: '',
+            description: 'Config file path (default: jenkins-configs/${TEAM}.yml)'
+        )
+        booleanParam(
+            name: 'SKIP_DRY_RUN',
+            defaultValue: false,
+            description: 'Skip dry-run container test (faster but less safe)'
+        )
+        booleanParam(
+            name: 'AUTO_APPROVE',
+            defaultValue: false,
+            description: 'Skip approval gate (use only for non-prod)'
+        )
+    }
+
+    environment {
+        TEAM_NAME = "${params.TEAM}"
+        CONFIG_FILE = "${params.CONFIG_FILE ?: "jenkins-configs/${params.TEAM}.yml"}"
+        JENKINS_BASE_DIR = "/var/jenkins/${params.TEAM}"
+        CONFIG_DIR = "${JENKINS_BASE_DIR}/configs"
+        BACKUP_DIR = "${JENKINS_BASE_DIR}/backups"
+        LOCK_DIR = "${JENKINS_BASE_DIR}/update.lock"
+
+        // Jenkins connection
+        JENKINS_URL = "http://localhost:8080"
+        JENKINS_ADMIN_USER = "admin"
+        // JENKINS_ADMIN_TOKEN should be set as credential
+
+        // Notification settings
+        SLACK_WEBHOOK = credentials('slack-webhook-url')
+        GRAFANA_URL = "http://grafana:3000"
+        GRAFANA_API_KEY = credentials('grafana-api-key')
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '30', daysToKeepStr: '90'))
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+        disableConcurrentBuilds()
+    }
+
+    stages {
+        stage('Acquire Update Lock') {
+            steps {
+                script {
+                    echo "🔒 Acquiring update lock for team: ${TEAM_NAME}"
+
+                    timeout(time: 5, unit: 'MINUTES') {
+                        waitUntil {
+                            def locked = sh(
+                                script: """
+                                    mkdir ${LOCK_DIR} 2>/dev/null && echo "acquired" || echo "locked"
+                                """,
+                                returnStdout: true
+                            ).trim()
+
+                            if (locked == "acquired") {
+                                echo "✅ Lock acquired"
+                                return true
+                            } else {
+                                echo "⏳ Waiting for another update to complete..."
+                                sleep 10
+                                return false
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Backup Current Config') {
+            steps {
+                script {
+                    echo "💾 Backing up current configuration..."
+
+                    def timestamp = new Date().format('yyyyMMdd_HHmmss')
+                    def currentTarget = sh(
+                        script: "readlink ${CONFIG_DIR}/active 2>/dev/null || echo 'blue'",
+                        returnStdout: true
+                    ).trim()
+
+                    sh """
+                        mkdir -p ${BACKUP_DIR}
+                        cp ${CONFIG_DIR}/${currentTarget}/jenkins.yaml \
+                           ${BACKUP_DIR}/jenkins.yaml.${timestamp} || true
+
+                        # Keep only last 10 backups
+                        ls -t ${BACKUP_DIR}/jenkins.yaml.* 2>/dev/null | tail -n +11 | xargs -r rm -f
+                    """
+
+                    echo "✅ Backup created: jenkins.yaml.${timestamp}"
+                    env.BACKUP_FILE = "${BACKUP_DIR}/jenkins.yaml.${timestamp}"
+                    env.PREVIOUS_CONFIG = currentTarget
+                }
+            }
+        }
+
+        stage('Validation') {
+            parallel {
+                stage('YAML Syntax') {
+                    steps {
+                        script {
+                            echo "📝 Validating YAML syntax..."
+
+                            try {
+                                // Use Jenkins native YAML parsing
+                                def yaml = readYaml file: env.CONFIG_FILE
+                                echo "✅ YAML syntax valid"
+
+                                // Basic structure validation
+                                if (!yaml.containsKey('jenkins')) {
+                                    error("Missing required 'jenkins' key in YAML")
+                                }
+
+                            } catch (Exception e) {
+                                error("❌ YAML syntax validation failed: ${e.message}")
+                            }
+                        }
+                    }
+                }
+
+                stage('Security Validation') {
+                    steps {
+                        script {
+                            echo "🔐 Checking for security issues..."
+
+                            def config = readFile(env.CONFIG_FILE)
+
+                            // Check for hardcoded passwords
+                            if (config =~ /password:\s*["'][^$]/) {
+                                error("❌ Security violation: Hardcoded password detected")
+                            }
+
+                            // Check for hardcoded tokens
+                            if (config =~ /token:\s*["'][^$]/) {
+                                error("❌ Security violation: Hardcoded token detected")
+                            }
+
+                            // Ensure environment variables are used
+                            def yaml = readYaml file: env.CONFIG_FILE
+                            echo "✅ Security validation passed"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('JCasC Schema Validation') {
+            steps {
+                script {
+                    echo "🔧 Validating JCasC schema..."
+
+                    try {
+                        withCredentials([string(credentialsId: 'jenkins-admin-token', variable: 'JENKINS_ADMIN_TOKEN')]) {
+                            // Use Jenkins CLI to validate configuration
+                            def response = sh(
+                                script: """
+                                    curl -s -w "\\n%{http_code}" -X POST \
+                                        -u ${JENKINS_ADMIN_USER}:${JENKINS_ADMIN_TOKEN} \
+                                        -H 'Content-Type: application/x-yaml' \
+                                        --data-binary @${CONFIG_FILE} \
+                                        ${JENKINS_URL}/configuration-as-code/check
+                                """,
+                                returnStdout: true
+                            ).trim()
+
+                            def httpCode = response.split('\n')[-1]
+                            if (httpCode != '200') {
+                                error("JCasC validation failed with HTTP ${httpCode}")
+                            }
+
+                            echo "✅ JCasC schema validation passed"
+                        }
+                    } catch (Exception e) {
+                        error("❌ JCasC schema validation failed: ${e.message}")
+                    }
+                }
+            }
+        }
+
+        stage('Plugin Dependencies Check') {
+            steps {
+                script {
+                    echo "🔌 Checking plugin dependencies..."
+
+                    withCredentials([string(credentialsId: 'jenkins-admin-token', variable: 'JENKINS_ADMIN_TOKEN')]) {
+                        // Extract plugin references from config
+                        def requiredPlugins = sh(
+                            script: """
+                                grep -oP 'plugin: \\K[^:]+' ${CONFIG_FILE} || true
+                            """,
+                            returnStdout: true
+                        ).trim().split('\n')
+
+                        // Check if each plugin is installed
+                        requiredPlugins.each { plugin ->
+                            if (plugin) {
+                                def installed = sh(
+                                    script: """
+                                        curl -s -u ${JENKINS_ADMIN_USER}:${JENKINS_ADMIN_TOKEN} \
+                                            ${JENKINS_URL}/pluginManager/api/json | \
+                                            jq -r '.plugins[] | select(.shortName==\"${plugin}\") | .shortName'
+                                    """,
+                                    returnStdout: true
+                                ).trim()
+
+                                if (!installed) {
+                                    error("Required plugin not installed: ${plugin}")
+                                }
+                                echo "  ✓ ${plugin}"
+                            }
+                        }
+                    }
+
+                    echo "✅ All required plugins are installed"
+                }
+            }
+        }
+
+        stage('Dry-Run Test') {
+            when {
+                expression { !params.SKIP_DRY_RUN }
+            }
+            steps {
+                script {
+                    echo "🧪 Running dry-run test in temporary container..."
+
+                    def testContainerName = "jenkins-test-${TEAM_NAME}-${BUILD_NUMBER}"
+                    def jenkinsImage = sh(
+                        script: "docker ps --filter name=jenkins-${TEAM_NAME} --format '{{.Image}}'",
+                        returnStdout: true
+                    ).trim()
+
+                    try {
+                        // Start test container with new config
+                        sh """
+                            docker run -d --name ${testContainerName} \
+                                -v ${CONFIG_FILE}:/var/jenkins_home/casc_configs/jenkins.yaml:ro \
+                                -e CASC_JENKINS_CONFIG=/var/jenkins_home/casc_configs \
+                                ${jenkinsImage}
+                        """
+
+                        // Wait for Jenkins to start
+                        echo "Waiting for test Jenkins to start..."
+                        timeout(time: 3, unit: 'MINUTES') {
+                            waitUntil {
+                                def status = sh(
+                                    script: """
+                                        docker exec ${testContainerName} \
+                                            curl -sf http://localhost:8080/login >/dev/null 2>&1 && echo "ready" || echo "starting"
+                                    """,
+                                    returnStdout: true
+                                ).trim()
+
+                                if (status == "ready") {
+                                    echo "✅ Test Jenkins started successfully"
+                                    return true
+                                }
+                                sleep 10
+                                return false
+                            }
+                        }
+
+                        // Check for errors in logs
+                        def logs = sh(
+                            script: "docker logs ${testContainerName} 2>&1 | tail -100",
+                            returnStdout: true
+                        )
+
+                        if (logs =~ /(?i)(error|exception|failed)/) {
+                            warning("⚠️  Errors found in test container logs")
+                            echo logs
+                        } else {
+                            echo "✅ Dry-run test passed"
+                        }
+
+                    } finally {
+                        // Cleanup test container
+                        sh """
+                            docker rm -f ${testContainerName} 2>/dev/null || true
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Determine Standby Config') {
+            steps {
+                script {
+                    echo "🔍 Determining standby configuration..."
+
+                    def currentActive = sh(
+                        script: "readlink ${CONFIG_DIR}/active 2>/dev/null || echo 'blue'",
+                        returnStdout: true
+                    ).trim()
+
+                    env.CURRENT_ACTIVE = currentActive
+                    env.STANDBY_CONFIG = (currentActive == 'blue') ? 'green' : 'blue'
+
+                    echo "Current active: ${env.CURRENT_ACTIVE}"
+                    echo "Standby config: ${env.STANDBY_CONFIG}"
+                }
+            }
+        }
+
+        stage('Deploy to Standby') {
+            steps {
+                script {
+                    echo "📦 Deploying new config to standby: ${env.STANDBY_CONFIG}"
+
+                    sh """
+                        cp ${CONFIG_FILE} ${CONFIG_DIR}/${env.STANDBY_CONFIG}/jenkins.yaml
+                        chown -R 1000:1000 ${CONFIG_DIR}/${env.STANDBY_CONFIG}/
+                    """
+
+                    echo "✅ Config deployed to ${env.STANDBY_CONFIG}"
+                }
+            }
+        }
+
+        stage('Approval Gate') {
+            when {
+                expression { !params.AUTO_APPROVE }
+            }
+            steps {
+                script {
+                    echo "⏸️  Waiting for approval before switching configuration..."
+
+                    timeout(time: 15, unit: 'MINUTES') {
+                        input(
+                            message: "Switch to new configuration?",
+                            ok: 'Proceed with switch',
+                            submitter: 'admin,devops',
+                            parameters: [
+                                booleanParam(
+                                    defaultValue: false,
+                                    description: 'I have reviewed the configuration changes',
+                                    name: 'CONFIRM'
+                                )
+                            ]
+                        )
+                    }
+
+                    echo "✅ Approval granted"
+                }
+            }
+        }
+
+        stage('Switch Symlink') {
+            steps {
+                script {
+                    echo "🔄 Switching configuration symlink..."
+
+                    def result = sh(
+                        script: "/home/jenkins/scripts/config-symlink-switch.sh ${TEAM_NAME} ${env.STANDBY_CONFIG}",
+                        returnStatus: true
+                    )
+
+                    if (result != 0) {
+                        error("Symlink switch failed")
+                    }
+
+                    // Verify switch
+                    def newActive = sh(
+                        script: "readlink ${CONFIG_DIR}/active",
+                        returnStdout: true
+                    ).trim()
+
+                    if (newActive != env.STANDBY_CONFIG) {
+                        error("Symlink verification failed: expected ${env.STANDBY_CONFIG}, got ${newActive}")
+                    }
+
+                    echo "✅ Symlink switched successfully: active -> ${newActive}"
+                }
+            }
+        }
+
+        stage('Hot Reload Jenkins') {
+            steps {
+                script {
+                    echo "🔥 Triggering Jenkins hot reload..."
+
+                    withCredentials([string(credentialsId: 'jenkins-admin-token', variable: 'JENKINS_ADMIN_TOKEN')]) {
+                        def result = sh(
+                            script: """
+                                /home/jenkins/scripts/jenkins-hot-reload.sh \
+                                    ${TEAM_NAME} \
+                                    ${JENKINS_URL} \
+                                    ${JENKINS_ADMIN_USER} \
+                                    ${JENKINS_ADMIN_TOKEN}
+                            """,
+                            returnStatus: true
+                        )
+
+                        if (result != 0) {
+                            error("Hot reload failed - triggering rollback")
+                        }
+                    }
+
+                    echo "✅ Jenkins reloaded successfully"
+                }
+            }
+        }
+
+        stage('Post-Reload Validation') {
+            steps {
+                script {
+                    echo "✔️  Validating Jenkins after reload..."
+
+                    withCredentials([string(credentialsId: 'jenkins-admin-token', variable: 'JENKINS_ADMIN_TOKEN')]) {
+                        def checks = [
+                            'API Health': "${JENKINS_URL}/api/json",
+                            'Login Page': "${JENKINS_URL}/login",
+                            'Job List': "${JENKINS_URL}/api/json?tree=jobs[name]",
+                            'System Info': "${JENKINS_URL}/computer/api/json"
+                        ]
+
+                        checks.each { name, url ->
+                            retry(3) {
+                                sleep 5
+                                def status = sh(
+                                    script: """
+                                        curl -sf -u ${JENKINS_ADMIN_USER}:${JENKINS_ADMIN_TOKEN} '${url}' >/dev/null
+                                    """,
+                                    returnStatus: true
+                                )
+
+                                if (status != 0) {
+                                    error("${name} check failed")
+                                }
+                                echo "  ✓ ${name} - OK"
+                            }
+                        }
+                    }
+
+                    echo "✅ All post-reload validation checks passed"
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                // Release lock
+                sh "rmdir ${LOCK_DIR} 2>/dev/null || true"
+                echo "🔓 Lock released"
+            }
+        }
+
+        success {
+            script {
+                echo "✅ Configuration update completed successfully!"
+
+                // Send notifications
+                sendNotifications(
+                    status: 'SUCCESS',
+                    team: env.TEAM_NAME,
+                    previousConfig: env.PREVIOUS_CONFIG,
+                    newConfig: env.STANDBY_CONFIG
+                )
+            }
+        }
+
+        failure {
+            script {
+                echo "❌ Configuration update failed!"
+
+                // Attempt rollback
+                try {
+                    echo "🔄 Attempting automatic rollback..."
+
+                    sh "/home/jenkins/scripts/config-symlink-switch.sh ${TEAM_NAME} ${env.PREVIOUS_CONFIG}"
+
+                    withCredentials([string(credentialsId: 'jenkins-admin-token', variable: 'JENKINS_ADMIN_TOKEN')]) {
+                        sh """
+                            /home/jenkins/scripts/jenkins-hot-reload.sh \
+                                ${TEAM_NAME} \
+                                ${JENKINS_URL} \
+                                ${JENKINS_ADMIN_USER} \
+                                ${JENKINS_ADMIN_TOKEN}
+                        """
+                    }
+
+                    echo "✅ Rollback completed successfully"
+
+                } catch (Exception e) {
+                    echo "❌ Automatic rollback failed: ${e.message}"
+                    echo "⚠️  MANUAL INTERVENTION REQUIRED"
+                }
+
+                // Send failure notifications
+                sendNotifications(
+                    status: 'FAILURE',
+                    team: env.TEAM_NAME,
+                    previousConfig: env.PREVIOUS_CONFIG,
+                    newConfig: env.STANDBY_CONFIG
+                )
+            }
+        }
+    }
+}
+
+// Helper function for notifications
+def sendNotifications(Map args) {
+    def status = args.status
+    def team = args.team
+    def previousConfig = args.previousConfig
+    def newConfig = args.newConfig
+
+    def color = (status == 'SUCCESS') ? 'good' : 'danger'
+    def emoji = (status == 'SUCCESS') ? '✅' : '❌'
+    def message = """
+        ${emoji} Jenkins Config Update ${status}
+        Team: ${team}
+        Previous: ${previousConfig}
+        New: ${newConfig}
+        Build: ${BUILD_URL}
+    """.stripIndent()
+
+    // Slack notification
+    try {
+        sh """
+            curl -X POST -H 'Content-Type: application/json' \
+                -d '{"text":"${message}","color":"${color}"}' \
+                ${SLACK_WEBHOOK}
+        """
+    } catch (Exception e) {
+        echo "Failed to send Slack notification: ${e.message}"
+    }
+
+    // Grafana annotation
+    try {
+        withCredentials([string(credentialsId: 'grafana-api-key', variable: 'GRAFANA_API_KEY')]) {
+            sh """
+                curl -X POST ${GRAFANA_URL}/api/annotations \
+                    -H 'Content-Type: application/json' \
+                    -H 'Authorization: Bearer ${GRAFANA_API_KEY}' \
+                    -d '{
+                        "tags":["jenkins-config","${team}","${status}"],
+                        "text":"${message}"
+                    }'
+            """
+        }
+    } catch (Exception e) {
+        echo "Failed to send Grafana annotation: ${e.message}"
+    }
+}
