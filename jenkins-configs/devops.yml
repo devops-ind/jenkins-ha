@@ -1,0 +1,212 @@
+# Jenkins Configuration as Code for DevOps Team
+# This file is managed in Git and deployed via the "Update Team Configuration" Jenkins job
+#
+# Workflow:
+#   1. Edit this file
+#   2. Create Pull Request
+#   3. DevOps team reviews and approves
+#   4. On merge: Auto-deploys to STANDBY environment (blue or green)
+#   5. Validates health on standby
+#   6. Manual blue-green switch when ready
+#
+# WARNING: This file controls Jenkins runtime configuration
+# Invalid YAML or configuration will prevent Jenkins from starting
+# Always test changes in dev environment first
+
+jenkins:
+  systemMessage: |
+    Jenkins Master for DevOps Team
+    Managed via jenkins-configs/devops.yml in Git
+
+  numExecutors: 0  # Use only dynamic agents - DO NOT CHANGE
+  mode: EXCLUSIVE
+  scmCheckoutRetryCount: 3
+
+  # Security Configuration - MANAGED BY CORE AUTOMATION TEAM
+  # Do not modify security settings without approval
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          password: "${JENKINS_ADMIN_PASSWORD}"
+
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+  # Cloud Configuration for Dynamic Agents
+  # DevOps team can modify: instance caps, memory, labels, retention
+  clouds:
+    - docker:
+        name: "devops-docker-agents"
+        dockerApi:
+          dockerHost:
+            uri: "unix:///var/run/docker.sock"
+        templates:
+          # Maven Agent Template
+          - labelString: "devops-maven maven build"
+            dockerTemplateBase:
+              image: "jenkins/maven-agent:latest"
+              network: "jenkins-network"
+              memoryLimit: 2147483648  # 2GB in bytes
+              cpuPeriod: 100000
+              cpuQuota: 150000  # 1.5 CPU cores
+            remoteFs: "/home/jenkins/agent"
+            connector:
+              attach:
+                user: "jenkins"
+            instanceCapStr: "10"  # Max 10 concurrent maven agents
+            retentionStrategy:
+              idleMinutes: 10  # Keep alive for 10 min after last build
+            nodeProperties:
+              - envVars:
+                  env:
+                    - key: "TEAM_NAME"
+                      value: "devops"
+                    - key: "MAVEN_OPTS"
+                      value: "-Xmx1536m"
+
+          # Python Agent Template
+          - labelString: "devops-python python pytest"
+            dockerTemplateBase:
+              image: "jenkins/python-agent:latest"
+              network: "jenkins-network"
+              memoryLimit: 1073741824  # 1GB
+              cpuPeriod: 100000
+              cpuQuota: 100000  # 1 CPU core
+            remoteFs: "/home/jenkins/agent"
+            connector:
+              attach:
+                user: "jenkins"
+            instanceCapStr: "5"
+            retentionStrategy:
+              idleMinutes: 10
+            nodeProperties:
+              - envVars:
+                  env:
+                    - key: "TEAM_NAME"
+                      value: "devops"
+                    - key: "PYTHONUNBUFFERED"
+                      value: "1"
+
+          # NodeJS Agent Template
+          - labelString: "devops-nodejs nodejs npm"
+            dockerTemplateBase:
+              image: "jenkins/nodejs-agent:latest"
+              network: "jenkins-network"
+              memoryLimit: 1073741824  # 1GB
+              cpuPeriod: 100000
+              cpuQuota: 100000  # 1 CPU core
+            remoteFs: "/home/jenkins/agent"
+            connector:
+              attach:
+                user: "jenkins"
+            instanceCapStr: "5"
+            retentionStrategy:
+              idleMinutes: 10
+            nodeProperties:
+              - envVars:
+                  env:
+                    - key: "TEAM_NAME"
+                      value: "devops"
+                    - key: "NODE_ENV"
+                      value: "production"
+
+  # Global Environment Variables
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: "TEAM_NAME"
+            value: "devops"
+          - key: "JENKINS_URL"
+            value: "http://192.168.188.142:8080"  # Update with actual Jenkins URL
+          - key: "GIT_DEFAULT_BRANCH"
+            value: "main"
+
+# Credentials Configuration
+# WARNING: Do not store actual passwords here - use environment variable substitution
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: "devops-git-credentials"
+              username: "devops"
+              password: "${DEVOPS_GIT_PASSWORD}"
+              description: "DevOps Team Git Credentials"
+
+# Job DSL Configuration
+# This creates the folder structure and seed jobs
+jobs:
+  - script: |
+      folder('DevOps') {
+          displayName('DevOps Team Jobs')
+          description('Jobs for the DevOps team')
+      }
+
+      folder('DevOps/Infrastructure') {
+          displayName('Infrastructure Automation')
+          description('Infrastructure management and deployment jobs')
+      }
+
+      folder('DevOps/Applications') {
+          displayName('Application Deployments')
+          description('Application build and deployment jobs')
+      }
+
+      folder('DevOps/Monitoring') {
+          displayName('Monitoring & Alerts')
+          description('Monitoring setup and alert management')
+      }
+
+      // Example Pipeline Job
+      pipelineJob('DevOps/Infrastructure/update-jenkins-config') {
+          displayName('Update Jenkins Configuration')
+          description('Self-service job to update team Jenkins configuration')
+
+          parameters {
+              gitParameter {
+                  name('GIT_BRANCH')
+                  description('Branch containing config changes')
+                  type('PT_BRANCH')
+                  defaultValue('main')
+              }
+              booleanParam('AUTO_SWITCH', false, 'Automatically switch traffic after validation')
+          }
+
+          definition {
+              cpsScm {
+                  scm {
+                      git {
+                          remote {
+                              url('https://github.com/your-org/jenkins-ha.git')
+                              credentials('devops-git-credentials')
+                          }
+                          branches('*/${GIT_BRANCH}')
+                      }
+                  }
+                  scriptPath('pipelines/Jenkinsfile.config-update')
+                  lightweight(true)
+              }
+          }
+      }
+
+# Unclassified Configuration
+# Prometheus monitoring and other plugins
+unclassified:
+  prometheus:
+    collectingMetricsPeriodInSeconds: 120
+    defaultNamespace: "jenkins_devops"
+    path: "prometheus"
+    useAuthenticatedEndpoint: false
+
+# Script Approval - Pre-approved signatures for Job DSL
+# MANAGED BY CORE AUTOMATION TEAM
+security:
+  scriptApproval:
+    approvedSignatures:
+      - "method groovy.lang.GroovyObject invokeMethod java.lang.String java.lang.Object"
+      - "method jenkins.model.Jenkins getItemByFullName java.lang.String"
+      - "staticMethod jenkins.model.Jenkins getInstance"
