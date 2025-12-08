@@ -1,0 +1,97 @@
+---
+# Symlink-Based Configuration Management for Dynamic JCasC Updates
+# This approach eliminates the need for blue-green container switching
+# by using symlinks to switch configurations and hot-reloading Jenkins
+
+- name: Create configuration directory structure for symlink management
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ jenkins_master_user_id }}"
+    group: "{{ jenkins_master_group_id }}"
+    mode: '0755'
+  loop:
+    - "/var/jenkins/{{ team_config.team_name }}/configs"
+    - "/var/jenkins/{{ team_config.team_name }}/configs/blue"
+    - "/var/jenkins/{{ team_config.team_name }}/configs/green"
+    - "/var/jenkins/{{ team_config.team_name }}/backups"
+  tags: ['config-symlinks', 'setup']
+
+- name: Check if active symlink exists
+  stat:
+    path: "/var/jenkins/{{ team_config.team_name }}/configs/active"
+  register: active_symlink_stat
+  tags: ['config-symlinks']
+
+- name: Deploy initial JCasC configuration to blue
+  copy:
+    src: "{{ jenkins_master_casc_config_source | default('files/jenkins.yaml') }}"
+    dest: "/var/jenkins/{{ team_config.team_name }}/configs/blue/jenkins.yaml"
+    owner: "{{ jenkins_master_user_id }}"
+    group: "{{ jenkins_master_group_id }}"
+    mode: '0644'
+  when: not active_symlink_stat.stat.exists
+  tags: ['config-symlinks', 'setup']
+
+- name: Deploy initial JCasC configuration to green
+  copy:
+    src: "{{ jenkins_master_casc_config_source | default('files/jenkins.yaml') }}"
+    dest: "/var/jenkins/{{ team_config.team_name }}/configs/green/jenkins.yaml"
+    owner: "{{ jenkins_master_user_id }}"
+    group: "{{ jenkins_master_group_id }}"
+    mode: '0644'
+  when: not active_symlink_stat.stat.exists
+  tags: ['config-symlinks', 'setup']
+
+- name: Create initial active symlink pointing to blue
+  file:
+    src: "blue"
+    dest: "/var/jenkins/{{ team_config.team_name }}/configs/active"
+    state: link
+    owner: "{{ jenkins_master_user_id }}"
+    group: "{{ jenkins_master_group_id }}"
+  when: not active_symlink_stat.stat.exists
+  tags: ['config-symlinks', 'setup']
+
+- name: Create state tracking file for symlink-based config
+  copy:
+    content: |
+      {
+        "config_mode": "symlink",
+        "active_config": "blue",
+        "last_update": "{{ ansible_date_time.iso8601 }}",
+        "team_name": "{{ team_config.team_name }}",
+        "container_name": "jenkins-{{ team_config.team_name }}",
+        "casc_mount_path": "/var/jenkins/{{ team_config.team_name }}/configs/active"
+      }
+    dest: "/var/jenkins/{{ team_config.team_name }}/config-state.json"
+    owner: "{{ jenkins_master_user_id }}"
+    group: "{{ jenkins_master_group_id }}"
+    mode: '0644'
+  tags: ['config-symlinks', 'setup']
+
+- name: Create update lock directory
+  file:
+    path: "/var/jenkins/{{ team_config.team_name }}/update.lock"
+    state: directory
+    owner: "{{ jenkins_master_user_id }}"
+    group: "{{ jenkins_master_group_id }}"
+    mode: '0755'
+  tags: ['config-symlinks', 'setup']
+
+- name: Remove update lock (in case of stale lock)
+  file:
+    path: "/var/jenkins/{{ team_config.team_name }}/update.lock"
+    state: absent
+  tags: ['config-symlinks', 'cleanup']
+
+- name: Display symlink configuration summary
+  debug:
+    msg: |
+      Symlink Configuration for {{ team_config.team_name }}:
+      - Blue config: /var/jenkins/{{ team_config.team_name }}/configs/blue/jenkins.yaml
+      - Green config: /var/jenkins/{{ team_config.team_name }}/configs/green/jenkins.yaml
+      - Active symlink: /var/jenkins/{{ team_config.team_name }}/configs/active -> blue
+      - Backups: /var/jenkins/{{ team_config.team_name }}/backups/
+      - Container mount: /var/jenkins/{{ team_config.team_name }}/configs/active:/var/jenkins_home/casc_configs:ro
+  tags: ['config-symlinks']
