@@ -36,6 +36,7 @@ This is a production-grade Jenkins infrastructure with **Blue-Green Deployment**
 - **🔧 Cross-VM Monitoring Fix**: Fixed critical network communication issues between monitoring agents and servers across VMs. All agents (Node Exporter, Promtail, cAdvisor) now use `network_mode: host` for cross-VM connectivity. Prometheus target generation reordered to execute BEFORE template rendering. Template updated to include cross-VM targets with role labels. Comprehensive troubleshooting guide with health check scripts, verification procedures, and migration paths
 - **♻️ Monitoring Role Refactoring v2.0**: **NEW** - Complete architectural refactoring with phase-based organization. **67% reduction in main.yml** (489→161 lines), **40% elimination of code duplication** (unified agent deployment), clear server/agent separation across 4 phases. Multi-host deployment capability (`monitoring:jenkins_masters`), single deployment path per agent, improved maintainability and testability. Follows HAProxy/Jenkins role patterns with import_tasks orchestration. Production-ready with comprehensive refactoring guide
 - **🔌 GitHub & Jira Integration**: GitHub Enterprise datasource for repository metrics, PR tracking, and workflow status; Jira Cloud datasource for sprint management and issue tracking; Auto-provisioned with secure vault credential management; Pre-built 10-panel dashboard correlating code and project management data; Full JQL query support for custom Jira metrics
+- **🔄 File-Based JCasC Hot-Reload**: **NEW** - Docker-compatible hot-reload for Jenkins Configuration as Code. File-copy approach (blue.yaml → current.yaml) avoids Docker symlink resolution issues. Zero-downtime config updates via JCasC API, automatic backups with retention (keep last 10), state tracking JSON for audit trail. Single container per team (50% resource reduction). Symlink approach deprecated due to Docker mount limitations
 
 ## Key Commands
 
@@ -221,6 +222,46 @@ ansible-playbook ansible/inventories/local/hosts.yml troubleshoot-haproxy-ssl.ym
 ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml --tags glusterfs
 ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml --tags glusterfs,mount  # With server-side mounting
 ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/test-glusterfs.yml
+```
+
+### File-Based JCasC Hot-Reload Commands (NEW)
+```bash
+# Deploy Jenkins with file-based config mode
+# Set in ansible/group_vars/all/jenkins.yml: jenkins_config_update_mode: "file"
+ansible-playbook -i ansible/inventories/production/hosts.yml ansible/site.yml --tags jenkins,deploy
+
+# Switch configuration from blue to green (zero-downtime)
+./scripts/config-file-switch.sh devops green
+
+# Trigger JCasC hot-reload API (apply new config without restart)
+curl -X POST -u admin:TOKEN http://jenkins-host:8080/configuration-as-code/reload
+
+# Verify current active configuration
+cat /var/jenkins/devops/config-state.json | jq '.active_config'
+
+# View configuration file structure
+ls -la /var/jenkins/devops/configs/
+# Expected output:
+# -rw-r--r-- 1 jenkins jenkins 5432 Dec 09 10:15 blue.yaml
+# -rw-r--r-- 1 jenkins jenkins 5521 Dec 09 10:15 green.yaml
+# -rw-r--r-- 1 jenkins jenkins 5432 Dec 09 10:15 current.yaml (copy of blue or green)
+
+# View backup history
+ls -lt /var/jenkins/devops/backups/ | head -10
+
+# Manual rollback to previous config
+BACKUP_FILE=$(ls -t /var/jenkins/devops/backups/ | head -1)
+cp /var/jenkins/devops/backups/$BACKUP_FILE /var/jenkins/devops/configs/current.yaml
+curl -X POST -u admin:TOKEN http://jenkins-host:8080/configuration-as-code/reload
+
+# Verify container mount (should show single file mount)
+docker inspect jenkins-devops | grep -A 10 "Mounts"
+# Expected: /var/jenkins/devops/configs/current.yaml:/var/jenkins_home/casc_configs/jenkins.yaml:ro
+
+# Deployment modes comparison:
+# jenkins_config_update_mode: "file"        # RECOMMENDED - File-copy hot-reload
+# jenkins_config_update_mode: "symlink"     # DEPRECATED - Symlink (doesn't work with Docker)
+# jenkins_config_update_mode: "blue-green"  # LEGACY - Dual containers
 ```
 
 ### Pre-commit Hooks and Code Quality (NEW)
