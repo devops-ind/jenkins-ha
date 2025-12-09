@@ -145,10 +145,6 @@ jenkins_teams:
       network_policies:
         ingress_allowed: ["devops", "monitoring"]
         egress_allowed: ["harbor", "git_repos"]
-      code_scanning:
-        enabled: true
-        tools: ["sonarqube", "trivy", "bandit"]
-    
     credentials:
       - type: "usernamePassword"
         id: "dev-qa-git-credentials"
@@ -161,10 +157,6 @@ jenkins_teams:
         username: "{{ vault_harbor_username | default('admin') }}"
         password: "{{ vault_harbor_password | default('Harbor12345') }}"
         description: "Harbor Registry Credentials"
-      - type: "secretText"
-        id: "sonar-token"
-        secret: "{{ vault_sonar_token | default('sonar123') }}"
-        description: "SonarQube Analysis Token"
     seed_jobs:
       - name: "qa-automation-pipeline"
         type: "pipeline"

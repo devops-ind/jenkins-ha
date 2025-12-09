@@ -3,9 +3,37 @@
 
 # Volumes are managed by the main volume management tasks (volumes.yml)
 
-- name: Deploy Jenkins containers for blue-green environments
-  include_tasks: "containers/docker.yml"
+# Determine deployment mode: 'symlink' or 'blue-green'
+- name: Set container deployment mode
+  set_fact:
+    jenkins_container_mode: "{{ jenkins_config_update_mode | default('blue-green') }}"
   tags: ['container', 'deploy']
+
+- name: Display container deployment mode
+  debug:
+    msg: "Jenkins container deployment mode: {{ jenkins_container_mode }}"
+  tags: ['container', 'deploy']
+
+# Symlink-based configuration management (new approach)
+- name: Setup symlink-based config directories
+  include_tasks: config-symlinks.yml
+  loop: "{{ jenkins_effective_config }}"
+  loop_control:
+    loop_var: team_config
+    label: "{{ team_config.team_name }}"
+  when: jenkins_container_mode == 'symlink'
+  tags: ['container', 'deploy', 'config-symlinks']
+
+# Deploy containers based on mode
+- name: Deploy Jenkins containers (symlink mode - single container per team)
+  include_tasks: "containers/docker-symlink.yml"
+  when: jenkins_container_mode == 'symlink'
+  tags: ['container', 'deploy', 'symlink']
+
+- name: Deploy Jenkins containers (blue-green mode - dual containers per team)
+  include_tasks: "containers/docker.yml"
+  when: jenkins_container_mode == 'blue-green'
+  tags: ['container', 'deploy', 'blue-green']
 
 - name: Wait for containers to be operational
   pause:
