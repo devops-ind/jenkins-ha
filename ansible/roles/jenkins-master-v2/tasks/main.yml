@@ -36,10 +36,19 @@
 - name: Filter teams for deployment - Default (all teams)
   set_fact:
     jenkins_teams_filtered: "{{ jenkins_teams_config }}"
-  when: 
+  when:
     - deploy_teams is not defined or deploy_teams == ""
     - exclude_teams is not defined or exclude_teams == ""
   tags: ['always']
+
+- name: Filter teams for multi-VM deployment (Option 2 architecture)
+  set_fact:
+    jenkins_teams_filtered: "{{ jenkins_teams_filtered | selectattr('team_name', 'in', jenkins_teams_on_vm) | list }}"
+  when:
+    - multi_vm_enabled | default(false)
+    - jenkins_teams_on_vm is defined
+    - jenkins_teams_on_vm | length > 0
+  tags: ['always', 'multi-vm']
 
 - name: Debug team filtering results
   debug:
@@ -47,6 +56,11 @@
       ====================================================
       Team Filtering Debug Information
       ====================================================
+      Deployment Architecture: {{ 'Multi-VM (Option 2)' if multi_vm_enabled | default(false) else 'Single-VM' }}
+      Current VM: {{ inventory_hostname }}
+      {% if multi_vm_enabled | default(false) and jenkins_teams_on_vm is defined %}
+      Teams assigned to this VM: {{ jenkins_teams_on_vm | join(', ') }}
+      {% endif %}
       Original teams count: {{ jenkins_teams_config | length }}
       Original teams: {{ jenkins_teams_config | map(attribute='team_name') | list | join(', ') }}
       Filtered teams count: {{ jenkins_teams_filtered | length }}
