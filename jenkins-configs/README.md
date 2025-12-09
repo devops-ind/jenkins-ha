@@ -2,6 +2,22 @@
 
 This directory contains Jenkins Configuration-as-Code (JCasC) files for each team. These files control the runtime configuration of Jenkins instances.
 
+## 🆕 New Symlink-Based Update Approach
+
+**Important**: This repository now uses a **simplified symlink-based approach** for configuration updates:
+- ✅ **Zero-downtime updates** via hot-reload (no container restart)
+- ✅ **Single container per team** (eliminates blue-green container complexity)
+- ✅ **Faster switches** (<1 second symlink + 1-5 second reload)
+- ✅ **Simpler workflow** (validate → switch symlink → hot-reload)
+- ✅ **Automatic rollback** on failure
+
+**For detailed documentation**, see: [`docs/SYMLINK-CONFIG-UPDATE.md`](../docs/SYMLINK-CONFIG-UPDATE.md)
+
+**To enable symlink mode**, set in your inventory:
+```yaml
+jenkins_config_update_mode: "symlink"  # Default: "blue-green"
+```
+
 ## 📋 Table of Contents
 
 - [Quick Start](#quick-start)

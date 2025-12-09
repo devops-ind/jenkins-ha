@@ -163,10 +163,43 @@
   tags: ['custom-images', 'build']
 
 # ====================================
-# ZERO-DOWNTIME CONTAINER DEPLOYMENT PHASE
+# CONFIGURATION MODE SELECTION
 # ====================================
 
-- name: Deploy Jenkins containers with Zero-Downtime Blue-Green Strategy
+- name: Determine configuration update mode
+  set_fact:
+    jenkins_config_mode: "{{ jenkins_config_update_mode | default('blue-green') }}"
+  tags: ['containers', 'deploy']
+
+- name: Display configuration update mode
+  debug:
+    msg: |
+      Configuration Update Mode: {{ jenkins_config_mode }}
+      - 'symlink': Single container + hot-reload (recommended)
+      - 'blue-green': Dual containers + traffic switching (legacy)
+  tags: ['containers', 'deploy']
+
+# ====================================
+# SYMLINK-BASED CONFIG SETUP (NEW)
+# ====================================
+
+- name: Setup symlink-based configuration infrastructure
+  include_tasks: symlink-config-setup.yml
+  when: jenkins_config_mode == 'symlink'
+  tags: ['containers', 'config-symlinks', 'symlink']
+
+# ====================================
+# CONTAINER DEPLOYMENT - MODE SELECTION
+# ====================================
+
+- name: Deploy Jenkins containers (Symlink Hot-Reload Mode)
+  include_tasks: deploy-symlink-containers.yml
+  when: jenkins_config_mode == 'symlink'
+  tags: ['containers', 'deploy', 'symlink']
+
+- name: Deploy Jenkins containers (Blue-Green Mode - Legacy)
+  when: jenkins_config_mode == 'blue-green'
+  tags: ['containers', 'deploy', 'blue-green']
   block:
     - name: Deploy Jenkins active environment containers (Zero-Downtime)
       community.docker.docker_container:
