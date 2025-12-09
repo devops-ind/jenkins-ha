@@ -1,0 +1,58 @@
+1. Scope & Triggering
+
+  - Should this update ALL teams' configs simultaneously or support per-team updates? It should have all/per-team update.
+  - Should it be manual (operator runs playbook) or integrated with Jenkins jobs (Infrastructure/Config-Update job calls it)? Manual for now with future scope to integrated job.
+  - Should it support environment-specific updates (update blue only, or green only, or both)? Both
+
+  2. Configuration Source
+
+  Where will the JCasC config files come from? Option A
+  - Option A: Git repository (clone/pull and apply)
+  - Option B: Jenkins DSL (generate from Job DSL, then apply)
+  - Option C: Manual files (already on disk, validate and switch)
+  - Option D: Templated from inventory (render templates from ansible/group_vars and apply)
+  - Option E: Combination (template rendering + Git validation)?
+
+  3. Update Strategy
+
+  How should updates be applied? Blue-Green and Atomic Approach
+  - In-place update: Modify current.yaml directly and trigger reload
+  - Blue-green approach: Create new config version, validate, then switch 
+  - Atomic operations: Backup before update, rollback on failure?
+
+  4. Validation & Safety
+
+  What validation should occur before/after update?
+  - JCasC syntax validation? Before update
+  - Jenkins connectivity check? Before and After
+  - Config schema validation? Before Update
+  - Test reload on a dry-run first? Before update
+  - Automated rollback if post-update checks fail? After Update
+
+  5. State Management
+
+  Should the playbook track deployment state? Yes
+  - Store which config version is active?
+  - Maintain audit history (who changed what when)?
+  - Version tracking (git tags, timestamps)?
+  - Rollback to previous versions support?
+
+  6. Integration Points
+
+  How should this integrate with existing infrastructure? Standalone playbook, integrated with group variables
+  - Standalone playbook in ansible/playbooks/?
+  - Or integrated into existing site.yml with new tags?
+  - Should it call existing roles or be self-contained?
+  - How to trigger from Jenkins UI (call via ansible-playbook or use Ansible plugin)?
+
+  7. Multi-Team & Idempotency : Idempotent
+
+  - Per-team separate variables or batch operations?
+  - Idempotent (safe to run multiple times)?
+  - Detect if config already matches target and skip?
+
+  8. Secrets Handling: Use Ansible Vault as already used.
+
+  - Use Ansible Vault for sensitive JCasC values?
+  - Reference vault values in templates?
+  - Keep secrets in jenkins.yml or externalize?

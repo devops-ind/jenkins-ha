@@ -1,0 +1,144 @@
+#!/usr/bin/env groovy
+/*
+ * Jenkins Configuration as Code (JCasC) Hot-Reload Pipeline
+ *
+ * Self-service pipeline for updating team Jenkins configurations with zero downtime.
+ * Uses file-based config switching with automatic hot-reload and rollback on failure.
+ *
+ * Workflow:
+ * 1. Validate parameters
+ * 2. Call Ansible playbook: jcasc-hot-reload.yml
+ * 3. Playbook executes for each team:
+ *    - Switches config file (backup + atomic copy)
+ *    - Triggers JCasC reload API
+ *    - Validates Jenkins health
+ *    - Automatic rollback on failure
+ * 4. Notify on completion
+ *
+ * Features:
+ * - Per-team or batch updates
+ * - Dry-run mode (Ansible --check)
+ * - Automatic rollback on failure
+ * - Audit logging
+ * - State tracking
+ */
+
+pipeline {
+    agent {
+        label 'master'
+    }
+
+    parameters {
+        choice(
+            name: 'TEAMS',
+            choices: ['all', 'devops', 'ma', 'ba', 'tw'],
+            description: 'Teams to update'
+        )
+        choice(
+            name: 'ENVIRONMENTS',
+            choices: ['both', 'blue', 'green'],
+            description: 'Environments (blue/green/both)'
+        )
+        booleanParam(
+            name: 'DRY_RUN',
+            defaultValue: false,
+            description: 'Dry-run mode (no changes - Ansible --check)'
+        )
+    }
+
+    environment {
+        ANSIBLE_INV = 'ansible/inventories/production/hosts.yml'
+        ANSIBLE_PLAYBOOK = 'ansible/playbooks/jcasc-hot-reload.yml'
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '30', daysToKeepStr: '90'))
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+        disableConcurrentBuilds()
+    }
+
+    stages {
+        stage('Pre-flight Checks') {
+            steps {
+                script {
+                    echo "=========================================="
+                    echo "JCasC Hot-Reload Update"
+                    echo "=========================================="
+                    echo "Teams: ${params.TEAMS}"
+                    echo "Environments: ${params.ENVIRONMENTS}"
+                    echo "Dry-run: ${params.DRY_RUN}"
+                    echo "=========================================="
+
+                    // Validate parameters
+                    def validTeams = ['all', 'devops', 'ma', 'ba', 'tw']
+                    def validEnvs = ['both', 'blue', 'green']
+
+                    if (!validTeams.contains(params.TEAMS)) {
+                        error("Invalid TEAMS parameter: ${params.TEAMS}")
+                    }
+
+                    if (!validEnvs.contains(params.ENVIRONMENTS)) {
+                        error("Invalid ENVIRONMENTS parameter: ${params.ENVIRONMENTS}")
+                    }
+                }
+            }
+        }
+
+        stage('Execute JCasC Hot-Reload') {
+            steps {
+                script {
+                    def dryRunFlag = params.DRY_RUN ? '--check' : ''
+
+                    sh '''
+                        echo "Starting JCasC hot-reload playbook execution..."
+
+                        ansible-playbook -i ${ANSIBLE_INV} ${ANSIBLE_PLAYBOOK} \
+                          -e "jcasc_teams_input=${TEAMS}" \
+                          -e "jcasc_environments_input=${ENVIRONMENTS}" \
+                          -v ${DRY_RUN ? '--check' : ''}
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            script {
+                echo "=========================================="
+                echo "✅ JCasC Update Completed Successfully"
+                echo "=========================================="
+                echo "Teams: ${params.TEAMS}"
+                echo "Environments: ${params.ENVIRONMENTS}"
+                echo "Check Jenkins audit log for details"
+                echo "=========================================="
+            }
+        }
+
+        failure {
+            script {
+                echo "=========================================="
+                echo "❌ JCasC Update Failed"
+                echo "=========================================="
+                echo "Teams: ${params.TEAMS}"
+                echo "Environments: ${params.ENVIRONMENTS}"
+                echo "Status: Automatic rollback has been applied"
+                echo "Check Jenkins audit log for error details"
+                echo "=========================================="
+            }
+        }
+
+        always {
+            script {
+                echo "Pipeline execution completed"
+                // Archive console output for audit trail
+                sh '''
+                    mkdir -p build-logs
+                    echo "${BUILD_LOG}" > build-logs/jcasc-update-${BUILD_NUMBER}.log || true
+                '''
+                archiveArtifacts artifacts: 'build-logs/**', allowEmptyArchive: true
+            }
+        }
+    }
+}

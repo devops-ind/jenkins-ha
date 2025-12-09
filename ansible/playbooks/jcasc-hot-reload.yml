@@ -1,0 +1,77 @@
+---
+- name: JCasC Hot-Reload Configuration Update
+  hosts: jenkins_masters
+  serial: 1
+  gather_facts: yes
+
+  vars_prompt:
+    - name: jcasc_teams_input
+      prompt: "Teams to update (all or comma-separated)"
+      default: "all"
+    - name: jcasc_environments_input
+      prompt: "Environments (blue/green/both)"
+      default: "both"
+
+  vars:
+    jcasc_teams: "{{ jcasc_teams_input }}"
+    jcasc_environments: "{{ jcasc_environments_input }}"
+    teams_list: "{{ (jcasc_teams == 'all') | ternary(jenkins_teams | map(attribute='team_name') | list, jcasc_teams.split(',') | map('trim') | list) }}"
+
+  pre_tasks:
+    - name: Pre-flight checks
+      block:
+        - name: Check Jenkins connectivity
+          uri:
+            url: "{{ jenkins_url }}/api/json"
+            method: GET
+            status_code: [200, 403]
+          register: jenkins_health
+          ignore_errors: yes
+
+        - name: Display Jenkins health status
+          debug:
+            msg: "Jenkins health: {{ jenkins_health.status | default('Unreachable') }}"
+
+        - name: Validate teams exist
+          assert:
+            that:
+              - item in (jenkins_teams | map(attribute='team_name') | list)
+            fail_msg: "Team {{ item }} not found in jenkins_teams configuration"
+          loop: "{{ teams_list }}"
+
+        - name: Display update plan
+          debug:
+            msg: |
+              JCasC Hot-Reload Update Plan
+              ========================================
+              Teams: {{ teams_list | join(', ') }}
+              Environments: {{ jcasc_environments }}
+              Jenkins URL: {{ jenkins_url }}
+              ========================================
+
+  tasks:
+    - name: Update JCasC for each team
+      include_tasks: tasks/jcasc-update-team.yml
+      loop: "{{ teams_list }}"
+      loop_control:
+        loop_var: current_team
+
+  post_tasks:
+    - name: Final Jenkins health check
+      uri:
+        url: "{{ jenkins_url }}/api/json"
+        method: GET
+      register: final_health
+      failed_when: final_health.status not in [200, 403]
+      retries: 3
+      delay: 5
+
+    - name: Display completion summary
+      debug:
+        msg: |
+          ========================================
+          JCasC Hot-Reload Completed Successfully
+          ========================================
+          Teams Updated: {{ teams_list | join(', ') }}
+          Final Jenkins Status: {{ final_health.status }}
+          ========================================
