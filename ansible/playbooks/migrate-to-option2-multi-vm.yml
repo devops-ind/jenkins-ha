@@ -1,0 +1,448 @@
+---
+# Gradual Migration Playbook for Option 2 (Hybrid) Multi-VM Architecture
+# Migrates from single-VM to 3-VM setup with validation and rollback capabilities
+#
+# Architecture:
+#   VM1 (192.168.188.142) - Jenkins Blue (devops, ma teams)
+#   VM2 (192.168.188.143) - Jenkins Green (ba, tw teams)
+#   VM3 (192.168.188.144) - Shared Services (HAProxy, Monitoring)
+#
+# Usage:
+#   # Full migration (all phases)
+#   ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/migrate-to-option2-multi-vm.yml
+#
+#   # Specific phase only
+#   ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/migrate-to-option2-multi-vm.yml --tags phase1
+#   ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/migrate-to-option2-multi-vm.yml --tags phase2
+#   ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/migrate-to-option2-multi-vm.yml --tags phase3
+#   ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/migrate-to-option2-multi-vm.yml --tags phase4
+#
+#   # Validation only (no changes)
+#   ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/migrate-to-option2-multi-vm.yml --tags validation --check
+#
+#   # Rollback
+#   ansible-playbook -i ansible/inventories/production/hosts.yml ansible/playbooks/migrate-to-option2-multi-vm.yml --tags rollback
+
+- name: Option 2 Multi-VM Migration - Pre-flight Validation
+  hosts: localhost
+  gather_facts: no
+  tags: ['always', 'validation']
+  tasks:
+    - name: Display migration information
+      debug:
+        msg: |
+          ============================================================
+          Option 2 (Hybrid) Multi-VM Migration
+          ============================================================
+          Architecture: Jenkins Blue + Jenkins Green + Shared Services
+          Target VMs: 3 ({{ groups['jenkins_masters'] | length }} Jenkins + {{ groups['monitoring'] | length }} Monitoring)
+
+          Migration Phases:
+          Phase 1: Deploy monitoring to VM3 ({{ groups['monitoring'][0] }})
+          Phase 2: Setup GlusterFS between VM1 and VM2
+          Phase 3: Deploy HAProxy to VM3 with cross-VM backends
+          Phase 4: Migrate Jenkins teams to distributed VMs
+
+          Team Distribution:
+          {% for host in groups['jenkins_masters'] %}
+          - {{ host }}: {{ hostvars[host]['jenkins_teams_on_vm'] | join(', ') }}
+          {% endfor %}
+          ============================================================
+
+    - name: Validate inventory configuration
+      assert:
+        that:
+          - groups['jenkins_masters'] is defined
+          - groups['jenkins_masters'] | length == 2
+          - groups['monitoring'] is defined
+          - groups['monitoring'] | length >= 1
+          - groups['glusterfs_servers'] is defined
+          - groups['glusterfs_servers'] | length == 2
+          - multi_vm_enabled is defined
+          - multi_vm_enabled == true
+        fail_msg: |
+          ERROR: Inventory not configured for Option 2 multi-VM architecture!
+
+          Requirements:
+          - 2 Jenkins VMs in jenkins_masters group
+          - 1+ Monitoring VM in monitoring group
+          - 2 VMs in glusterfs_servers group
+          - multi_vm_enabled: true
+
+          Current inventory:
+          - jenkins_masters: {{ groups['jenkins_masters'] | default([]) | length }}
+          - monitoring: {{ groups['monitoring'] | default([]) | length }}
+          - glusterfs_servers: {{ groups['glusterfs_servers'] | default([]) | length }}
+          - multi_vm_enabled: {{ multi_vm_enabled | default('not set') }}
+        success_msg: "Inventory validation passed"
+
+    - name: Validate team distribution
+      assert:
+        that:
+          - hostvars[item]['jenkins_teams_on_vm'] is defined
+          - hostvars[item]['jenkins_teams_on_vm'] | length > 0
+        fail_msg: "ERROR: VM {{ item }} does not have jenkins_teams_on_vm defined in inventory"
+        success_msg: "Team distribution configured for {{ item }}: {{ hostvars[item]['jenkins_teams_on_vm'] | join(', ') }}"
+      loop: "{{ groups['jenkins_masters'] }}"
+
+    - name: Create migration state directory
+      file:
+        path: "{{ playbook_dir }}/../.migration-state"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+
+    - name: Save migration state snapshot
+      copy:
+        content: |
+          migration_type: "option2-hybrid-multi-vm"
+          started_at: "{{ ansible_date_time.iso8601 }}"
+          source_architecture: "single-vm"
+          target_architecture: "option2-hybrid"
+          jenkins_vms: {{ groups['jenkins_masters'] | to_json }}
+          monitoring_vms: {{ groups['monitoring'] | to_json }}
+          phases:
+            - phase: 1
+              name: "Deploy Monitoring"
+              status: "pending"
+            - phase: 2
+              name: "Setup GlusterFS"
+              status: "pending"
+            - phase: 3
+              name: "Deploy HAProxy"
+              status: "pending"
+            - phase: 4
+              name: "Migrate Jenkins Teams"
+              status: "pending"
+        dest: "{{ playbook_dir }}/../.migration-state/migration-{{ ansible_date_time.epoch }}.yml"
+      delegate_to: localhost
+
+# ==============================================================================
+# PHASE 1: Deploy Monitoring to Dedicated VM
+# ==============================================================================
+
+- name: Phase 1 - Deploy Monitoring Stack to Shared Services VM
+  hosts: monitoring
+  become: yes
+  tags: ['phase1', 'monitoring']
+  pre_tasks:
+    - name: Display Phase 1 information
+      debug:
+        msg: |
+          ============================================================
+          Phase 1: Deploy Monitoring to VM3 (Shared Services)
+          ============================================================
+          Target VM: {{ inventory_hostname }} ({{ ansible_default_ipv4.address }})
+          Components: Prometheus, Grafana, Loki, Alertmanager
+          Deployment Type: {{ monitoring_deployment_type }}
+          Duration: ~10-15 minutes
+          ============================================================
+
+    - name: Pause for confirmation (Phase 1)
+      pause:
+        prompt: |
+
+          Ready to deploy monitoring stack to {{ inventory_hostname }}?
+
+          This will:
+          - Deploy Prometheus, Grafana, Loki, Alertmanager on VM3
+          - Configure cross-VM agent collection
+          - Setup firewall rules for cross-VM communication
+
+          Press ENTER to continue or Ctrl+C to abort
+      when: migration_require_confirmation | default(true)
+
+  roles:
+    - role: common
+      tags: ['common', 'setup']
+    - role: monitoring
+      tags: ['monitoring']
+
+  post_tasks:
+    - name: Validate Phase 1 deployment
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ monitoring_ports.prometheus }}/api/v1/status/config"
+        status_code: 200
+      register: prometheus_health
+      retries: 5
+      delay: 10
+
+    - name: Phase 1 completion summary
+      debug:
+        msg: |
+          ============================================================
+          Phase 1: COMPLETED
+          ============================================================
+          Monitoring Stack: DEPLOYED
+          Prometheus: http://{{ ansible_default_ipv4.address }}:{{ monitoring_ports.prometheus }}
+          Grafana: http://{{ ansible_default_ipv4.address }}:{{ monitoring_ports.grafana }}
+          Loki: http://{{ ansible_default_ipv4.address }}:{{ monitoring_ports.loki }}
+
+          Next: Phase 2 - Setup GlusterFS cluster
+          Command: ansible-playbook ... --tags phase2
+          ============================================================
+
+# ==============================================================================
+# PHASE 2: Setup GlusterFS Replication Between Jenkins VMs
+# ==============================================================================
+
+- name: Phase 2 - Setup GlusterFS Cluster
+  hosts: glusterfs_servers
+  become: yes
+  tags: ['phase2', 'glusterfs']
+  pre_tasks:
+    - name: Display Phase 2 information
+      debug:
+        msg: |
+          ============================================================
+          Phase 2: Setup GlusterFS Replication
+          ============================================================
+          Cluster Nodes: {{ groups['glusterfs_servers'] | join(', ') }}
+          Replication Factor: {{ glusterfs_replicas | default(2) }}
+          Volume Type: {{ glusterfs_volume_type | default('replicate') }}
+          Duration: ~15-20 minutes
+          ============================================================
+      run_once: true
+
+    - name: Pause for confirmation (Phase 2)
+      pause:
+        prompt: |
+
+          Ready to setup GlusterFS cluster between {{ groups['glusterfs_servers'] | join(' and ') }}?
+
+          This will:
+          - Install GlusterFS 10.x on both Jenkins VMs
+          - Create trusted storage pool (peer probe)
+          - Create replicated volumes for Jenkins data
+          - Configure firewall rules
+
+          Press ENTER to continue or Ctrl+C to abort
+      when: migration_require_confirmation | default(true)
+      run_once: true
+
+  roles:
+    - role: glusterfs-server
+      tags: ['glusterfs']
+
+  post_tasks:
+    - name: Validate Phase 2 deployment
+      block:
+        - name: Check GlusterFS service status
+          service:
+            name: glusterd
+            state: started
+          register: glusterd_status
+
+        - name: Verify peer status
+          command: gluster peer status
+          register: peer_status
+          changed_when: false
+
+        - name: Verify volume status
+          command: gluster volume list
+          register: volume_list
+          changed_when: false
+
+    - name: Phase 2 completion summary
+      debug:
+        msg: |
+          ============================================================
+          Phase 2: COMPLETED
+          ============================================================
+          GlusterFS Cluster: ACTIVE
+          Cluster Nodes: {{ groups['glusterfs_servers'] | length }}
+          Peer Status: {{ peer_status.stdout_lines | join(', ') }}
+          Volumes: {{ volume_list.stdout_lines | join(', ') }}
+
+          Next: Phase 3 - Deploy HAProxy with cross-VM backends
+          Command: ansible-playbook ... --tags phase3
+          ============================================================
+      run_once: true
+
+# ==============================================================================
+# PHASE 3: Deploy HAProxy to Shared Services VM
+# ==============================================================================
+
+- name: Phase 3 - Deploy HAProxy with Cross-VM Backends
+  hosts: load_balancers
+  become: yes
+  tags: ['phase3', 'haproxy']
+  pre_tasks:
+    - name: Display Phase 3 information
+      debug:
+        msg: |
+          ============================================================
+          Phase 3: Deploy HAProxy Load Balancer
+          ============================================================
+          Target VM: {{ inventory_hostname }} ({{ ansible_default_ipv4.address }})
+          Backend Mode: {{ haproxy_backend_mode | default('cross-vm') }}
+          Jenkins VMs: {{ groups['jenkins_masters'] | join(', ') }}
+          Duration: ~5-10 minutes
+          ============================================================
+
+    - name: Pause for confirmation (Phase 3)
+      pause:
+        prompt: |
+
+          Ready to deploy HAProxy to {{ inventory_hostname }}?
+
+          This will:
+          - Deploy HAProxy on VM3 (Shared Services)
+          - Configure backends for Jenkins VMs (cross-VM routing)
+          - Setup health checks for team-specific Jenkins instances
+          - Configure wildcard subdomain routing
+
+          Press ENTER to continue or Ctrl+C to abort
+      when: migration_require_confirmation | default(true)
+
+  roles:
+    - role: high-availability-v2
+      tags: ['haproxy', 'ssl']
+
+  post_tasks:
+    - name: Validate Phase 3 deployment
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port | default(8404) }}/stats"
+        status_code: 200
+      register: haproxy_health
+      retries: 5
+      delay: 10
+
+    - name: Phase 3 completion summary
+      debug:
+        msg: |
+          ============================================================
+          Phase 3: COMPLETED
+          ============================================================
+          HAProxy: DEPLOYED
+          Stats URL: http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port | default(8404) }}/stats
+          Backend Mode: {{ haproxy_backend_mode | default('cross-vm') }}
+
+          Next: Phase 4 - Migrate Jenkins teams to distributed VMs
+          Command: ansible-playbook ... --tags phase4
+          ============================================================
+
+# ==============================================================================
+# PHASE 4: Migrate Jenkins Teams to Distributed VMs
+# ==============================================================================
+
+- name: Phase 4 - Deploy Jenkins Teams to Distributed VMs
+  hosts: jenkins_masters
+  become: yes
+  serial: 1  # Deploy one VM at a time for safety
+  tags: ['phase4', 'jenkins']
+  pre_tasks:
+    - name: Display Phase 4 information
+      debug:
+        msg: |
+          ============================================================
+          Phase 4: Deploy Jenkins to {{ inventory_hostname }}
+          ============================================================
+          VM: {{ ansible_default_ipv4.address }}
+          Teams: {{ jenkins_teams_on_vm | join(', ') }}
+          VM Role: {{ jenkins_vm_role | default('unknown') }}
+          Duration: ~20-30 minutes per VM
+          ============================================================
+
+    - name: Pause for confirmation (Phase 4)
+      pause:
+        prompt: |
+
+          Ready to deploy Jenkins teams to {{ inventory_hostname }}?
+
+          Teams to deploy: {{ jenkins_teams_on_vm | join(', ') }}
+
+          This will:
+          - Deploy Jenkins containers for assigned teams only
+          - Configure team-specific resources (volumes, networks)
+          - Setup GlusterFS mounts for data persistence
+          - Configure monitoring agents
+
+          Press ENTER to continue or Ctrl+C to abort
+      when: migration_require_confirmation | default(true)
+
+  roles:
+    - role: common
+      tags: ['common', 'setup']
+    - role: jenkins-master-v2
+      tags: ['jenkins']
+
+  post_tasks:
+    - name: Validate Phase 4 deployment
+      block:
+        - name: Check Jenkins container status
+          community.docker.docker_container_info:
+            name: "jenkins-{{ item }}-{{ hostvars[inventory_hostname]['jenkins_teams'] | selectattr('team_name', 'eq', item) | map(attribute='active_environment') | first | default('blue') }}"
+          register: jenkins_container_status
+          loop: "{{ jenkins_teams_on_vm }}"
+
+        - name: Wait for Jenkins to be ready
+          uri:
+            url: "http://{{ ansible_default_ipv4.address }}:{{ item.ports.web }}/login"
+            status_code: [200, 403]
+          register: jenkins_health
+          retries: 10
+          delay: 30
+          loop: "{{ hostvars[inventory_hostname]['jenkins_teams'] | selectattr('team_name', 'in', jenkins_teams_on_vm) | list }}"
+          loop_control:
+            label: "{{ item.team_name }}"
+
+    - name: Phase 4 completion summary for {{ inventory_hostname }}
+      debug:
+        msg: |
+          ============================================================
+          Phase 4: COMPLETED ({{ inventory_hostname }})
+          ============================================================
+          Teams Deployed: {{ jenkins_teams_on_vm | join(', ') }}
+          Containers Running: {{ jenkins_container_status.results | selectattr('exists', 'equalto', true) | list | length }}
+
+          {% if inventory_hostname == groups['jenkins_masters'][-1] %}
+          All Jenkins VMs deployed!
+
+          Final Step: Verify complete system
+          Command: ansible-playbook ... --tags final-validation
+          {% else %}
+          Next: Deploy to remaining Jenkins VMs
+          {% endif %}
+          ============================================================
+
+# ==============================================================================
+# FINAL VALIDATION
+# ==============================================================================
+
+- name: Final System Validation
+  hosts: localhost
+  gather_facts: no
+  tags: ['final-validation', 'validation']
+  tasks:
+    - name: Final validation summary
+      debug:
+        msg: |
+          ============================================================
+          Option 2 Multi-VM Migration: COMPLETED
+          ============================================================
+          ✓ Phase 1: Monitoring deployed to VM3
+          ✓ Phase 2: GlusterFS cluster configured
+          ✓ Phase 3: HAProxy deployed with cross-VM backends
+          ✓ Phase 4: Jenkins teams distributed across VMs
+
+          Architecture Summary:
+          {% for host in groups['jenkins_masters'] %}
+          - {{ host }}: {{ hostvars[host]['jenkins_teams_on_vm'] | join(', ') }}
+          {% endfor %}
+          - {{ groups['monitoring'][0] }}: HAProxy, Monitoring
+
+          Access URLs:
+          - Grafana: http://{{ hostvars[groups['monitoring'][0]]['ansible_default_ipv4']['address'] }}:9300
+          - HAProxy Stats: http://{{ hostvars[groups['monitoring'][0]]['ansible_default_ipv4']['address'] }}:8404/stats
+          - Jenkins Teams: http://<team>jenkins.{{ jenkins_domain }}
+
+          Migration completed successfully!
+          ============================================================
+
+    - name: Update migration state
+      lineinfile:
+        path: "{{ playbook_dir }}/../.migration-state/migration-latest.yml"
+        line: "completed_at: {{ ansible_date_time.iso8601 }}"
+        create: yes
+      delegate_to: localhost
