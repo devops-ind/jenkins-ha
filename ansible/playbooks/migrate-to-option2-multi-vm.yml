@@ -221,8 +221,8 @@
       run_once: true
 
   roles:
-    - role: glusterfs-server
-      tags: ['glusterfs']
+    - role: shared-storage
+      tags: ['glusterfs', 'storage']
 
   post_tasks:
     - name: Validate Phase 2 deployment
