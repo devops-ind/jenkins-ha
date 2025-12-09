@@ -1,15 +1,123 @@
-# Symlink-Based Dynamic Configuration Update
+# Dynamic Configuration Update for Jenkins JCasC
 
-**Status**: Production Ready
+**Status**: File-Based Approach RECOMMENDED (Symlink approach DEPRECATED due to Docker limitations)
 **Date**: December 2025
 **Mode**: Simplified Hot-Reload Approach
 **Complexity**: Low (eliminates blue-green container switching)
 
 ---
 
-## Overview
+## IMPORTANT: Docker Symlink Limitation
+
+**The symlink-based approach described below does NOT work with Docker** due to symlink resolution at mount time. Even when mounting parent directories, Docker resolves symlinks to their target directories, breaking hot-reload functionality.
+
+**Recommended Solution**: Use the **File-Copy Based Hot-Reload** approach described below, which uses regular files instead of symlinks.
+
+---
+
+## File-Copy Based Hot-Reload (RECOMMENDED)
+
+### Overview
+
+This approach uses **regular files** instead of symlinks to achieve hot-reload functionality that works reliably with Docker bind mounts.
+
+### Key Features
+
+- Single Jenkins container per team (50% resource reduction)
+- Zero-downtime configuration updates via JCasC hot-reload API
+- Docker-compatible (no symlink resolution issues)
+- Automatic backups with rollback capability
+- State tracking for audit trail
+
+### Directory Structure
+
+```
+/var/jenkins/
+├── devops/
+│   ├── configs/
+│   │   ├── blue.yaml              # Blue environment config (regular file)
+│   │   ├── green.yaml             # Green environment config (regular file)
+│   │   └── current.yaml           # Active config mounted in container (regular file)
+│   ├── backups/
+│   │   ├── current.yaml.20251209_101530
+│   │   ├── current.yaml.20251209_102045
+│   │   └── current.yaml.20251209_103012
+│   └── config-state.json          # Metadata tracking
+├── developer/
+│   └── (same structure)
+└── qa/
+    └── (same structure)
+```
+
+### Container Mounting
+
+```yaml
+Container: jenkins-devops
+Volumes:
+  - jenkins-devops-home:/var/jenkins_home
+  # Mount single file for hot-reload (works reliably with Docker)
+  - /var/jenkins/devops/configs/current.yaml:/var/jenkins_home/casc_configs/jenkins.yaml:ro
+
+Environment:
+  CASC_JENKINS_CONFIG: /var/jenkins_home/casc_configs/jenkins.yaml
+```
+
+**Critical Notes**:
+1. **Mount single file**, not directory (avoid symlink resolution issues)
+2. **Read-only mount (`:ro`)** for security
+3. **File changes are immediately visible** in container
+4. **No symlinks involved** - pure file operations
+
+### Configuration Switching
+
+To switch from blue to green configuration:
+
+```bash
+# Run the config-file-switch script
+./scripts/config-file-switch.sh devops green
+
+# Script performs:
+# 1. Validates arguments (team_name, target_config)
+# 2. Backs up current config with timestamp
+# 3. Copies green.yaml to current.yaml
+# 4. Verifies file content matches (diff check)
+# 5. Updates state tracking JSON
+# 6. Cleans up old backups (keeps last 10)
+
+# Then trigger hot-reload via JCasC API
+curl -X POST -u admin:TOKEN http://localhost:8080/configuration-as-code/reload
+```
+
+### Deployment Configuration
+
+Set in `ansible/group_vars/all/jenkins.yml`:
+
+```yaml
+jenkins_config_update_mode: "file"  # RECOMMENDED
+```
+
+### Benefits
+
+| Aspect | Value |
+|--------|-------|
+| **Downtime** | 0 seconds (hot reload) |
+| **Resource Usage** | 1x (single container per team) |
+| **Docker Compatibility** | Yes (no symlink issues) |
+| **Backup/Rollback** | Automatic with retention |
+| **Switch Speed** | <1 second |
+| **State Tracking** | JSON audit trail |
+
+---
+
+## Symlink-Based Hot-Reload (DEPRECATED)
+
+**WARNING**: This approach does NOT work with Docker due to symlink resolution at mount time.
+
+### Overview
 
 This document describes the **simplified symlink-based approach** for dynamically updating Jenkins JCasC configurations without container restarts or blue-green switching.
+
+**Known Issue**: Docker resolves symlinks at mount time, even when mounting parent directories. The symlink appears as a directory inside the container, preventing Jenkins from loading JCasC configurations.
 
 ### Key Innovation
 
