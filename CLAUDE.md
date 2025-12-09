@@ -37,6 +37,7 @@ This is a production-grade Jenkins infrastructure with **Blue-Green Deployment**
 - **♻️ Monitoring Role Refactoring v2.0**: **NEW** - Complete architectural refactoring with phase-based organization. **67% reduction in main.yml** (489→161 lines), **40% elimination of code duplication** (unified agent deployment), clear server/agent separation across 4 phases. Multi-host deployment capability (`monitoring:jenkins_masters`), single deployment path per agent, improved maintainability and testability. Follows HAProxy/Jenkins role patterns with import_tasks orchestration. Production-ready with comprehensive refactoring guide
 - **🔌 GitHub & Jira Integration**: GitHub Enterprise datasource for repository metrics, PR tracking, and workflow status; Jira Cloud datasource for sprint management and issue tracking; Auto-provisioned with secure vault credential management; Pre-built 10-panel dashboard correlating code and project management data; Full JQL query support for custom Jira metrics
 - **🔄 File-Based JCasC Hot-Reload**: **NEW** - Docker-compatible hot-reload for Jenkins Configuration as Code. File-copy approach (blue.yaml → current.yaml) avoids Docker symlink resolution issues. Zero-downtime config updates via JCasC API, automatic backups with retention (keep last 10), state tracking JSON for audit trail. Single container per team (50% resource reduction). Symlink approach deprecated due to Docker mount limitations
+- **🏗️ Option 2 Multi-VM Architecture**: **NEW** - Production-ready 3-VM hybrid architecture with Jenkins isolation and shared services. Jenkins Blue VM (devops, ma teams) + Jenkins Green VM (ba, tw teams) + Shared Services VM (HAProxy, Monitoring). Inventory-driven team distribution, cross-VM routing in HAProxy, GlusterFS replication between Jenkins VMs, dedicated monitoring VM with auto-detection. 4-phase gradual migration playbook with validation and rollback. Total migration time: 60-90 minutes. Cost-effective (3 VMs vs 6-8 VMs), ~$800/month cloud cost for medium teams
 
 ## Key Commands
 
@@ -262,6 +263,166 @@ docker inspect jenkins-devops | grep -A 10 "Mounts"
 # jenkins_config_update_mode: "file"        # RECOMMENDED - File-copy hot-reload
 # jenkins_config_update_mode: "symlink"     # DEPRECATED - Symlink (doesn't work with Docker)
 # jenkins_config_update_mode: "blue-green"  # LEGACY - Dual containers
+```
+
+### Option 2 Multi-VM Architecture Commands (NEW)
+```bash
+# ============================================================================
+# OPTION 2 (HYBRID) MULTI-VM ARCHITECTURE
+# ============================================================================
+# Architecture: 3 VMs - Jenkins Blue + Jenkins Green + Shared Services
+# - VM1 (192.168.188.142): Jenkins Blue - devops, ma teams
+# - VM2 (192.168.188.143): Jenkins Green - ba, tw teams
+# - VM3 (192.168.188.144): Shared Services - HAProxy, Monitoring
+
+# GRADUAL MIGRATION PLAYBOOK
+# ============================================================================
+
+# Full migration (all 4 phases sequentially)
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/playbooks/migrate-to-option2-multi-vm.yml
+
+# Run specific phase only
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/playbooks/migrate-to-option2-multi-vm.yml --tags phase1  # Monitoring only
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/playbooks/migrate-to-option2-multi-vm.yml --tags phase2  # GlusterFS only
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/playbooks/migrate-to-option2-multi-vm.yml --tags phase3  # HAProxy only
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/playbooks/migrate-to-option2-multi-vm.yml --tags phase4  # Jenkins only
+
+# Validation only (no changes - dry run)
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/playbooks/migrate-to-option2-multi-vm.yml --tags validation --check
+
+# Skip confirmation prompts (automated deployment)
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/playbooks/migrate-to-option2-multi-vm.yml \
+  -e migration_require_confirmation=false
+
+# Final system validation after migration
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/playbooks/migrate-to-option2-multi-vm.yml --tags final-validation
+
+# MIGRATION PHASES DETAILS
+# ============================================================================
+
+# Phase 1: Deploy Monitoring to VM3 (10-15 min)
+# - Deploys Prometheus, Grafana, Loki, Alertmanager
+# - Configures cross-VM agent collection
+# - Sets up firewall rules
+ansible-playbook ... --tags phase1
+
+# Phase 2: Setup GlusterFS Cluster (15-20 min)
+# - Installs GlusterFS 10.x on Jenkins VMs
+# - Creates trusted storage pool (peer probe)
+# - Creates replicated volumes (replica=2)
+ansible-playbook ... --tags phase2
+
+# Phase 3: Deploy HAProxy with Cross-VM Backends (5-10 min)
+# - Deploys HAProxy on VM3
+# - Configures team-specific backends routing to correct VMs
+# - Sets up health checks and wildcard routing
+ansible-playbook ... --tags phase3
+
+# Phase 4: Migrate Jenkins Teams (20-30 min per VM)
+# - Deploys Jenkins containers for assigned teams only
+# - Serial deployment (one VM at a time)
+# - Configures GlusterFS mounts and monitoring agents
+ansible-playbook ... --tags phase4
+
+# INVENTORY MANAGEMENT
+# ============================================================================
+
+# View current inventory structure
+cat ansible/inventories/production/hosts.yml | grep -A 10 "jenkins_masters"
+
+# Verify team distribution
+ansible jenkins_masters -m debug -a "var=jenkins_teams_on_vm"
+
+# Check multi-VM configuration
+ansible all -m debug -a "var=multi_vm_enabled"
+
+# COMPONENT-SPECIFIC DEPLOYMENTS
+# ============================================================================
+
+# Deploy monitoring stack only (to VM3)
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags monitoring --limit monitoring
+
+# Deploy GlusterFS cluster (to Jenkins VMs)
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags glusterfs --limit glusterfs_servers
+
+# Deploy HAProxy (to VM3)
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags high-availability --limit load_balancers
+
+# Deploy Jenkins to specific VM with team filtering
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags jenkins --limit jenkins-blue
+
+# Deploy Jenkins to all VMs with team distribution
+ansible-playbook -i ansible/inventories/production/hosts.yml \
+  ansible/site.yml --tags jenkins --limit jenkins_masters
+
+# VERIFICATION AND HEALTH CHECKS
+# ============================================================================
+
+# Check HAProxy backend status (shows team distribution)
+curl -u admin:admin123 http://192.168.188.144:8404/stats
+
+# Verify GlusterFS cluster status
+ansible glusterfs_servers -m command -a "gluster peer status"
+ansible glusterfs_servers -m command -a "gluster volume list"
+
+# Check Jenkins container status on each VM
+ansible jenkins_masters -m command -a "docker ps --filter 'name=jenkins' --format '{{.Names}}'"
+
+# Verify team distribution
+ansible jenkins-blue -m command -a "docker ps --filter 'name=jenkins' --format '{{.Names}}'"
+ansible jenkins-green -m command -a "docker ps --filter 'name=jenkins' --format '{{.Names}}'"
+
+# Check monitoring targets in Prometheus
+curl http://192.168.188.144:9090/api/v1/targets | jq '.data.activeTargets[] | {job: .labels.job, instance: .labels.instance, health: .health}'
+
+# ACCESS URLS
+# ============================================================================
+
+# Grafana (Monitoring VM)
+http://192.168.188.144:9300
+# User: admin / Password: admin123
+
+# HAProxy Stats (Monitoring VM)
+http://192.168.188.144:8404/stats
+# User: admin / Password: admin123
+
+# Jenkins Teams (via HAProxy)
+http://devopsjenkins.dev.net   # devops team (on jenkins-blue)
+http://majenkins.dev.net       # ma team (on jenkins-blue)
+http://bajenkins.dev.net       # ba team (on jenkins-green)
+http://twjenkins.dev.net       # tw team (on jenkins-green)
+
+# ARCHITECTURE BENEFITS
+# ============================================================================
+# ✓ Jenkins Isolation: Separate VMs for blue/green teams
+# ✓ Cost Effective: 3 VMs vs 6-8 VMs (~$800/month vs $1600+)
+# ✓ Shared Services: Monitoring and HAProxy on single VM
+# ✓ GlusterFS Replication: RPO < 5s, RTO < 30s
+# ✓ Team Distribution: Load balanced across VMs
+# ✓ Cross-VM Routing: HAProxy routes to correct VM per team
+# ✓ Auto-Detection: Monitoring detects separate/colocated deployment
+# ✓ Gradual Migration: 4-phase approach with validation
+# ✓ Rollback Support: State tracking and rollback capabilities
+
+# MIGRATION TIME
+# ============================================================================
+# Phase 1 (Monitoring): 10-15 minutes
+# Phase 2 (GlusterFS): 15-20 minutes
+# Phase 3 (HAProxy): 5-10 minutes
+# Phase 4 (Jenkins): 40-60 minutes (both VMs, serial)
+# Total: 60-90 minutes for complete migration
 ```
 
 ### Pre-commit Hooks and Code Quality (NEW)
