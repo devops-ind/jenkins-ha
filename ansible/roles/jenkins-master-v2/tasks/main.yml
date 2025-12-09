@@ -1,0 +1,234 @@
+---
+# Simplified Jenkins Master Role - Main Orchestration
+# Consolidated from 13 task files to 4 files while maintaining all enterprise features
+
+- name: Display jenkins-master-v2 role information
+  debug:
+    msg: |
+      ==================================================
+      Jenkins Master Role v2 - Simplified Architecture
+      ==================================================
+      Original complexity: 1018 lines across 13 files
+      Simplified version: ~530 lines across 4 files
+      Features preserved: Blue-green, Multi-team, Custom images
+      ==================================================
+
+- name: Determine deployment configuration
+  set_fact:
+    jenkins_teams_config: "{{ jenkins_teams_config | default(jenkins_teams) | default([jenkins_master_config]) }}"
+    jenkins_deployment_mode: "{{ 'multi-team' if (jenkins_teams_config | default(jenkins_teams)) is defined and (jenkins_teams_config | default(jenkins_teams)) | length > 0 else 'single-team' }}"
+  tags: ['always']
+
+- name: Filter teams for deployment - Deploy specific teams
+  set_fact:
+    jenkins_teams_filtered: "{{ jenkins_teams_config | selectattr('team_name', 'in', deploy_teams.split(',') | map('trim') | list) | list }}"
+  when: deploy_teams is defined and deploy_teams != ""
+  tags: ['always']
+
+- name: Filter teams for deployment - Exclude specific teams  
+  set_fact:
+    jenkins_teams_filtered: "{{ jenkins_teams_config | rejectattr('team_name', 'in', exclude_teams.split(',') | map('trim') | list) | list }}"
+  when: 
+    - exclude_teams is defined and exclude_teams != ""
+    - deploy_teams is not defined or deploy_teams == ""
+  tags: ['always']
+
+- name: Filter teams for deployment - Default (all teams)
+  set_fact:
+    jenkins_teams_filtered: "{{ jenkins_teams_config }}"
+  when:
+    - deploy_teams is not defined or deploy_teams == ""
+    - exclude_teams is not defined or exclude_teams == ""
+  tags: ['always']
+
+- name: Filter teams for multi-VM deployment (Option 2 architecture)
+  set_fact:
+    jenkins_teams_filtered: "{{ jenkins_teams_filtered | selectattr('team_name', 'in', jenkins_teams_on_vm) | list }}"
+  when:
+    - multi_vm_enabled | default(false)
+    - jenkins_teams_on_vm is defined
+    - jenkins_teams_on_vm | length > 0
+  tags: ['always', 'multi-vm']
+
+- name: Debug team filtering results
+  debug:
+    msg: |
+      ====================================================
+      Team Filtering Debug Information
+      ====================================================
+      Deployment Architecture: {{ 'Multi-VM (Option 2)' if multi_vm_enabled | default(false) else 'Single-VM' }}
+      Current VM: {{ inventory_hostname }}
+      {% if multi_vm_enabled | default(false) and jenkins_teams_on_vm is defined %}
+      Teams assigned to this VM: {{ jenkins_teams_on_vm | join(', ') }}
+      {% endif %}
+      Original teams count: {{ jenkins_teams_config | length }}
+      Original teams: {{ jenkins_teams_config | map(attribute='team_name') | list | join(', ') }}
+      Filtered teams count: {{ jenkins_teams_filtered | length }}
+      Filtered teams type: {{ jenkins_teams_filtered | type_debug }}
+      {% if jenkins_teams_filtered | length > 0 %}
+      Filtered teams: {{ jenkins_teams_filtered | map(attribute='team_name') | list | join(', ') }}
+      {% else %}
+      Filtered teams: (empty)
+      {% endif %}
+      deploy_teams parameter: {{ deploy_teams | default('not set') }}
+      exclude_teams parameter: {{ exclude_teams | default('not set') }}
+      ====================================================
+  tags: ['always']
+  when: ansible_verbosity >= 1
+
+- name: Validate team filtering
+  block:
+    - name: Check if any teams are selected
+      assert:
+        that:
+          - jenkins_teams_filtered is defined
+          - jenkins_teams_filtered | length > 0
+        fail_msg: |
+          ERROR: No teams selected for deployment!
+          
+          Available teams: {{ jenkins_teams_config | map(attribute='team_name') | list | join(', ') }}
+          {% if deploy_teams is defined and deploy_teams != "" %}
+          Requested teams: {{ deploy_teams }}
+          
+          Possible issues:
+          - Check team name spelling (case sensitive)
+          - Verify team exists in jenkins_teams configuration
+          - Remove extra spaces around team names
+          {% endif %}
+          {% if exclude_teams is defined and exclude_teams != "" %}
+          Excluded teams: {{ exclude_teams }}
+          
+          WARNING: All teams have been excluded from deployment!
+          {% endif %}
+
+    - name: Validate requested teams exist
+      assert:
+        that:
+          - item in (jenkins_teams_config | map(attribute='team_name') | list)
+        fail_msg: "Team '{{ item }}' not found in configuration. Available teams: {{ jenkins_teams_config | map(attribute='team_name') | list | join(', ') }}"
+      loop: "{{ deploy_teams.split(',') | map('trim') | list }}"
+      when: deploy_teams is defined and deploy_teams != ""
+
+    - name: Display filtered deployment configuration
+      debug:
+        msg: |
+          ====================================================
+          Team Deployment Filtering
+          ====================================================
+          Total Available Teams: {{ jenkins_teams_config | length }}
+          Available Teams: {{ jenkins_teams_config | map(attribute='team_name') | list | join(', ') }}
+          {% if deploy_teams is defined and deploy_teams != "" %}
+          Deployment Filter: Specific teams
+          Requested Teams: {{ deploy_teams }}
+          {% elif exclude_teams is defined and exclude_teams != "" %}
+          Deployment Filter: Exclude teams
+          Excluded Teams: {{ exclude_teams }}
+          {% else %}
+          Deployment Filter: All teams (default)
+          {% endif %}
+          {% if jenkins_teams_filtered | length > 0 %}
+          Teams to Deploy: {{ jenkins_teams_filtered | map(attribute='team_name') | list | join(', ') }}
+          Teams Count: {{ jenkins_teams_filtered | length }}
+          {% else %}
+          Teams to Deploy: (none - this will cause deployment to fail)
+          Teams Count: 0
+          {% endif %}
+          ====================================================
+  tags: ['always']
+
+- name: Update deployment configuration with filtered teams
+  set_fact:
+    jenkins_teams_config: "{{ jenkins_teams_filtered }}"
+    jenkins_deployment_mode: "{{ 'multi-team' if jenkins_teams_filtered | length > 1 else 'single-team' }}"
+  tags: ['always']
+
+- name: Display deployment configuration
+  debug:
+    msg: |
+      Deployment Mode: {{ jenkins_deployment_mode }}
+      Teams to Deploy: {{ jenkins_teams_config | map(attribute='team_name') | list | join(', ') }}
+      Container Runtime: {{ jenkins_master_container_runtime }}
+  tags: ['always']
+
+# Phase 0: Intelligent cleanup of orphaned team resources (runs after team filtering)
+- name: Cleanup orphaned team resources phase
+  import_tasks: cleanup-orphaned-resources.yml
+  when: jenkins_cleanup_enabled | default(true)
+  tags: ['cleanup', 'remove-teams', 'orphaned-resources']
+
+# Phase 1: System setup, validation, and infrastructure preparation
+- name: Setup and validation phase
+  import_tasks: setup-and-validate.yml
+  tags: ['setup', 'validate', 'config', 'network']
+
+# Phase 2: Custom image building and container deployment  
+- name: Image building and container deployment phase
+  import_tasks: image-and-container.yml
+  tags: ['images', 'containers', 'deploy', 'custom-images', 'build']
+
+# Phase 3: Blue-green deployment management and health monitoring
+- name: Blue-green deployment and monitoring phase
+  import_tasks: deploy-and-monitor.yml
+  tags: ['blue-green', 'deploy', 'monitor', 'health', 'verify']
+
+# Phase 3.6: Enhanced health checks with blue-green port logic fixes
+- name: Enhanced health checks phase (fixes connection issues)
+  import_tasks: fixed-health-checks.yml
+  when: jenkins_teams_config is defined and jenkins_teams_config | length > 0
+  tags: ['health-fix', 'health', 'verify', 'fix']
+
+# Phase 3.7: GlusterFS Sync Configuration (Hybrid Architecture)
+- name: GlusterFS sync configuration phase (hybrid architecture)
+  import_tasks: gluster-sync.yml
+  when:
+    - jenkins_enable_gluster_sync | default(true)
+    - shared_storage_enabled | default(false)
+    - shared_storage_type | default('local') == 'glusterfs'
+    - jenkins_teams_config is defined
+    - jenkins_teams_config | length > 0
+  tags: ['jenkins', 'gluster', 'sync']
+
+# Phase 4: Update HAProxy configuration for blue-green environment changes
+- name: Notify HAProxy of team environment changes
+  block:
+    - name: Trigger HAProxy configuration regeneration
+      template:
+        src: ../high-availability-v2/templates/haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+        backup: yes
+        owner: root
+        group: "{{ haproxy_user | default('haproxy') }}"
+        mode: '0644'
+      become: yes
+      notify: reload haproxy config
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['load_balancers'] | default([]) }}"
+      when: 
+        - groups['load_balancers'] is defined
+        - groups['load_balancers'] | length > 0
+      vars:
+        haproxy_effective_teams: "{{ jenkins_teams_config }}"
+        
+    - name: Force HAProxy handlers to run immediately
+      meta: flush_handlers
+      
+  when: jenkins_teams_config is defined and jenkins_teams_config | length > 0
+  tags: ['blue-green', 'haproxy-sync']
+
+- name: Jenkins Master v2 deployment complete
+  debug:
+    msg: |
+      ====================================================
+      Jenkins Master v2 Deployment Summary
+      ====================================================
+      Mode: {{ jenkins_deployment_mode }}
+      Teams: {{ jenkins_teams_config | length }}
+      Active Environments: {{ jenkins_teams_config | selectattr('active_environment', 'defined') | map(attribute='active_environment') | list | join(', ') }}
+      Container Runtime: {{ jenkins_master_container_runtime }}
+      ====================================================
+      Access your Jenkins instances:
+      {% for team in jenkins_teams_config %}
+      {{ team.team_name }}: http://{{ jenkins_verification_host }}:{% if team.active_environment | default('blue') == 'blue' %}{{ team.ports.web }}{% else %}{{ team.ports.web + 100 }}{% endif %}
+      {% endfor %}
+      ====================================================
+  tags: ['always']
