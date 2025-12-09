@@ -1,0 +1,87 @@
+---
+# Backup Validation Tasks
+# Pre-backup system validation and requirements check
+
+- name: Validate backup configuration
+  assert:
+    that:
+      - backup_enabled is defined
+      - backup_nfs_path is defined
+      - backup_retention_days is defined
+      - backup_retention_days | int > 0
+    fail_msg: "Essential backup configuration missing or invalid"
+  tags:
+    - validation
+    - config
+
+- name: Check NFS mount point accessibility
+  stat:
+    path: "{{ backup_nfs_path }}"
+  register: nfs_backup_check
+  failed_when: not nfs_backup_check.stat.exists or not nfs_backup_check.stat.isdir
+  tags:
+    - validation
+    - nfs
+
+- name: Test NFS backup directory writability
+  file:
+    path: "{{ backup_nfs_path }}/backup-test-{{ ansible_date_time.epoch }}"
+    state: touch
+    mode: '0644'
+  register: nfs_write_test
+  tags:
+    - validation
+    - nfs
+
+- name: Clean up NFS write test file
+  file:
+    path: "{{ backup_nfs_path }}/backup-test-{{ ansible_date_time.epoch }}"
+    state: absent
+  when: nfs_write_test is succeeded
+  tags:
+    - validation
+    - cleanup
+
+- name: Check available disk space in NFS backup location
+  shell: df -BG "{{ backup_nfs_path }}" | awk 'NR==2 {print $4}' | sed 's/G//'
+  register: nfs_available_space
+  changed_when: false
+  tags:
+    - validation
+    - space
+
+- name: Validate minimum disk space requirement
+  assert:
+    that:
+      - nfs_available_space.stdout | int >= backup_min_space_gb
+    fail_msg: "Insufficient disk space. Available: {{ nfs_available_space.stdout }}GB, Required: {{ backup_min_space_gb }}GB"
+  tags:
+    - validation
+    - space
+
+- name: Verify Docker daemon accessibility
+  command: docker info
+  register: docker_check
+  failed_when: docker_check.rc != 0
+  changed_when: false
+  tags:
+    - validation
+    - docker
+
+- name: Check for existing backup-active-to-nfs.sh script
+  stat:
+    path: "{{ backup_script_path }}"
+  register: backup_script_check
+  tags:
+    - validation
+    - script
+
+- name: Validate backup script exists and is executable
+  assert:
+    that:
+      - backup_script_check.stat.exists
+      - backup_script_check.stat.executable
+    fail_msg: "Backup script not found or not executable: {{ backup_script_path }}"
+  tags:
+    - validation
+    - script

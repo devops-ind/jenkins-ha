@@ -1,0 +1,510 @@
+# syntax=docker/dockerfile:1.9
+# Enterprise Jenkins Master - Production-Ready Multi-Stage Build
+# Network-Resilient Build Strategy with Offline Capabilities
+
+ARG JENKINS_VERSION={{ jenkins_version }}
+ARG BUILDKIT_INLINE_CACHE=1
+ARG PLUGIN_CACHE_STRATEGY={{ jenkins_plugin_version_strategy | default('pinned') }}
+ARG BUILD_CONTEXT=production
+ARG OFFLINE_MODE={{ jenkins_offline_build_enabled | default('false') | string | lower }}
+
+#===============================================================================
+# Stage 1: Base Environment Setup with Network Resilience
+#===============================================================================
+FROM jenkins/jenkins:${JENKINS_VERSION} AS base-setup
+
+# Build arguments and enhanced metadata
+ARG BUILD_DATE
+ARG VCS_REF
+ARG JENKINS_VERSION
+ARG BUILD_NUMBER=${BUILD_NUMBER:-unknown}
+ARG CI_PIPELINE_ID=${CI_PIPELINE_ID:-local}
+ARG BUILD_CONTEXT
+ARG OFFLINE_MODE
+
+# Enhanced OCI-compliant metadata
+LABEL maintainer="DevOps Engineering Team <devops@company.com>" \
+      org.opencontainers.image.title="Jenkins Master - Enterprise HA" \
+      org.opencontainers.image.description="Production-ready Jenkins Master with network resilience, offline capabilities, and enterprise security" \
+      org.opencontainers.image.version="${JENKINS_VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.source="https://github.com/your-org/jenkins-ha" \
+      org.opencontainers.image.url="https://jenkins.company.com" \
+      org.opencontainers.image.documentation="https://docs.company.com/jenkins-ha" \
+      org.opencontainers.image.vendor="Your Company DevOps" \
+      org.opencontainers.image.licenses="MIT" \
+      jenkins.version="${JENKINS_VERSION}" \
+      jenkins.build.context="${BUILD_CONTEXT}" \
+      jenkins.offline.mode="${OFFLINE_MODE}" \
+      build.number="${BUILD_NUMBER}" \
+      build.pipeline="${CI_PIPELINE_ID}" \
+      build.timestamp="${BUILD_DATE}"
+
+# Switch to root for system-level operations with security context
+USER root
+
+# Create jenkins user with consistent UID/GID for security
+RUN groupmod -g {{ jenkins_gid | default('1002') }} jenkins && \
+    usermod -u {{ jenkins_uid | default('1002') }} -g {{ jenkins_gid | default('1002') }} jenkins
+
+# System package installation with version pinning and security
+# Uses BuildKit cache mounts for efficiency and security
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,uid=0,gid=0 \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked,uid=0,gid=0 \
+    set -euo pipefail; \
+    \
+    # Function for resilient package installation
+    install_packages_with_retry() { \
+        local retry_count=0; \
+        local max_retries={{ jenkins_network_retry_count | default('3') }}; \
+        local packages=("$@"); \
+        \
+        while [ $retry_count -lt $max_retries ]; do \
+            echo "Package installation attempt $((retry_count + 1))/$max_retries"; \
+            \
+            if apt-get update -q && \
+               DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+               "${packages[@]}"; then \
+                echo "Package installation successful"; \
+                return 0; \
+            else \
+                echo "Package installation failed, retrying..."; \
+                retry_count=$((retry_count + 1)); \
+                sleep {{ jenkins_network_retry_delay | default('10') }}; \
+            fi; \
+        done; \
+        \
+        echo "Package installation failed after $max_retries attempts"; \
+        return 1; \
+    }; \
+    \
+    # Install essential packages with version control
+    install_packages_with_retry \
+        curl=7.81.0-* \
+        git=1:2.34.1-* \
+        unzip=6.0-* \
+        jq=1.6-* \
+        ca-certificates=* \
+        gnupg=* \
+        wget=* \
+        procps=* \
+        rsync=* \
+        zip=* && \
+    \
+    # Security and cleanup
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && \
+    \
+    # Verify critical tools
+    curl --version && \
+    git --version && \
+    jq --version
+
+# Create directory structure with proper permissions
+RUN mkdir -p \
+        /var/jenkins_home/casc_configs \
+        /var/jenkins_home/init.groovy.d \
+        /var/jenkins_home/scripts \
+        /var/jenkins_home/backup \
+        /var/jenkins_home/offline-cache \
+        /tmp/plugin-cache \
+        /tmp/build-cache \
+        /usr/share/jenkins/ref/plugins \
+        /usr/share/jenkins/ref/init.groovy.d \
+        /usr/local/bin/jenkins-scripts && \
+    \
+    # Set ownership and permissions
+    chown -R jenkins:jenkins \
+        /var/jenkins_home \
+        /tmp/plugin-cache \
+        /tmp/build-cache \
+        /usr/share/jenkins && \
+    \
+    # Security: Restrict permissions
+    chmod 755 /var/jenkins_home \
+             /usr/share/jenkins/ref \
+             /usr/local/bin/jenkins-scripts && \
+    chmod 750 /var/jenkins_home/casc_configs \
+             /var/jenkins_home/init.groovy.d
+
+#===============================================================================
+# Stage 2: Enhanced Plugin Cache and Management
+#===============================================================================
+FROM base-setup AS plugin-cache-setup
+
+# Copy enhanced plugin management scripts
+COPY --chown=root:root scripts/ /usr/local/bin/jenkins-scripts/
+RUN chmod +x /usr/local/bin/jenkins-scripts/*.sh
+
+# Copy plugin lists based on strategy
+{% if jenkins_plugin_version_strategy == 'pinned' %}
+COPY --chown=jenkins:jenkins plugins-pinned.txt /tmp/plugins-input.txt
+{% else %}
+COPY --chown=jenkins:jenkins plugins.txt /tmp/plugins-input.txt
+{% endif %}
+
+# Enhanced plugin cache population with fallback strategies
+RUN --mount=type=cache,target=/tmp/plugin-cache,sharing=locked,uid={{ jenkins_uid | default('1002') }},gid={{ jenkins_gid | default('1002') }} \
+    --mount=type=cache,target=/tmp/build-cache,sharing=locked,uid={{ jenkins_uid | default('1002') }},gid={{ jenkins_gid | default('1002') }} \
+    set -euo pipefail; \
+    \
+    # Initialize plugin cache manager
+    echo "Initializing plugin cache management..."; \
+    \
+    # Populate plugin cache with resilience
+    /usr/local/bin/jenkins-scripts/plugin-cache-manager.sh populate \
+        --plugin-list /tmp/plugins-input.txt \
+        --cache-dir /tmp/plugin-cache \
+        --parallel {{ jenkins_build_parallel_downloads | default('6') }} \
+        --retry-count {{ jenkins_network_retry_count | default('5') }} \
+        --retry-delay {{ jenkins_network_retry_delay | default('15') }} \
+        --max-age {{ jenkins_plugin_cache_ttl | default('7') }} \
+        --max-size {{ jenkins_plugin_cache_size_gb | default('5') }} \
+        {% if jenkins_plugin_verify_checksums | default('true') | string | lower == 'true' %}--verify{% else %}--no-verify{% endif %} \
+        {% if jenkins_offline_build_enabled | default('false') | string | lower == 'true' %}--offline{% endif %} && \
+    \
+    # Verify cache integrity
+    /usr/local/bin/jenkins-scripts/plugin-cache-manager.sh verify \
+        --cache-dir /tmp/plugin-cache \
+        {% if jenkins_plugin_verify_checksums | default('true') | string | lower == 'false' %}--no-verify{% endif %} && \
+    \
+    # Generate optimized plugin list with dependency resolution
+    /usr/local/bin/jenkins-scripts/plugin-resolver.sh \
+        --input /tmp/plugins-input.txt \
+        --output /usr/share/jenkins/ref/plugins.txt \
+        --cache-dir /tmp/plugin-cache \
+        --resolve-dependencies {{ jenkins_resolve_plugin_dependencies | default('true') | string | lower }} \
+        --max-depth {{ jenkins_plugin_dependency_depth | default('3') }} \
+        --conflict-resolution {{ jenkins_plugin_conflict_resolution | default('latest') }} \
+        --parallel {{ jenkins_build_parallel_downloads | default('6') }} \
+        --retry-count {{ jenkins_network_retry_count | default('5') }} \
+        --retry-delay {{ jenkins_network_retry_delay | default('15') }} \
+        {% if jenkins_plugin_verify_checksums | default('true') | string | lower == 'true' %}--verify-checksums true{% else %}--verify-checksums false{% endif %} \
+        {% if jenkins_offline_build_enabled | default('false') | string | lower == 'true' %}--offline{% endif %} && \
+    \
+    # Display cache statistics
+    /usr/local/bin/jenkins-scripts/plugin-cache-manager.sh stats \
+        --cache-dir /tmp/plugin-cache && \
+    \
+    echo "Plugin cache setup completed successfully"
+
+#===============================================================================
+# Stage 3: Resilient Plugin Installation with Error Recovery
+#===============================================================================
+FROM plugin-cache-setup AS plugin-installer
+
+# Switch to jenkins user for plugin installation
+USER jenkins
+
+# Enhanced plugin installation with comprehensive error handling
+RUN --mount=type=cache,target=/tmp/plugin-cache,sharing=locked,uid={{ jenkins_uid | default('1002') }},gid={{ jenkins_gid | default('1002') }} \
+    --mount=type=cache,target=/tmp/build-cache,sharing=locked,uid={{ jenkins_uid | default('1002') }},gid={{ jenkins_gid | default('1002') }} \
+    set -euo pipefail; \
+    \
+    # Enhanced plugin installation function with recovery strategies
+    install_plugins_enterprise() { \
+        local retry_count=0; \
+        local max_retries={{ jenkins_build_retry_count | default('5') }}; \
+        local base_retry_delay={{ jenkins_build_retry_delay | default('30') }}; \
+        local timeout_duration={{ jenkins_build_timeout | default('2400') }}; \
+        local plugin_file="/usr/share/jenkins/ref/plugins.txt"; \
+        \
+        echo "Starting enterprise plugin installation..."; \
+        echo "Plugin file: $plugin_file"; \
+        echo "Max retries: $max_retries"; \
+        echo "Timeout: ${timeout_duration}s"; \
+        \
+        # Validate plugin list exists
+        if [ ! -f "$plugin_file" ]; then \
+            echo "ERROR: Plugin list file not found: $plugin_file"; \
+            return 1; \
+        fi; \
+        \
+        # Display plugin count
+        local total_plugins; \
+        total_plugins=$(grep -c '^[^#]' "$plugin_file" 2>/dev/null || echo 0); \
+        echo "Total plugins to install: $total_plugins"; \
+        \
+        while [ $retry_count -lt $max_retries ]; do \
+            retry_count=$((retry_count + 1)); \
+            local current_retry_delay=$((base_retry_delay * retry_count)); \
+            \
+            echo "\n=== Plugin Installation Attempt $retry_count/$max_retries ==="; \
+            echo "Timeout: ${timeout_duration}s"; \
+            echo "Cache directory: /tmp/plugin-cache"; \
+            \
+            # Attempt plugin installation with timeout
+            if timeout $timeout_duration jenkins-plugin-cli \
+                --plugin-file "$plugin_file" \
+                --cache /tmp/plugin-cache \
+                --verbose \
+                --available-updates \
+                --skip-failed-installs; then \
+                \
+                echo "\n✅ Plugin installation completed successfully"; \
+                \
+                # Verify critical plugins are installed
+                local critical_plugins=("configuration-as-code" "workflow-aggregator" "job-dsl" "matrix-auth" "docker-workflow"); \
+                local missing_critical=(); \
+                \
+                for plugin in "${critical_plugins[@]}"; do \
+                    if [ ! -d "/usr/share/jenkins/ref/plugins/$plugin" ] && \
+                       [ ! -f "/usr/share/jenkins/ref/plugins/${plugin}.jpi" ] && \
+                       [ ! -f "/usr/share/jenkins/ref/plugins/${plugin}.hpi" ]; then \
+                        missing_critical+=("$plugin"); \
+                    fi; \
+                done; \
+                \
+                if [ ${#missing_critical[@]} -eq 0 ]; then \
+                    echo "✅ All critical plugins verified"; \
+                    \
+                    # Count installed plugins
+                    local installed_count; \
+                    installed_count=$(find /usr/share/jenkins/ref/plugins -name "*.hpi" -o -name "*.jpi" | wc -l); \
+                    echo "Total plugins installed: $installed_count"; \
+                    \
+                    return 0; \
+                else \
+                    echo "❌ Missing critical plugins: ${missing_critical[*]}"; \
+                    echo "Retrying installation..."; \
+                fi; \
+            else \
+                local exit_code=$?; \
+                echo "❌ Plugin installation failed with exit code $exit_code"; \
+            fi; \
+            \
+            # Wait before retry with exponential backoff
+            if [ $retry_count -lt $max_retries ]; then \
+                echo "⏳ Waiting ${current_retry_delay}s before retry $((retry_count + 1))..."; \
+                sleep $current_retry_delay; \
+                \
+                # Clean up potential partial installations
+                echo "🧹 Cleaning up partial installations..."; \
+                find /usr/share/jenkins/ref/plugins -name "*.tmp" -delete 2>/dev/null || true; \
+                find /usr/share/jenkins/ref/plugins -name "*.downloading" -delete 2>/dev/null || true; \
+            fi; \
+        done; \
+        \
+        echo "❌ Plugin installation failed after $max_retries attempts"; \
+        \
+        # Fallback: Try to use cached plugins if available
+        echo "🔄 Attempting fallback to cached plugins..."; \
+        if [ -d "/tmp/plugin-cache/plugins" ]; then \
+            local cached_count; \
+            cached_count=$(find /tmp/plugin-cache/plugins -name "*.hpi" | wc -l); \
+            if [ $cached_count -gt 0 ]; then \
+                echo "📦 Found $cached_count cached plugins, copying..."; \
+                cp /tmp/plugin-cache/plugins/*.hpi /usr/share/jenkins/ref/plugins/ 2>/dev/null || true; \
+                \
+                # Verify fallback worked
+                local fallback_count; \
+                fallback_count=$(find /usr/share/jenkins/ref/plugins -name "*.hpi" | wc -l); \
+                if [ $fallback_count -gt 0 ]; then \
+                    echo "✅ Fallback successful: $fallback_count plugins from cache"; \
+                    return 0; \
+                fi; \
+            fi; \
+        fi; \
+        \
+        echo "❌ All installation strategies failed"; \
+        return 1; \
+    }; \
+    \
+    # Execute plugin installation with enterprise error handling
+    install_plugins_enterprise
+
+# Final plugin verification and optimization
+RUN set -euo pipefail; \
+    \
+    # Verify plugin installation success
+    echo "🔍 Performing final plugin verification..."; \
+    \
+    # Count installed plugins
+    installed_count=$(find /usr/share/jenkins/ref/plugins -name "*.hpi" -o -name "*.jpi" | wc -l); \
+    echo "Total plugins installed: $installed_count"; \
+    \
+    # Verify minimum plugin count
+    if [ $installed_count -lt 20 ]; then \
+        echo "❌ ERROR: Too few plugins installed ($installed_count < 20)"; \
+        echo "This indicates a significant installation failure"; \
+        exit 1; \
+    fi; \
+    \
+    # Verify critical plugins again
+    critical_plugins=("configuration-as-code" "workflow-aggregator" "job-dsl" "matrix-auth"); \
+    for plugin in "${critical_plugins[@]}"; do \
+        if [ ! -d "/usr/share/jenkins/ref/plugins/$plugin" ] && \
+           [ ! -f "/usr/share/jenkins/ref/plugins/${plugin}.jpi" ] && \
+           [ ! -f "/usr/share/jenkins/ref/plugins/${plugin}.hpi" ]; then \
+            echo "❌ ERROR: Critical plugin missing: $plugin"; \
+            exit 1; \
+        fi; \
+        echo "✅ Critical plugin verified: $plugin"; \
+    done; \
+    \
+    # Plugin optimization for production
+    echo "🔧 Optimizing plugins for production..."; \
+    \
+    # Remove temporary files
+    find /usr/share/jenkins/ref/plugins -name "*.tmp" -delete 2>/dev/null || true; \
+    find /usr/share/jenkins/ref/plugins -name "*.downloading" -delete 2>/dev/null || true; \
+    find /usr/share/jenkins/ref/plugins -name "*.bak" -delete 2>/dev/null || true; \
+    \
+    # Generate plugin manifest for debugging
+    echo "📋 Generating plugin manifest..."; \
+    find /usr/share/jenkins/ref/plugins -name "*.hpi" -o -name "*.jpi" | \
+        sort | xargs -I {} basename {} .hpi | sed 's/\.jpi$//' > /tmp/installed-plugins.txt; \
+    \
+    echo "✅ Plugin installation and verification completed successfully"; \
+    echo "📊 Final plugin count: $installed_count"
+
+#===============================================================================
+# Stage 4: Configuration and Security Hardening
+#===============================================================================
+FROM plugin-installer AS configuration-setup
+
+# Switch back to root for configuration setup
+USER root
+
+# Copy initialization and configuration files with proper permissions
+COPY --chown=jenkins:jenkins init-scripts/ /usr/share/jenkins/ref/init.groovy.d/
+COPY --chown=jenkins:jenkins config/ /usr/share/jenkins/ref/casc_configs/
+
+# Copy enhanced scripts
+COPY --chown=root:root scripts/jenkins-startup.sh /usr/local/bin/jenkins-startup.sh
+COPY --chown=root:root scripts/jenkins-health-check.sh /usr/local/bin/jenkins-health-check.sh
+RUN chmod +x /usr/local/bin/jenkins-startup.sh /usr/local/bin/jenkins-health-check.sh
+
+# Advanced Java configuration for production workloads
+ENV JAVA_OPTS="-Djenkins.install.runSetupWizard=false \
+               -Djenkins.model.Jenkins.slaveAgentPort={{ jenkins_agent_port | default('50000') }} \
+               -Djenkins.model.Jenkins.slaveAgentPortEnforce=true \
+               -Dhudson.DNSMultiCast.disabled=true \
+               -Dhudson.model.DirectoryBrowserSupport.CSP='default-src self; script-src self unsafe-inline; style-src self unsafe-inline; img-src self data:; font-src self;' \
+               -Dhudson.model.ParametersAction.keepUndefinedParameters=false \
+               -Dhudson.model.WorkspaceCleanupThread.retainForDays=2 \
+               -Djenkins.model.Jenkins.crumbIssuerProxyCompatibility=false \
+               -Djenkins.security.ApiTokenProperty.adminCanGenerateNewTokens=false \
+               -Djenkins.CLI.disabled=true \
+               -Dhudson.security.HudsonPrivateSecurityRealm.ID_REGEX='^[a-zA-Z0-9_-]{3,63}$' \
+               -Dhudson.model.User.allowNonExistentUserToLogin=false \
+               -Djava.awt.headless=true \
+               -XX:+UseG1GC \
+               -XX:+UseStringDeduplication \
+               -XX:MaxRAMPercentage=75.0 \
+               -XX:+HeapDumpOnOutOfMemoryError \
+               -XX:HeapDumpPath=/tmp/jenkins_heap_dump.hprof \
+               -XX:+ExitOnOutOfMemoryError \
+               -XX:+UnlockExperimentalVMOptions \
+               -XX:+UseJVMCICompiler \
+               -XX:+PrintGCDetails \
+               -XX:+PrintGCTimeStamps \
+               -Xloggc:/var/jenkins_home/gc.log \
+               -XX:+UseGCLogFileRotation \
+               -XX:NumberOfGCLogFiles=5 \
+               -XX:GCLogFileSize=10m"
+
+# Enhanced Jenkins runtime configuration
+ENV JENKINS_OPTS="--httpPort={{ jenkins_port | default('8080') }} \
+                  --prefix={{ jenkins_context_path | default('') }} \
+                  --sessionTimeout=120 \
+                  --sessionEviction=7200 \
+                  --argumentsRealm.passwd.{{ jenkins_admin_user | default('admin') }}={{ jenkins_admin_password | default('admin123') }} \
+                  --argumentsRealm.roles.{{ jenkins_admin_user | default('admin') }}=admin"
+
+# Security and operational environment variables
+ENV JENKINS_ENABLE_ACCESS_LOG=yes \
+    JENKINS_HANDLER_MAX=200 \
+    JENKINS_HANDLER_IDLE=30 \
+    JENKINS_ARGS="--webroot=/var/cache/jenkins/war --httpPort={{ jenkins_port | default('8080') }}" \
+    COPY_REFERENCE_FILE_LOG=/var/jenkins_home/copy_reference_file.log \
+    CASC_JENKINS_CONFIG=/var/jenkins_home/casc_configs \
+    SECRETS=/var/jenkins_home/secrets \
+    JENKINS_UC=https://updates.jenkins.io \
+    JENKINS_UC_EXPERIMENTAL=https://updates.jenkins.io/experimental \
+    JENKINS_INCREMENTALS_REPO_MIRROR=https://repo.jenkins-ci.org/incrementals \
+    REF=/usr/share/jenkins/ref
+
+#===============================================================================
+# Stage 5: Production Image Optimization and Security
+#===============================================================================
+{% if jenkins_image_minimize | default(true) %}
+FROM configuration-setup AS production-optimized
+
+# Final optimization and security hardening
+RUN --mount=type=cache,target=/tmp/plugin-cache,sharing=locked \
+    --mount=type=cache,target=/tmp/build-cache,sharing=locked \
+    set -euo pipefail; \
+    \
+    echo "🔧 Performing final production optimization..."; \
+    \
+    # Remove temporary files and caches
+    find /tmp -type f -name '*.tmp' -delete 2>/dev/null || true; \
+    find /tmp -type f -name '*.log' -delete 2>/dev/null || true; \
+    find /usr/share/jenkins/ref/plugins -name '*.tmp' -delete 2>/dev/null || true; \
+    find /var/jenkins_home -type f -name '*.log' -delete 2>/dev/null || true; \
+    \
+    # Optimize plugin storage (remove redundant files)
+    find /usr/share/jenkins/ref/plugins -name '*.bak' -delete 2>/dev/null || true; \
+    find /usr/share/jenkins/ref/plugins -name 'META-INF' -type d -exec rm -rf {} + 2>/dev/null || true; \
+    \
+    # Security: Remove package manager caches and sensitive files
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/* 2>/dev/null || true; \
+    rm -rf /root/.cache /tmp/* /var/tmp/* 2>/dev/null || true; \
+    \
+    # Create build info for debugging
+    echo "Jenkins Version: $JENKINS_VERSION" > /usr/share/jenkins/ref/build-info.txt; \
+    echo "Build Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> /usr/share/jenkins/ref/build-info.txt; \
+    echo "Build Number: $BUILD_NUMBER" >> /usr/share/jenkins/ref/build-info.txt; \
+    echo "Plugin Strategy: {{ jenkins_plugin_version_strategy | default('pinned') }}" >> /usr/share/jenkins/ref/build-info.txt; \
+    echo "Offline Mode: $OFFLINE_MODE" >> /usr/share/jenkins/ref/build-info.txt; \
+    \
+    # Final plugin count
+    installed_count=$(find /usr/share/jenkins/ref/plugins -name "*.hpi" -o -name "*.jpi" | wc -l); \
+    echo "Final Plugin Count: $installed_count" >> /usr/share/jenkins/ref/build-info.txt; \
+    \
+    echo "✅ Production optimization completed"
+
+{% else %}
+FROM configuration-setup AS production-optimized
+{% endif %}
+
+# Switch to jenkins user for final setup
+USER jenkins
+WORKDIR /var/jenkins_home
+
+# Port exposure
+EXPOSE {{ jenkins_port | default('8080') }} {{ jenkins_agent_port | default('50000') }}
+
+# Volume definitions with proper permissions
+VOLUME ["/var/jenkins_home"]
+
+# Enhanced health check with comprehensive validation
+HEALTHCHECK --interval=45s --timeout=20s --start-period=300s --retries=5 \
+    CMD /usr/local/bin/jenkins-health-check.sh || exit 1
+
+# Build completion information
+RUN echo "Build completed successfully at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" > /tmp/build-completion.log && \
+    echo "Jenkins Version: $JENKINS_VERSION" >> /tmp/build-completion.log && \
+    echo "Build Context: {{ jenkins_build_context | default('production') }}" >> /tmp/build-completion.log && \
+    echo "Plugin Strategy: {{ jenkins_plugin_version_strategy | default('pinned') }}" >> /tmp/build-completion.log
+
+# Default startup command with enhanced error handling
+CMD ["/usr/local/bin/jenkins-startup.sh"]
+
+#===============================================================================
+# Build Summary and Metadata
+#===============================================================================
+# Build Features:
+# ✅ Multi-stage build with BuildKit optimization
+# ✅ Network-resilient plugin installation with 5+ retry strategies
+# ✅ Offline build capability with local plugin cache
+# ✅ Version-pinned plugins for reproducible builds
+# ✅ Enterprise security hardening and JVM optimization
+# ✅ Comprehensive error handling and recovery
+# ✅ Production-ready health checks and monitoring
+# ✅ Intelligent cache management and cleanup
+# ✅ Enhanced logging and debugging capabilities
+# ✅ OCI-compliant metadata and labeling
+#===============================================================================

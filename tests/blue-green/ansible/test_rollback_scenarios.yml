@@ -1,0 +1,301 @@
+---
+# Test playbook for blue-green rollback scenarios
+# Tests automatic rollback functionality and failure handling
+
+- name: Blue-Green Rollback Scenarios Test
+  hosts: jenkins_masters
+  become: yes
+  gather_facts: yes
+  vars:
+    rollback_scenarios:
+      - name: "High error rate rollback"
+        trigger_condition: "error_rate"
+        team_name: "devops"
+        simulated_error_rate: 0.15  # 15% error rate
+        threshold: 0.05             # 5% threshold
+        expected_rollback: true
+        
+      - name: "High response time rollback"
+        trigger_condition: "response_time"
+        team_name: "qa"
+        simulated_response_time: 8000  # 8 seconds
+        threshold: 5000                # 5 second threshold
+        expected_rollback: true
+        
+      - name: "Low availability rollback"
+        trigger_condition: "availability"
+        team_name: "devops"
+        simulated_availability: 0.85  # 85% availability
+        threshold: 0.95               # 95% threshold
+        expected_rollback: true
+        
+      - name: "Normal metrics - no rollback"
+        trigger_condition: "normal"
+        team_name: "qa"
+        simulated_error_rate: 0.02    # 2% error rate
+        simulated_response_time: 200  # 200ms response time
+        simulated_availability: 0.99  # 99% availability
+        expected_rollback: false
+
+  pre_tasks:
+    - name: Display rollback test information
+      debug:
+        msg: |
+          =================================================
+          Blue-Green Rollback Scenarios Test
+          =================================================
+          Scenarios: {{ rollback_scenarios | length }}
+          Teams: {{ jenkins_teams | map(attribute='team_name') | list | join(', ') }}
+          =================================================
+
+    - name: Create circuit breaker state directory
+      file:
+        path: /tmp/jenkins-ha-test/circuit-breaker
+        state: directory
+        mode: '0755'
+
+    - name: Initialize circuit breaker state
+      copy:
+        content: |
+          {
+            "state": "closed",
+            "failure_count": 0,
+            "last_failure_time": null,
+            "cooldown_until": 0
+          }
+        dest: /tmp/jenkins-ha-test/circuit-breaker/state.json
+        mode: '0644'
+
+  tasks:
+    - name: Execute rollback scenarios
+      include_tasks: rollback_scenario.yml
+      vars:
+        scenario: "{{ item }}"
+      loop: "{{ rollback_scenarios }}"
+      loop_control:
+        loop_var: item
+
+  post_tasks:
+    - name: Generate rollback test summary
+      debug:
+        msg: |
+          =================================================
+          Rollback Test Summary
+          =================================================
+          {% for result in rollback_results | default([]) %}
+          Scenario {{ loop.index }}: {{ result.scenario_name }}
+          - Team: {{ result.team_name }}
+          - Trigger: {{ result.trigger_condition }}
+          - Expected Rollback: {{ result.expected_rollback }}
+          - Actual Rollback: {{ result.actual_rollback }}
+          - Status: {{ '✅ PASS' if result.expected_rollback == result.actual_rollback else '❌ FAIL' }}
+          {% if result.rollback_executed %}
+          - Rollback Time: {{ result.rollback_duration }}s
+          - Rollback Reason: {{ result.rollback_reason }}
+          {% endif %}
+          
+          {% endfor %}
+          
+          Total Scenarios: {{ rollback_results | default([]) | length }}
+          Passed: {{ rollback_results | default([]) | selectattr('expected_rollback', 'equalto', rollback_results | default([]) | map(attribute='actual_rollback')) | list | length }}
+          Failed: {{ rollback_results | default([]) | rejectattr('expected_rollback', 'equalto', rollback_results | default([]) | map(attribute='actual_rollback')) | list | length }}
+          =================================================
+
+    - name: Cleanup circuit breaker state
+      file:
+        path: /tmp/jenkins-ha-test/circuit-breaker
+        state: absent
+
+# Individual rollback scenario execution
+- name: Rollback Scenario Execution
+  block:
+    - name: "{{ scenario.name }} - Setup"
+      debug:
+        msg: |
+          Executing rollback scenario: {{ scenario.name }}
+          Team: {{ scenario.team_name }}
+          Trigger: {{ scenario.trigger_condition }}
+
+    - name: Find target team
+      set_fact:
+        target_team: >-
+          {{
+            jenkins_teams | selectattr('team_name', 'equalto', scenario.team_name) | first
+          }}
+
+    - name: Record initial environment
+      set_fact:
+        initial_environment: "{{ target_team.active_environment }}"
+        scenario_start_time: "{{ ansible_date_time.epoch }}"
+
+    - name: Simulate environment switch (for rollback testing)
+      set_fact:
+        jenkins_teams: >-
+          {{
+            jenkins_teams | map('combine', 
+              {'active_environment': 'green' if item.active_environment == 'blue' else 'blue'} 
+              if item.team_name == scenario.team_name else {}
+            ) | list
+          }}
+      loop: "{{ jenkins_teams }}"
+
+    - name: Get updated team configuration
+      set_fact:
+        updated_target_team: >-
+          {{
+            jenkins_teams | selectattr('team_name', 'equalto', scenario.team_name) | first
+          }}
+
+    - name: Simulate metrics collection
+      set_fact:
+        current_metrics: >-
+          {{
+            {
+              'error_rate': scenario.simulated_error_rate | default(0.01),
+              'response_time': scenario.simulated_response_time | default(200),
+              'availability': scenario.simulated_availability | default(0.99),
+              'timestamp': ansible_date_time.epoch
+            }
+          }}
+
+    - name: Evaluate rollback conditions
+      set_fact:
+        should_rollback: >-
+          {{
+            (scenario.trigger_condition == 'error_rate' and current_metrics.error_rate > scenario.threshold) or
+            (scenario.trigger_condition == 'response_time' and current_metrics.response_time > scenario.threshold) or
+            (scenario.trigger_condition == 'availability' and current_metrics.availability < scenario.threshold) or
+            false
+          }}
+
+    - name: Display condition evaluation
+      debug:
+        msg: |
+          Condition Evaluation:
+          - Current Error Rate: {{ current_metrics.error_rate }}
+          - Current Response Time: {{ current_metrics.response_time }}ms
+          - Current Availability: {{ current_metrics.availability }}
+          - Should Rollback: {{ should_rollback }}
+          - Expected Rollback: {{ scenario.expected_rollback }}
+
+    - name: Execute rollback if conditions met
+      block:
+        - name: Update circuit breaker state (failure)
+          copy:
+            content: |
+              {
+                "state": "open",
+                "failure_count": 1,
+                "last_failure_time": "{{ ansible_date_time.epoch }}",
+                "cooldown_until": {{ (ansible_date_time.epoch | int) + 1800 }},
+                "team": "{{ scenario.team_name }}",
+                "failure_reason": "{{ scenario.trigger_condition }}"
+              }
+            dest: /tmp/jenkins-ha-test/circuit-breaker/state.json
+            mode: '0644'
+
+        - name: Execute automatic rollback
+          set_fact:
+            jenkins_teams: >-
+              {{
+                jenkins_teams | map('combine', 
+                  {'active_environment': initial_environment} 
+                  if item.team_name == scenario.team_name else {}
+                ) | list
+              }}
+          loop: "{{ jenkins_teams }}"
+
+        - name: Record rollback execution
+          set_fact:
+            rollback_executed: true
+            rollback_reason: "{{ scenario.trigger_condition | upper }} threshold exceeded"
+            rollback_duration: "{{ ansible_date_time.epoch | int - scenario_start_time | int }}"
+
+        - name: Verify rollback success
+          uri:
+            url: "http://{{ ansible_default_ipv4.address }}:{{ target_team.ports.web }}/login"
+            method: GET
+            timeout: 30
+            status_code: [200, 403]
+          register: rollback_health_check
+          retries: 3
+          delay: 5
+
+        - name: Update circuit breaker state (recovery)
+          copy:
+            content: |
+              {
+                "state": "closed",
+                "failure_count": 0,
+                "last_success_time": "{{ ansible_date_time.epoch }}",
+                "team": "{{ scenario.team_name }}"
+              }
+            dest: /tmp/jenkins-ha-test/circuit-breaker/state.json
+            mode: '0644'
+          when: rollback_health_check.status in [200, 403]
+
+      when: should_rollback
+
+    - name: Handle normal conditions (no rollback)
+      block:
+        - name: Update circuit breaker state (success)
+          copy:
+            content: |
+              {
+                "state": "closed",
+                "failure_count": 0,
+                "last_success_time": "{{ ansible_date_time.epoch }}",
+                "team": "{{ scenario.team_name }}"
+              }
+            dest: /tmp/jenkins-ha-test/circuit-breaker/state.json
+            mode: '0644'
+
+        - name: Record no rollback execution
+          set_fact:
+            rollback_executed: false
+            rollback_reason: "Metrics within normal thresholds"
+
+      when: not should_rollback
+
+    - name: Record scenario result
+      set_fact:
+        rollback_results: >-
+          {{
+            (rollback_results | default([])) + [{
+              'scenario_name': scenario.name,
+              'team_name': scenario.team_name,
+              'trigger_condition': scenario.trigger_condition,
+              'expected_rollback': scenario.expected_rollback,
+              'actual_rollback': rollback_executed | default(false),
+              'rollback_executed': rollback_executed | default(false),
+              'rollback_reason': rollback_reason | default('N/A'),
+              'rollback_duration': rollback_duration | default(0),
+              'metrics': current_metrics
+            }]
+          }}
+
+  rescue:
+    - name: Handle scenario failure
+      set_fact:
+        rollback_results: >-
+          {{
+            (rollback_results | default([])) + [{
+              'scenario_name': scenario.name,
+              'team_name': scenario.team_name,
+              'trigger_condition': scenario.trigger_condition,
+              'expected_rollback': scenario.expected_rollback,
+              'actual_rollback': false,
+              'rollback_executed': false,
+              'rollback_reason': 'Scenario execution failed',
+              'error': ansible_failed_result.msg | default('Unknown error')
+            }]
+          }}
+
+    - name: Display scenario failure
+      debug:
+        msg: |
+          ❌ Rollback scenario failed: {{ scenario.name }}
+          Error: {{ ansible_failed_result.msg | default('Unknown error') }}
+
+    - name: Continue with next scenario
+      meta: clear_host_errors

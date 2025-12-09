@@ -1,35 +1,46 @@
-{{ backup_log_dir | default('/var/log/jenkins-backup') }}/*.log {
+/var/log/jenkins-backup/*.log {
     daily
-    missingok
-    rotate {{ backup_log_rotate_count | default('30') }}
+    rotate {{ backup_retention_days }}
     compress
     delaycompress
+    missingok
     notifempty
-    create 640 {{ backup_user | default('jenkins') }} {{ backup_group | default('jenkins') }}
-    sharedscripts
+    create 0644 {{ backup_user }} {{ backup_group }}
     postrotate
-        /bin/systemctl reload rsyslog > /dev/null 2>&1 || true
+        # Signal backup processes to reopen log files if needed
+        /bin/kill -HUP $(cat /var/run/jenkins-backup-*.pid 2>/dev/null) 2>/dev/null || true
     endscript
 }
 
-{{ backup_log_dir | default('/var/log/jenkins-backup') }}/backup-*.log {
-    weekly
-    missingok
-    rotate {{ backup_log_rotate_count | default('12') }}
+# Backup wrapper logs
+/var/log/jenkins-backup/wrapper.log {
+    daily
+    rotate 30
     compress
     delaycompress
+    missingok
     notifempty
-    create 640 {{ backup_user | default('jenkins') }} {{ backup_group | default('jenkins') }}
-    sharedscripts
+    create 0644 {{ backup_user }} {{ backup_group }}
 }
 
-{{ backup_log_dir | default('/var/log/jenkins-backup') }}/restore-*.log {
-    weekly
-    missingok
-    rotate {{ backup_log_rotate_count | default('12') }}
+# Cron job logs
+/var/log/jenkins-backup/cron-*.log {
+    daily
+    rotate 7
     compress
     delaycompress
+    missingok
     notifempty
-    create 640 {{ backup_user | default('jenkins') }} {{ backup_group | default('jenkins') }}
-    sharedscripts
+    create 0644 {{ backup_user }} {{ backup_group }}
+}
+
+# Backup statistics logs
+/var/log/jenkins-backup/backup-statistics.log {
+    weekly
+    rotate 52
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 {{ backup_user }} {{ backup_group }}
 }

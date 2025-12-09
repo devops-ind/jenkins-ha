@@ -1,0 +1,83 @@
+---
+# GlusterFS Brick Directory Creation Tasks
+
+- name: Create base brick directory
+  file:
+    path: "{{ glusterfs_brick_base_path }}"
+    state: directory
+    owner: "{{ glusterfs_brick_owner }}"
+    group: "{{ glusterfs_brick_group }}"
+    mode: "{{ glusterfs_brick_mode }}"
+  become: yes
+  tags: ['glusterfs', 'bricks', 'directories']
+
+- name: Build team-based volume list from jenkins_teams
+  set_fact:
+    glusterfs_team_volumes: "{{ glusterfs_team_volumes | default([]) + [item] }}"
+  loop: "{{ jenkins_teams | default([]) | map('combine', {'volume_name': glusterfs_team_volume_prefix + '-' + item.team_name + '-' + glusterfs_team_volume_suffix, 'brick_name': glusterfs_team_volume_prefix + '-' + item.team_name + '-brick', 'mount_path': '/var/jenkins/' + item.team_name + '/data'}) | list }}"
+  when:
+    - glusterfs_create_team_volumes
+    - jenkins_teams is defined
+    - jenkins_teams | length > 0
+  tags: ['glusterfs', 'bricks', 'team-volumes']
+
+- name: Merge manual and team-based volumes
+  set_fact:
+    glusterfs_all_volumes: "{{ (glusterfs_volumes | default([])) + (glusterfs_team_volumes | default([])) }}"
+  tags: ['glusterfs', 'bricks', 'volume-list']
+
+- name: Display volumes to be created
+  debug:
+    msg: |
+      GlusterFS Volumes Configuration:
+      Total Volumes: {{ glusterfs_all_volumes | length }}
+      {% for vol in glusterfs_all_volumes %}
+      - {{ vol.volume_name }}:
+        Brick: {{ glusterfs_brick_base_path }}/{{ vol.brick_name }}
+        Mount: {{ vol.mount_path | default('N/A') }}
+        Team: {{ vol.team_name | default('Manual') }}
+      {% endfor %}
+  when: glusterfs_all_volumes is defined and glusterfs_all_volumes | length > 0
+  tags: ['glusterfs', 'bricks', 'info']
+
+- name: Create brick directories for each volume
+  file:
+    path: "{{ glusterfs_brick_base_path }}/{{ item.brick_name }}"
+    state: directory
+    owner: "{{ glusterfs_brick_owner }}"
+    group: "{{ glusterfs_brick_group }}"
+    mode: "{{ glusterfs_brick_mode }}"
+  loop: "{{ glusterfs_all_volumes }}"
+  when: glusterfs_all_volumes is defined and glusterfs_all_volumes | length > 0
+  become: yes
+  tags: ['glusterfs', 'bricks', 'directories']
+
+- name: Set extended attributes on brick directories
+  command: "setfattr -n trusted.glusterfs.volume-id -v {{ item.volume_name | hash('md5') }} {{ glusterfs_brick_base_path }}/{{ item.brick_name }}"
+  loop: "{{ glusterfs_all_volumes }}"
+  when:
+    - glusterfs_all_volumes is defined
+    - glusterfs_all_volumes | length > 0
+  ignore_errors: yes  # First-time setup may not have volume created yet
+  become: yes
+  changed_when: false
+  tags: ['glusterfs', 'bricks', 'xattr']
+
+- name: Verify brick directories
+  stat:
+    path: "{{ glusterfs_brick_base_path }}/{{ item.brick_name }}"
+  loop: "{{ glusterfs_all_volumes }}"
+  register: brick_dir_stat
+  when: glusterfs_all_volumes is defined and glusterfs_all_volumes | length > 0
+  tags: ['glusterfs', 'bricks', 'validation']
+
+- name: Display brick creation summary
+  debug:
+    msg: |
+      Brick Directory Creation Summary:
+      Base Path: {{ glusterfs_brick_base_path }}
+      Bricks Created: {{ brick_dir_stat.results | selectattr('stat.exists', 'equalto', true) | list | length }}/{{ glusterfs_all_volumes | length if glusterfs_all_volumes is defined else 0 }}
+      Owner: {{ glusterfs_brick_owner }}:{{ glusterfs_brick_group }}
+      Permissions: {{ glusterfs_brick_mode }}
+  when: brick_dir_stat is defined
+  tags: ['glusterfs', 'bricks', 'info']

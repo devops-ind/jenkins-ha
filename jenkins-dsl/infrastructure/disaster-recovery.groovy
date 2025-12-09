@@ -64,7 +64,7 @@ pipelineJob('Infrastructure/Disaster-Recovery') {
                 }
             }
             scriptPath('pipelines/Jenkinsfile.disaster-recovery')
-            lightweight(true)
+            lightweight(false)  // Full repository checkout required for ansible code
         }
     }
 }

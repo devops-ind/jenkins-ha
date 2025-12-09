@@ -1,0 +1,382 @@
+---
+# GlusterFS Testing and Validation Playbook
+# Comprehensive tests for GlusterFS replicated storage
+# Based on tests from docs/gluster-fs.md
+
+- name: GlusterFS Testing and Validation Suite
+  hosts: glusterfs_servers
+  become: yes
+  gather_facts: yes
+  vars:
+    test_results: []
+    test_base_path: "/var/jenkins"
+    test_file_prefix: "gluster-test"
+
+  tasks:
+    - name: Display test environment information
+      debug:
+        msg: |
+          ====================================================
+          GlusterFS Test Suite - Jenkins HA Validation
+          ====================================================
+          Node: {{ inventory_hostname }}
+          Total Nodes: {{ groups['glusterfs_servers'] | length }}
+          Teams Configured: {{ jenkins_teams | default([]) | map(attribute='team_name') | join(', ') }}
+          ====================================================
+      run_once: true
+
+    # Test 1: Service Status
+    - name: "Test 1: Verify GlusterFS service is running"
+      block:
+        - name: Check glusterd service status
+          systemd:
+            name: glusterd
+          register: glusterd_status
+
+        - name: Assert service is running
+          assert:
+            that:
+              - glusterd_status.status.ActiveState == "active"
+            fail_msg: "❌ Test 1 FAILED: GlusterFS service not running"
+            success_msg: "✅ Test 1 PASSED: GlusterFS service running"
+
+        - name: Record test result
+          set_fact:
+            test_results: "{{ test_results + [{'test': 'Service Status', 'status': 'PASSED', 'node': inventory_hostname}] }}"
+
+      rescue:
+        - name: Record test failure
+          set_fact:
+            test_results: "{{ test_results + [{'test': 'Service Status', 'status': 'FAILED', 'node': inventory_hostname}] }}"
+      tags: ['test', 'service']
+
+    # Test 2: Peer Connectivity
+    - name: "Test 2: Verify peer connectivity"
+      block:
+        - name: Get peer status
+          command: gluster peer status
+          register: peer_status
+          changed_when: false
+
+        - name: Count connected peers
+          set_fact:
+            peer_count: "{{ peer_status.stdout | regex_findall('Peer in Cluster') | length }}"
+
+        - name: Assert peer connectivity
+          assert:
+            that:
+              - peer_count | int >= 1 or groups['glusterfs_servers'] | length == 1
+            fail_msg: "❌ Test 2 FAILED: Expected {{ groups['glusterfs_servers'] | length - 1 }} peers, found {{ peer_count }}"
+            success_msg: "✅ Test 2 PASSED: {{ peer_count }} peers connected"
+
+        - name: Record test result
+          set_fact:
+            test_results: "{{ test_results + [{'test': 'Peer Connectivity', 'status': 'PASSED', 'node': inventory_hostname, 'peers': peer_count}] }}"
+
+      rescue:
+        - name: Record test failure
+          set_fact:
+            test_results: "{{ test_results + [{'test': 'Peer Connectivity', 'status': 'FAILED', 'node': inventory_hostname}] }}"
+      tags: ['test', 'peers']
+
+    # Test 3: Volume Status
+    - name: "Test 3: Verify volumes are started"
+      block:
+        - name: List volumes
+          command: gluster volume list
+          register: volume_list
+          changed_when: false
+
+        - name: Check volume status
+          command: "gluster volume info {{ item.volume_name }}"
+          loop: "{{ jenkins_teams | default([]) | map('combine', {'volume_name': 'jenkins-' + item.team_name + '-data'}) | list }}"
+          register: volume_info
+          changed_when: false
+          when: jenkins_teams is defined and jenkins_teams | length > 0
+
+        - name: Assert all volumes are started
+          assert:
+            that:
+              - "'Status: Started' in item.stdout"
+            fail_msg: "❌ Test 3 FAILED: Volume {{ item.item.volume_name }} not started"
+            success_msg: "✅ Test 3 PASSED: Volume {{ item.item.volume_name }} started"
+          loop: "{{ volume_info.results }}"
+          when: volume_info is defined and volume_info.results is defined
+
+        - name: Record test result
+          set_fact:
+            test_results: "{{ test_results + [{'test': 'Volume Status', 'status': 'PASSED', 'node': inventory_hostname}] }}"
+
+      rescue:
+        - name: Record test failure
+          set_fact:
+            test_results: "{{ test_results + [{'test': 'Volume Status', 'status': 'FAILED', 'node': inventory_hostname}] }}"
+      tags: ['test', 'volumes']
+
+    # Test 4: Mount Points (Enhanced with Server-Side Validation)
+    - name: "Test 4: Verify volume mounts (server-side and client-side)"
+      block:
+        - name: Check GlusterFS mounts
+          command: df -t fuse.glusterfs
+          register: gluster_mounts
+          changed_when: false
+
+        - name: Verify server-side team mounts exist
+          stat:
+            path: "/var/jenkins/{{ item.team_name }}/data"
+          loop: "{{ jenkins_teams | default([]) }}"
+          register: server_mount_check
+          when: jenkins_teams is defined and jenkins_teams | length > 0
+
+        - name: Assert server-side mounts are accessible
+          assert:
+            that:
+              - item.stat.exists
+              - item.stat.isdir
+            fail_msg: "❌ Test 4 FAILED: Server mount point {{ item.item.team_name }} not accessible"
+            success_msg: "✅ Test 4 PASSED: Server mount point {{ item.item.team_name }} accessible"
+          loop: "{{ server_mount_check.results }}"
+          when: server_mount_check is defined and server_mount_check.results is defined
+
+        - name: Verify mount is actually a GlusterFS filesystem
+          command: "findmnt -n -o FSTYPE /var/jenkins/{{ item.team_name }}/data"
+          loop: "{{ jenkins_teams | default([]) }}"
+          register: fstype_check
+          changed_when: false
+          failed_when: false
+          when: jenkins_teams is defined and jenkins_teams | length > 0
+
+        - name: Assert filesystem type is GlusterFS
+          assert:
+            that:
+              - "'fuse.glusterfs' in item.stdout"
+            fail_msg: "❌ Test 4 FAILED: {{ item.item.team_name }} not a GlusterFS mount (found: {{ item.stdout }})"
+            success_msg: "✅ Test 4 PASSED: {{ item.item.team_name }} is GlusterFS mount"
+          loop: "{{ fstype_check.results }}"
+          when:
+            - fstype_check is defined
+            - fstype_check.results is defined
+            - item.rc == 0
+
+        - name: Test write permissions on server mounts
+          copy:
+            content: "Test write - {{ ansible_date_time.iso8601 }}"
+            dest: "/var/jenkins/{{ item.team_name }}/data/.mount-write-test"
+            mode: '0644'
+          loop: "{{ jenkins_teams | default([]) }}"
+          when: jenkins_teams is defined and jenkins_teams | length > 0
+          register: write_test
+
+        - name: Remove test files
+          file:
+            path: "/var/jenkins/{{ item.team_name }}/data/.mount-write-test"
+            state: absent
+          loop: "{{ jenkins_teams | default([]) }}"
+          when: jenkins_teams is defined and jenkins_teams | length > 0
+
+        - name: Display mount information
+          debug:
+            msg: |
+              GlusterFS Mounts on {{ inventory_hostname }}:
+              {{ gluster_mounts.stdout }}
+
+        - name: Record test result
+          set_fact:
+            test_results: "{{ test_results + [{'test': 'Mount Points (Enhanced)', 'status': 'PASSED', 'node': inventory_hostname}] }}"
+
+      rescue:
+        - name: Record test failure
+          set_fact:
+            test_results: "{{ test_results + [{'test': 'Mount Points (Enhanced)', 'status': 'FAILED', 'node': inventory_hostname}] }}"
+      tags: ['test', 'mounts', 'server-mounts']
+
+    # Test 5: Basic Replication (Primary Node)
+    - name: "Test 5: Basic file replication test"
+      block:
+        - name: Create test file on primary node
+          copy:
+            content: "Hello from {{ inventory_hostname }} at {{ ansible_date_time.iso8601 }}"
+            dest: "/var/jenkins/{{ jenkins_teams[0].team_name }}/data/{{ test_file_prefix }}-replication.txt"
+            owner: "1000"
+            group: "1000"
+            mode: '0644'
+          when:
+            - inventory_hostname == groups['glusterfs_servers'][0]
+            - jenkins_teams is defined
+            - jenkins_teams | length > 0
+
+        - name: Wait for replication
+          pause:
+            seconds: 5
+
+        - name: Verify file exists on all nodes
+          stat:
+            path: "/var/jenkins/{{ jenkins_teams[0].team_name }}/data/{{ test_file_prefix }}-replication.txt"
+          register: replicated_file
+          when: jenkins_teams is defined and jenkins_teams | length > 0
+
+        - name: Assert file replicated
+          assert:
+            that:
+              - replicated_file.stat.exists
+            fail_msg: "❌ Test 5 FAILED: File not replicated to {{ inventory_hostname }}"
+            success_msg: "✅ Test 5 PASSED: File replicated to {{ inventory_hostname }}"
+          when: replicated_file is defined
+
+        - name: Record test result
+          set_fact:
+            test_results: "{{ test_results + [{'test': 'Basic Replication', 'status': 'PASSED', 'node': inventory_hostname}] }}"
+
+      rescue:
+        - name: Record test failure
+          set_fact:
+            test_results: "{{ test_results + [{'test': 'Basic Replication', 'status': 'FAILED', 'node': inventory_hostname}] }}"
+      tags: ['test', 'replication']
+
+    # Test 6: Bidirectional Sync
+    - name: "Test 6: Bidirectional synchronization test"
+      block:
+        - name: Create test file from each node
+          copy:
+            content: "Created on {{ inventory_hostname }} at {{ ansible_date_time.iso8601 }}"
+            dest: "/var/jenkins/{{ jenkins_teams[0].team_name }}/data/{{ test_file_prefix }}-from-{{ inventory_hostname }}.txt"
+            owner: "1000"
+            group: "1000"
+            mode: '0644'
+          when: jenkins_teams is defined and jenkins_teams | length > 0
+
+        - name: Wait for bidirectional sync
+          pause:
+            seconds: 5
+
+        - name: List all test files
+          find:
+            paths: "/var/jenkins/{{ jenkins_teams[0].team_name }}/data"
+            patterns: "{{ test_file_prefix }}-from-*.txt"
+          register: bidirectional_files
+          when: jenkins_teams is defined and jenkins_teams | length > 0
+
+        - name: Assert all nodes' files are present
+          assert:
+            that:
+              - bidirectional_files.matched >= groups['glusterfs_servers'] | length
+            fail_msg: "❌ Test 6 FAILED: Expected {{ groups['glusterfs_servers'] | length }} files, found {{ bidirectional_files.matched }}"
+            success_msg: "✅ Test 6 PASSED: All {{ bidirectional_files.matched }} files synchronized"
+          when: bidirectional_files is defined
+
+        - name: Record test result
+          set_fact:
+            test_results: "{{ test_results + [{'test': 'Bidirectional Sync', 'status': 'PASSED', 'node': inventory_hostname}] }}"
+
+      rescue:
+        - name: Record test failure
+          set_fact:
+            test_results: "{{ test_results + [{'test': 'Bidirectional Sync', 'status': 'FAILED', 'node': inventory_hostname}] }}"
+      tags: ['test', 'bidirectional']
+
+    # Test 7: Split-Brain Check
+    - name: "Test 7: Check for split-brain conditions"
+      block:
+        - name: Check split-brain status
+          command: "gluster volume heal {{ item.volume_name }} info split-brain"
+          loop: "{{ jenkins_teams | default([]) | map('combine', {'volume_name': 'jenkins-' + item.team_name + '-data'}) | list }}"
+          register: split_brain_check
+          changed_when: false
+          when: jenkins_teams is defined and jenkins_teams | length > 0
+
+        - name: Assert no split-brain
+          assert:
+            that:
+              - "'Number of entries: 0' in item.stdout or 'in split-brain' not in item.stdout"
+            fail_msg: "⚠️  Test 7 WARNING: Split-brain detected in {{ item.item.volume_name }}"
+            success_msg: "✅ Test 7 PASSED: No split-brain in {{ item.item.volume_name }}"
+          loop: "{{ split_brain_check.results }}"
+          when: split_brain_check is defined and split_brain_check.results is defined
+
+        - name: Record test result
+          set_fact:
+            test_results: "{{ test_results + [{'test': 'Split-Brain Check', 'status': 'PASSED', 'node': inventory_hostname}] }}"
+
+      rescue:
+        - name: Record test failure
+          set_fact:
+            test_results: "{{ test_results + [{'test': 'Split-Brain Check', 'status': 'WARNING', 'node': inventory_hostname}] }}"
+      tags: ['test', 'split-brain']
+
+    # Test 8: Performance Test
+    - name: "Test 8: Write performance test"
+      block:
+        - name: Create 100 test files
+          copy:
+            content: "Performance test file {{ item }}"
+            dest: "/var/jenkins/{{ jenkins_teams[0].team_name }}/data/{{ test_file_prefix }}-perf-{{ item }}.txt"
+            owner: "1000"
+            group: "1000"
+          loop: "{{ range(1, 101) | list }}"
+          when:
+            - inventory_hostname == groups['glusterfs_servers'][0]
+            - jenkins_teams is defined
+            - jenkins_teams | length > 0
+
+        - name: Wait for replication
+          pause:
+            seconds: 10
+
+        - name: Count replicated files
+          find:
+            paths: "/var/jenkins/{{ jenkins_teams[0].team_name }}/data"
+            patterns: "{{ test_file_prefix }}-perf-*.txt"
+          register: perf_files
+          when: jenkins_teams is defined and jenkins_teams | length > 0
+
+        - name: Assert performance test
+          assert:
+            that:
+              - perf_files.matched >= 95  # Allow 5% tolerance
+            fail_msg: "❌ Test 8 FAILED: Only {{ perf_files.matched }}/100 files replicated"
+            success_msg: "✅ Test 8 PASSED: {{ perf_files.matched }}/100 files replicated"
+          when: perf_files is defined
+
+        - name: Record test result
+          set_fact:
+            test_results: "{{ test_results + [{'test': 'Performance Test', 'status': 'PASSED', 'node': inventory_hostname, 'files': perf_files.matched | default(0)}] }}"
+
+      rescue:
+        - name: Record test failure
+          set_fact:
+            test_results: "{{ test_results + [{'test': 'Performance Test', 'status': 'FAILED', 'node': inventory_hostname}] }}"
+      tags: ['test', 'performance']
+
+    # Cleanup
+    - name: Cleanup test files
+      file:
+        path: "/var/jenkins/{{ jenkins_teams[0].team_name }}/data/{{ test_file_prefix }}-*"
+        state: absent
+      when:
+        - jenkins_teams is defined
+        - jenkins_teams | length > 0
+        - cleanup_test_files | default(true)
+      tags: ['test', 'cleanup']
+
+    # Summary
+    - name: Display test results summary
+      debug:
+        msg: |
+          ====================================================
+          GlusterFS Test Results Summary
+          ====================================================
+          Node: {{ inventory_hostname }}
+
+          Test Results:
+          {% for result in test_results %}
+          {{ loop.index }}. {{ result.test }}: {{ result.status }}
+             Node: {{ result.node }}
+             {% if result.peers is defined %}Peers: {{ result.peers }}{% endif %}
+             {% if result.files is defined %}Files: {{ result.files }}{% endif %}
+          {% endfor %}
+
+          Overall Status: {{ 'PASSED' if test_results | selectattr('status', 'equalto', 'FAILED') | list | length == 0 else 'FAILED' }}
+          Passed: {{ test_results | selectattr('status', 'equalto', 'PASSED') | list | length }}/{{ test_results | length }}
+          Failed: {{ test_results | selectattr('status', 'equalto', 'FAILED') | list | length }}/{{ test_results | length }}
+          ====================================================
+      tags: ['test', 'summary']

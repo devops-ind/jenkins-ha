@@ -1,0 +1,43 @@
+[Unit]
+Description=Jenkins HA Automated Switch Manager
+Documentation=https://github.com/your-org/jenkins-ha
+After=network.target docker.service
+Requires=docker.service
+Wants=prometheus.service grafana.service
+
+[Service]
+Type=forking
+User=jenkins
+Group=jenkins
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=PROMETHEUS_URL=http://localhost:9090
+Environment=LOKI_URL=http://localhost:3100
+Environment=GRAFANA_URL=http://localhost:9300
+WorkingDirectory=/opt/jenkins-ha
+ExecStart=/opt/jenkins-ha/scripts/automated-switch-daemon.sh start
+ExecStop=/opt/jenkins-ha/scripts/automated-switch-daemon.sh stop
+ExecReload=/opt/jenkins-ha/scripts/automated-switch-daemon.sh reload
+PIDFile=/var/run/jenkins-automated-switch.pid
+Restart=always
+RestartSec=10
+StartLimitInterval=60
+StartLimitBurst=3
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/log/jenkins /tmp /opt/jenkins-ha/data /opt/jenkins-ha/logs
+ProtectHome=true
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=50%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jenkins-automated-switch
+
+[Install]
+WantedBy=multi-user.target

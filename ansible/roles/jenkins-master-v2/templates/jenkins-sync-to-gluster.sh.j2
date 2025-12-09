@@ -1,0 +1,90 @@
+#!/bin/bash
+# Jenkins Sync to GlusterFS Script (Hybrid Architecture)
+# One-way sync from Docker volume to GlusterFS sync layer
+# GlusterFS handles automatic replication to other VMs
+
+set -euo pipefail
+
+TEAM="{{ item.team_name }}"
+ACTIVE_ENV="{{ item.active_environment | default('blue') }}"
+DOCKER_VOLUME="jenkins-${TEAM}-${ACTIVE_ENV}-home"
+GLUSTER_SYNC_PATH="/var/jenkins/${TEAM}/sync/${ACTIVE_ENV}"
+LOG_FILE="/var/log/jenkins-gluster-sync-${TEAM}.log"
+TEMP_MOUNT="/tmp/jenkins-sync-${TEAM}-${ACTIVE_ENV}-$$"
+
+# Logging function
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+log "=========================================="
+log "Starting sync to GlusterFS"
+log "Team: ${TEAM}"
+log "Environment: ${ACTIVE_ENV}"
+log "Docker Volume: ${DOCKER_VOLUME}"
+log "GlusterFS Path: ${GLUSTER_SYNC_PATH}"
+log "=========================================="
+
+# Step 1: Verify GlusterFS mount is available
+if [[ ! -d "$GLUSTER_SYNC_PATH" ]]; then
+    log "ERROR: GlusterFS sync path not found: $GLUSTER_SYNC_PATH"
+    log "Is GlusterFS mounted? Check: df -h | grep glusterfs"
+    exit 1
+fi
+
+# Step 2: Check if Docker volume exists
+if ! docker volume inspect "$DOCKER_VOLUME" &>/dev/null; then
+    log "ERROR: Docker volume not found: $DOCKER_VOLUME"
+    log "Has Jenkins been deployed? Check: docker volume ls"
+    exit 1
+fi
+
+# Step 3: Create temporary mount point
+log "Creating temporary mount point..."
+mkdir -p "$TEMP_MOUNT"
+
+# Step 4: Extract data from Docker volume to temp
+log "Extracting data from Docker volume..."
+docker run --rm \
+    -v "${DOCKER_VOLUME}:/source:ro" \
+    -v "${TEMP_MOUNT}:/target" \
+    alpine:latest sh -c "cp -a /source/. /target/" 2>&1 | tee -a "$LOG_FILE"
+
+if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+    log "ERROR: Failed to extract data from Docker volume"
+    rm -rf "$TEMP_MOUNT"
+    exit 1
+fi
+
+# Step 5: Count files for reporting
+FILE_COUNT=$(find "$TEMP_MOUNT" -type f | wc -l)
+log "Files to sync: $FILE_COUNT"
+
+# Step 6: Rsync to GlusterFS (one-way, delete removed files)
+log "Syncing to GlusterFS..."
+rsync -av --delete \
+    --exclude='*.tmp' \
+    --exclude='.cache/' \
+    "${TEMP_MOUNT}/" \
+    "${GLUSTER_SYNC_PATH}/" 2>&1 | tee -a "$LOG_FILE"
+
+RSYNC_EXIT=$?
+
+if [[ $RSYNC_EXIT -eq 0 ]]; then
+    log "SUCCESS: Sync completed successfully"
+else
+    log "ERROR: Rsync failed with exit code $RSYNC_EXIT"
+fi
+
+# Step 7: Cleanup temp directory
+log "Cleaning up temporary files..."
+rm -rf "$TEMP_MOUNT"
+
+# Step 8: Report sync stats
+SYNC_SIZE=$(du -sh "$GLUSTER_SYNC_PATH" 2>/dev/null | awk '{print $1}')
+log "GlusterFS sync size: $SYNC_SIZE"
+log "=========================================="
+log "Sync complete! GlusterFS replicating to other VMs..."
+log "=========================================="
+
+exit $RSYNC_EXIT

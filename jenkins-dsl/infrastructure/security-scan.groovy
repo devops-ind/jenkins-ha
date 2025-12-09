@@ -71,7 +71,7 @@ pipelineJob('Infrastructure/Security-Scan') {
                 }
             }
             scriptPath('pipelines/Jenkinsfile.security-scan')
-            lightweight(true)
+            lightweight(false)  // Full repository checkout required for ansible code
         }
     }
 }

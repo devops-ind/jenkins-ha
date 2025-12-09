@@ -1,0 +1,869 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Jenkins: Performance and Health Overview - {{ deployment_mode | default('local') | title }}",
+    "tags": ["jenkins", "performance", "health", "multi-team", "{{ deployment_mode | default('local') }}"],
+    "style": "dark",
+    "timezone": "browser",
+    "refresh": "30s",
+    "description": "Jobs queue speeds and rates, Executors availability, Nodes status, Jenkins and JVM resource usage, Jenkins Job Status, and lot more. Enhanced for multi-team deployment.",
+    "time": {
+      "from": "now-30m",
+      "to": "now"
+    },
+    "templating": {
+      "list": [
+        {
+          "name": "jenkins_team",
+          "type": "query",
+          "query": "label_values(up{job=~\"jenkins.*\"}, jenkins_team)",
+          "refresh": 1,
+          "includeAll": true,
+          "multi": true,
+          "allValue": ".*",
+          "current": {
+            "text": "All",
+            "value": "$__all"
+          },
+          "options": [],
+          "label": "Team"
+        },
+        {
+          "name": "jenkins_environment",
+          "type": "query",
+          "query": "label_values(up{job=~\"jenkins.*\"}, jenkins_environment)",
+          "refresh": 1,
+          "includeAll": true,
+          "multi": true,
+          "allValue": ".*",
+          "current": {
+            "text": "All",
+            "value": "$__all"
+          },
+          "options": [],
+          "label": "Environment"
+        }
+      ]
+    },
+    "panels": [
+      {
+        "id": 12,
+        "title": "Processing speed",
+        "type": "singlestat",
+        "gridPos": {
+          "h": 7,
+          "w": 4,
+          "x": 0,
+          "y": 0
+        },
+        "colorBackground": false,
+        "colorValue": false,
+        "colors": [
+          "rgba(50, 172, 45, 0.97)",
+          "rgba(237, 129, 40, 0.89)",
+          "rgba(245, 54, 54, 0.9)"
+        ],
+        "datasource": "prometheus",
+        "format": "none",
+        "postfix": " jobs/min",
+        "postfixFontSize": "70%",
+        "sparkline": {
+          "fillColor": "rgba(189, 31, 138, 0.18)",
+          "full": false,
+          "lineColor": "rgb(151, 31, 193)",
+          "show": true
+        },
+        "targets": [
+          {
+            "expr": "rate(jenkins_job_building_duration_count{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}[1m])",
+            "refId": "A"
+          }
+        ],
+        "thresholds": "6,10",
+        "valueFontSize": "150%",
+        "valueMaps": [
+          {
+            "op": "=",
+            "text": "N/A",
+            "value": "null"
+          }
+        ],
+        "valueName": "current"
+      },
+      {
+        "id": 4,
+        "title": "Job queue duration",
+        "type": "graph",
+        "gridPos": {
+          "h": 7,
+          "w": 16,
+          "x": 4,
+          "y": 0
+        },
+        "datasource": "prometheus",
+        "lines": true,
+        "linewidth": 2,
+        "legend": {
+          "show": false
+        },
+        "targets": [
+          {
+            "expr": "jenkins_job_queuing_duration{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}",
+            "format": "time_series",
+            "intervalFactor": 1,
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {
+            "format": "short",
+            "label": null,
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true
+          },
+          {
+            "format": "short",
+            "label": null,
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true
+          }
+        ]
+      },
+      {
+        "id": 13,
+        "title": "Queued rate",
+        "type": "singlestat",
+        "gridPos": {
+          "h": 7,
+          "w": 4,
+          "x": 20,
+          "y": 0
+        },
+        "colorBackground": false,
+        "colorValue": false,
+        "colors": [
+          "rgba(245, 54, 54, 0.9)",
+          "rgba(237, 129, 40, 0.89)",
+          "rgba(50, 172, 45, 0.97)"
+        ],
+        "datasource": "prometheus",
+        "format": "none",
+        "postfix": " jobs/min",
+        "postfixFontSize": "70%",
+        "sparkline": {
+          "fillColor": "rgba(31, 184, 189, 0.18)",
+          "full": false,
+          "lineColor": "rgb(31, 193, 185)",
+          "show": true
+        },
+        "targets": [
+          {
+            "expr": "rate(jenkins_job_queuing_duration_count{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}[1m])",
+            "refId": "A"
+          }
+        ],
+        "valueFontSize": "150%",
+        "valueMaps": [
+          {
+            "op": "=",
+            "text": "N/A",
+            "value": "null"
+          }
+        ],
+        "valueName": "current"
+      },
+      {
+        "id": 7,
+        "title": "JVM free memory",
+        "type": "singlestat",
+        "gridPos": {
+          "h": 4,
+          "w": 4,
+          "x": 0,
+          "y": 7
+        },
+        "colorBackground": false,
+        "colorValue": true,
+        "colors": [
+          "rgba(245, 54, 54, 0.9)",
+          "rgba(237, 129, 40, 0.89)",
+          "rgba(50, 172, 45, 0.97)"
+        ],
+        "datasource": "prometheus",
+        "decimals": 1,
+        "format": "percent",
+        "sparkline": {
+          "fillColor": "rgba(85, 189, 31, 0.18)",
+          "full": false,
+          "lineColor": "rgb(60, 193, 31)",
+          "show": true
+        },
+        "targets": [
+          {
+            "expr": "(vm_memory_total_max{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"} - vm_memory_total_used{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}) / vm_memory_total_max{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"} * 100.0",
+            "format": "time_series",
+            "intervalFactor": 1,
+            "refId": "A"
+          }
+        ],
+        "thresholds": "30,10",
+        "valueFontSize": "100%",
+        "valueMaps": [
+          {
+            "op": "=",
+            "text": "N/A",
+            "value": "null"
+          }
+        ],
+        "valueName": "current"
+      },
+      {
+        "id": 15,
+        "title": "Memory Usage",
+        "type": "singlestat",
+        "gridPos": {
+          "h": 4,
+          "w": 4,
+          "x": 4,
+          "y": 7
+        },
+        "colorBackground": false,
+        "colorValue": true,
+        "colors": [
+          "#299c46",
+          "rgba(237, 129, 40, 0.89)",
+          "#1F60C4"
+        ],
+        "datasource": "prometheus",
+        "decimals": 0,
+        "format": "decbytes",
+        "sparkline": {
+          "fillColor": "rgba(31, 118, 189, 0)",
+          "full": false,
+          "lineColor": "#8F3BB8",
+          "show": true
+        },
+        "targets": [
+          {
+            "expr": "vm_memory_total_used{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}",
+            "format": "time_series",
+            "intervalFactor": 1,
+            "refId": "A"
+          }
+        ],
+        "thresholds": "0,0",
+        "valueFontSize": "120%",
+        "valueMaps": [
+          {
+            "op": "=",
+            "text": "N/A",
+            "value": "null"
+          }
+        ],
+        "valueName": "current"
+      },
+      {
+        "id": 8,
+        "title": "Jenkins health",
+        "type": "singlestat",
+        "gridPos": {
+          "h": 4,
+          "w": 4,
+          "x": 8,
+          "y": 7
+        },
+        "colorBackground": false,
+        "colorValue": true,
+        "colors": [
+          "rgba(245, 54, 54, 0.9)",
+          "rgba(237, 129, 40, 0.89)",
+          "rgba(50, 172, 45, 0.97)"
+        ],
+        "datasource": "prometheus",
+        "decimals": 1,
+        "format": "none",
+        "targets": [
+          {
+            "expr": "jenkins_health_check_score{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}",
+            "format": "time_series",
+            "intervalFactor": 1,
+            "refId": "A"
+          }
+        ],
+        "thresholds": "1,1",
+        "valueFontSize": "100%",
+        "valueMaps": [
+          {
+            "op": "=",
+            "text": "Good!",
+            "value": "1.0"
+          },
+          {
+            "op": "=",
+            "text": "Check :/",
+            "value": "*"
+          }
+        ],
+        "valueName": "current"
+      },
+      {
+        "id": 16,
+        "title": "JVM Uptime",
+        "type": "singlestat",
+        "gridPos": {
+          "h": 4,
+          "w": 4,
+          "x": 12,
+          "y": 7
+        },
+        "colorBackground": false,
+        "colorValue": true,
+        "colors": [
+          "#C4162A",
+          "#C4162A",
+          "#37872D"
+        ],
+        "datasource": "prometheus",
+        "decimals": 0,
+        "format": "ms",
+        "targets": [
+          {
+            "expr": "vm_uptime_milliseconds{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}",
+            "format": "time_series",
+            "intervalFactor": 1,
+            "refId": "A"
+          }
+        ],
+        "thresholds": "0,0",
+        "valueFontSize": "120%",
+        "valueMaps": [
+          {
+            "op": "=",
+            "text": "N/A",
+            "value": "null"
+          }
+        ],
+        "valueName": "current"
+      },
+      {
+        "id": 10,
+        "title": "Jenkins nodes offline",
+        "type": "singlestat",
+        "gridPos": {
+          "h": 4,
+          "w": 4,
+          "x": 16,
+          "y": 7
+        },
+        "colorBackground": false,
+        "colorValue": true,
+        "colors": [
+          "rgba(245, 54, 54, 0.9)",
+          "rgba(237, 129, 40, 0.89)",
+          "rgba(50, 172, 45, 0.97)"
+        ],
+        "datasource": "prometheus",
+        "format": "none",
+        "targets": [
+          {
+            "expr": "jenkins_node_offline_value{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}",
+            "refId": "A"
+          }
+        ],
+        "thresholds": "0,0",
+        "valueFontSize": "100%",
+        "valueMaps": [
+          {
+            "op": "=",
+            "text": "None!",
+            "value": "0"
+          }
+        ],
+        "valueName": "current"
+      },
+      {
+        "id": 5,
+        "title": "CPU Usage",
+        "type": "singlestat",
+        "gridPos": {
+          "h": 4,
+          "w": 4,
+          "x": 20,
+          "y": 7
+        },
+        "colorBackground": false,
+        "colorValue": true,
+        "colors": [
+          "#299c46",
+          "rgba(237, 129, 40, 0.89)",
+          "#C4162A"
+        ],
+        "datasource": "prometheus",
+        "format": "percent",
+        "sparkline": {
+          "fillColor": "rgba(31, 118, 189, 0.18)",
+          "full": false,
+          "lineColor": "rgb(31, 120, 193)",
+          "show": true
+        },
+        "targets": [
+          {
+            "expr": "vm_cpu_load{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}",
+            "format": "time_series",
+            "intervalFactor": 1,
+            "refId": "A"
+          }
+        ],
+        "thresholds": "50,80",
+        "valueFontSize": "120%",
+        "valueMaps": [
+          {
+            "op": "=",
+            "text": "N/A",
+            "value": "null"
+          }
+        ],
+        "valueName": "current"
+      },
+      {
+        "id": 18,
+        "title": "Total Jobs",
+        "type": "singlestat",
+        "gridPos": {
+          "h": 4,
+          "w": 4,
+          "x": 0,
+          "y": 11
+        },
+        "colorBackground": false,
+        "colorValue": true,
+        "colors": [
+          "#37872D",
+          "#F2CC0C",
+          "#F2CC0C"
+        ],
+        "datasource": "prometheus",
+        "format": "none",
+        "sparkline": {
+          "fillColor": "rgba(242, 204, 12, 0.11)",
+          "full": false,
+          "lineColor": "#F2CC0C",
+          "show": true
+        },
+        "targets": [
+          {
+            "expr": "jenkins_node_builds_count{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}",
+            "format": "time_series",
+            "intervalFactor": 1,
+            "refId": "A"
+          }
+        ],
+        "thresholds": "1,2",
+        "valueFontSize": "150%",
+        "valueMaps": [
+          {
+            "op": "=",
+            "text": "None!",
+            "value": "null"
+          }
+        ],
+        "valueName": "current"
+      },
+      {
+        "id": 9,
+        "title": "Successful Jobs",
+        "type": "singlestat",
+        "gridPos": {
+          "h": 4,
+          "w": 4,
+          "x": 4,
+          "y": 11
+        },
+        "colorBackground": false,
+        "colorValue": true,
+        "colors": [
+          "rgba(245, 54, 54, 0.9)",
+          "rgba(237, 129, 40, 0.89)",
+          "rgba(50, 172, 45, 0.97)"
+        ],
+        "datasource": "prometheus",
+        "format": "none",
+        "sparkline": {
+          "fillColor": "rgba(55, 135, 45, 0.08)",
+          "full": false,
+          "lineColor": "#37872D",
+          "show": true
+        },
+        "targets": [
+          {
+            "expr": "jenkins_runs_success_total{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}",
+            "format": "time_series",
+            "intervalFactor": 1,
+            "refId": "A"
+          }
+        ],
+        "thresholds": "0,0",
+        "valueFontSize": "150%",
+        "valueMaps": [
+          {
+            "op": "=",
+            "text": "None!",
+            "value": "0"
+          }
+        ],
+        "valueName": "current"
+      },
+      {
+        "id": 20,
+        "title": "Aborted Jobs",
+        "type": "singlestat",
+        "gridPos": {
+          "h": 4,
+          "w": 4,
+          "x": 8,
+          "y": 11
+        },
+        "colorBackground": false,
+        "colorValue": true,
+        "colors": [
+          "#37872D",
+          "#C4162A",
+          "rgb(217, 213, 213)"
+        ],
+        "datasource": "prometheus",
+        "format": "none",
+        "sparkline": {
+          "fillColor": "rgba(176, 183, 194, 0.26)",
+          "full": false,
+          "lineColor": "rgb(219, 198, 200)",
+          "show": true
+        },
+        "targets": [
+          {
+            "expr": "jenkins_runs_aborted_total{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}",
+            "format": "time_series",
+            "intervalFactor": 1,
+            "refId": "A"
+          }
+        ],
+        "thresholds": "0,0",
+        "valueFontSize": "150%",
+        "valueMaps": [
+          {
+            "op": "=",
+            "text": "None!",
+            "value": "0"
+          }
+        ],
+        "valueName": "current"
+      },
+      {
+        "id": 6,
+        "title": "Unstable Jobs",
+        "type": "singlestat",
+        "gridPos": {
+          "h": 4,
+          "w": 4,
+          "x": 12,
+          "y": 11
+        },
+        "colorBackground": false,
+        "colorValue": true,
+        "colors": [
+          "#37872D",
+          "#C4162A",
+          "#FA6400"
+        ],
+        "datasource": "prometheus",
+        "format": "none",
+        "sparkline": {
+          "fillColor": "rgba(157, 175, 204, 0.36)",
+          "full": false,
+          "lineColor": "#FA6400",
+          "show": true
+        },
+        "targets": [
+          {
+            "expr": "jenkins_runs_unstable_total{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}",
+            "format": "time_series",
+            "intervalFactor": 1,
+            "refId": "A"
+          }
+        ],
+        "thresholds": "0,0",
+        "valueFontSize": "150%",
+        "valueMaps": [
+          {
+            "op": "=",
+            "text": "None!",
+            "value": "0"
+          }
+        ],
+        "valueName": "current"
+      },
+      {
+        "id": 17,
+        "title": "Failed Jobs",
+        "type": "singlestat",
+        "gridPos": {
+          "h": 4,
+          "w": 4,
+          "x": 16,
+          "y": 11
+        },
+        "colorBackground": false,
+        "colorValue": true,
+        "colors": [
+          "rgba(50, 172, 45, 0.97)",
+          "#37872D",
+          "rgba(245, 54, 54, 0.9)"
+        ],
+        "datasource": "prometheus",
+        "format": "none",
+        "sparkline": {
+          "fillColor": "rgba(207, 19, 22, 0.49)",
+          "full": false,
+          "lineColor": "#C4162A",
+          "show": true
+        },
+        "targets": [
+          {
+            "expr": "jenkins_runs_failure_total{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}",
+            "format": "time_series",
+            "intervalFactor": 1,
+            "refId": "A"
+          }
+        ],
+        "thresholds": "0,1",
+        "valueFontSize": "150%",
+        "valueMaps": [
+          {
+            "op": "=",
+            "text": "None!",
+            "value": "0"
+          }
+        ],
+        "valueName": "current"
+      },
+      {
+        "id": 11,
+        "title": "Jenkins queue size",
+        "type": "singlestat",
+        "gridPos": {
+          "h": 4,
+          "w": 4,
+          "x": 20,
+          "y": 11
+        },
+        "colorBackground": false,
+        "colorValue": true,
+        "colors": [
+          "rgba(50, 172, 45, 0.97)",
+          "#37872D",
+          "#FA6400"
+        ],
+        "datasource": "prometheus",
+        "format": "none",
+        "sparkline": {
+          "fillColor": "rgba(189, 135, 31, 0)",
+          "full": false,
+          "lineColor": "#FA6400",
+          "show": true
+        },
+        "targets": [
+          {
+            "expr": "jenkins_queue_size_value{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}",
+            "format": "time_series",
+            "intervalFactor": 1,
+            "refId": "A"
+          }
+        ],
+        "thresholds": "0,1",
+        "valueFontSize": "100%",
+        "valueMaps": [
+          {
+            "op": "=",
+            "text": "None!",
+            "value": "null"
+          }
+        ],
+        "valueName": "current"
+      },
+      {
+        "id": 2,
+        "title": "Executor free",
+        "type": "singlestat",
+        "gridPos": {
+          "h": 7,
+          "w": 4,
+          "x": 0,
+          "y": 15
+        },
+        "colorBackground": false,
+        "colorValue": true,
+        "colors": [
+          "rgba(245, 54, 54, 0.9)",
+          "rgba(237, 129, 40, 0.89)",
+          "rgba(50, 172, 45, 0.97)"
+        ],
+        "datasource": "prometheus",
+        "format": "none",
+        "sparkline": {
+          "fillColor": "rgba(31, 118, 189, 0.18)",
+          "full": false,
+          "lineColor": "rgb(31, 120, 193)",
+          "show": true
+        },
+        "targets": [
+          {
+            "expr": "jenkins_executor_free_value{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}",
+            "format": "time_series",
+            "intervalFactor": 1,
+            "refId": "A"
+          }
+        ],
+        "thresholds": "1,2",
+        "valueFontSize": "150%",
+        "valueMaps": [
+          {
+            "op": "=",
+            "text": "N/A",
+            "value": "null"
+          }
+        ],
+        "valueName": "current"
+      },
+      {
+        "id": 1,
+        "title": "Executors health",
+        "type": "graph",
+        "gridPos": {
+          "h": 7,
+          "w": 8,
+          "x": 4,
+          "y": 15
+        },
+        "datasource": "prometheus",
+        "lines": true,
+        "linewidth": 2,
+        "legend": {
+          "show": false
+        },
+        "targets": [
+          {
+            "expr": "avg(sum(jenkins_job_building_duration{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"})/sum(jenkins_job_building_duration_count{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}))",
+            "format": "time_series",
+            "intervalFactor": 1,
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {
+            "format": "short",
+            "label": "",
+            "logBase": 2,
+            "max": null,
+            "min": null,
+            "show": true
+          },
+          {
+            "format": "short",
+            "label": "",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true
+          }
+        ]
+      },
+      {
+        "id": 21,
+        "title": "Job Duration",
+        "type": "graph",
+        "gridPos": {
+          "h": 7,
+          "w": 8,
+          "x": 12,
+          "y": 15
+        },
+        "datasource": "prometheus",
+        "lines": true,
+        "linewidth": 2,
+        "legend": {
+          "show": false
+        },
+        "targets": [
+          {
+            "expr": "default_jenkins_builds_last_build_duration_milliseconds{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}",
+            "format": "time_series",
+            "intervalFactor": 1,
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {
+            "format": "ms",
+            "label": "",
+            "logBase": 2,
+            "max": null,
+            "min": null,
+            "show": true
+          },
+          {
+            "format": "short",
+            "label": "",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": false
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Executor In-use",
+        "type": "singlestat",
+        "gridPos": {
+          "h": 7,
+          "w": 4,
+          "x": 20,
+          "y": 15
+        },
+        "colorBackground": false,
+        "colorValue": false,
+        "colors": [
+          "rgba(245, 54, 54, 0.9)",
+          "rgba(237, 129, 40, 0.89)",
+          "rgba(50, 172, 45, 0.97)"
+        ],
+        "datasource": "prometheus",
+        "format": "none",
+        "sparkline": {
+          "fillColor": "rgba(189, 174, 31, 0.18)",
+          "full": false,
+          "lineColor": "rgb(193, 185, 31)",
+          "show": true
+        },
+        "targets": [
+          {
+            "expr": "jenkins_executor_in_use_value{jenkins_team=~\"$jenkins_team\", jenkins_environment=~\"$jenkins_environment\"}",
+            "refId": "A"
+          }
+        ],
+        "valueFontSize": "150%",
+        "valueMaps": [
+          {
+            "op": "=",
+            "text": "N/A",
+            "value": "null"
+          }
+        ],
+        "valueName": "current"
+      }
+    ]
+  }
+}

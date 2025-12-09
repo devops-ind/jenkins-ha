@@ -1,0 +1,80 @@
+---
+# Simplified HAProxy High Availability Role v2 - Internal Variables
+# Reduced complexity while maintaining functionality
+
+# ====================================
+# CONTAINER IMAGE RESOLUTION
+# ====================================
+_haproxy_image_full: "{{ haproxy_image_registry }}/{{ haproxy_image_name }}:{{ haproxy_image_tag }}"
+
+# ====================================
+# ENVIRONMENT DETECTION
+# ====================================
+_is_development_env: "{{ deployment_mode | default('') in ['local', 'devcontainer'] }}"
+_is_production_env: "{{ deployment_mode | default('') == 'production' }}"
+
+# ====================================
+# SIMPLIFIED PORT CONFIGURATION
+# ====================================
+_haproxy_default_ports:
+  - "80:80"
+  - "443:443"
+  - "{{ haproxy_stats_port | default(8404) }}:{{ haproxy_stats_port | default(8404) }}"
+
+# ====================================
+# VOLUME MOUNT PATTERNS
+# ====================================
+_haproxy_volume_patterns:
+  config: "/etc/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro"
+  conf_dir: "/etc/haproxy/conf.d:/usr/local/etc/haproxy/conf.d:ro"
+  errors: "/etc/haproxy/errors:/etc/haproxy/errors:ro"
+  logs: "/var/log/haproxy:/var/log/haproxy:rw"
+  lib: "/var/lib/haproxy:/var/lib/haproxy:rw"
+  socket: "haproxy-admin-socket:/run/haproxy:rw"
+
+# ====================================
+# SSL CONFIGURATION HELPERS
+# ====================================
+_ssl_mount_path: "{{ '/etc/haproxy/ssl/combined.pem:/usr/local/etc/haproxy/ssl/combined.pem:ro' if ssl_enabled | default(false) else '' }}"
+
+# ====================================
+# CONTAINER LABELS UNIFIED
+# ====================================
+_haproxy_unified_labels:
+  service: "haproxy"
+  role: "load-balancer"
+  teams: "{{ (haproxy_effective_teams | map(attribute='team_name') | join(',')) if (haproxy_effective_teams is iterable and haproxy_effective_teams is not string and haproxy_effective_teams | length > 0) else 'single-team' }}"
+  ssl_enabled: "{{ ssl_enabled | default(false) | string }}"
+  deployment_mode: "{{ deployment_mode | default('local') }}"
+  managed_by: "ansible"
+  version: "simplified-v2"
+
+# ====================================
+# KEEPALIVED CONFIGURATION HELPERS
+# ====================================
+_keepalived_state: "{{ 'MASTER' if keepalived_priority | default(100) > 100 else 'BACKUP' }}"
+_keepalived_interface: "{{ ansible_default_ipv4.interface | default('eth0') }}"
+
+# ====================================
+# HEALTH CHECK PATTERNS
+# ====================================
+_health_check_commands:
+  config_syntax: "haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg"
+  container_status: "docker inspect jenkins-haproxy --format='{{.State.Status}}'"
+  stats_endpoint: "curl -f http://localhost:{{ haproxy_stats_port | default(8404) }}{{ haproxy_stats_uri | default('/stats') }}"
+
+# ====================================
+# MANAGEMENT SCRIPT LOCATIONS
+# ====================================
+_management_scripts:
+  ha_monitor: "/usr/local/bin/jenkins-ha-monitor.sh"
+  failover: "/usr/local/bin/jenkins-failover.sh"
+  container_manager: "/usr/local/bin/haproxy-container-manager.sh"
+  vip_check: "/usr/local/bin/keepalived-haproxy-check.sh"
+
+# ====================================
+# FIREWALL PORT LISTS
+# ====================================
+_firewall_ports_standard: ['80', '443']
+_firewall_ports_management: ["{{ haproxy_stats_port | default(8404) }}"]
+_firewall_ports_teams: "{{ haproxy_effective_teams | map(attribute='ports.web') | map('string') | list if haproxy_effective_teams else [] }}"

@@ -1,0 +1,87 @@
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  log_level: info
+
+common:
+  path_prefix: /tmp/loki
+  replication_factor: 1
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+storage_config:
+  tsdb_shipper:
+    active_index_directory: /tmp/loki/tsdb-index
+    cache_location: /tmp/loki/tsdb-cache
+  filesystem:
+    directory: /tmp/loki/chunks
+
+ruler:
+  alertmanager_url: http://localhost:{{ alertmanager_port | default(9093) }}
+
+# Retention and compaction
+limits_config:
+  retention_period: {{ loki_retention }}
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  max_cache_freshness_per_query: 10m
+  split_queries_by_interval: 15m
+
+# Compactor for retention (Loki 3.x compatible)
+compactor:
+  working_directory: /tmp/loki/compactor
+  compaction_interval: 10m
+  retention_enabled: {{ loki_compactor_retention_enabled | default(true) | lower }}
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 150
+
+# Ingester configuration
+ingester:
+  max_chunk_age: {{ loki_max_chunk_age }}
+  chunk_idle_period: {{ loki_chunk_idle_period }}
+  chunk_retain_period: 30s
+  lifecycler:
+    address: 127.0.0.1
+    ring:
+      kvstore:
+        store: inmemory
+      replication_factor: 1
+    final_sleep: 0s
+  wal:
+    enabled: true
+    dir: /tmp/loki/wal
+
+# Ruler configuration for alerting
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /tmp/loki/rules
+  rule_path: /tmp/loki/rules-temp
+  {% if alertmanager_enabled | default(false) %}
+  alertmanager_url: http://{{ alertmanager_host }}:{{ alertmanager_port }}
+  {% endif %}
+  ring:
+    kvstore:
+      store: inmemory
+  enable_api: true
+  enable_alertmanager_v2: true
+  evaluation_interval: 1m
+  poll_interval: 1m
+
+# Analytics
+analytics:
+  reporting_enabled: false

@@ -1,0 +1,248 @@
+---
+# Jenkins Version Upgrade Handler
+# Handles zero-downtime Jenkins version upgrades with blue-green deployment
+
+- name: Execute Jenkins version upgrade
+  block:
+    - name: Update Jenkins version configuration
+      set_fact:
+        jenkins_version_override: "{{ target_version }}"
+        jenkins_upgrade_teams: "{{ team_list }}"
+
+    - name: Deploy new Jenkins version to target environment
+      block:
+        - name: Build custom Jenkins image with new version
+          docker_image:
+            name: "jenkins-custom-{{ item }}"
+            tag: "{{ target_version }}"
+            source: build
+            build:
+              path: "{{ jenkins_master_custom_build_dir }}/{{ item }}"
+              dockerfile: Dockerfile
+              pull: yes
+              args:
+                BASE_IMAGE: "jenkins/jenkins:{{ target_version }}"
+                BUILD_DATE: "{{ ansible_date_time.iso8601 }}"
+                VCS_REF: "{{ ansible_date_time.epoch }}"
+                JENKINS_VERSION: "{{ target_version }}"
+            state: present
+            force_source: true
+          loop: "{{ jenkins_upgrade_teams }}"
+          register: image_build_results
+
+        - name: Stop existing target environment containers
+          docker_container:
+            name: "jenkins-{{ item }}-{{ upgrade_env }}"
+            state: stopped
+          loop: "{{ jenkins_upgrade_teams }}"
+          ignore_errors: true
+
+        - name: Remove existing target environment containers
+          docker_container:
+            name: "jenkins-{{ item }}-{{ upgrade_env }}"
+            state: absent
+          loop: "{{ jenkins_upgrade_teams }}"
+          ignore_errors: true
+
+        - name: Deploy new version containers
+          docker_container:
+            name: "jenkins-{{ item }}-{{ upgrade_env }}"
+            image: "jenkins-custom-{{ item }}:{{ target_version }}"
+            state: started
+            restart_policy: "unless-stopped"
+            networks:
+              - name: "{{ jenkins_master_network_name }}"
+            ports: []  # No external ports during validation phase
+            volumes:
+              - "jenkins-{{ item }}-{{ upgrade_env }}-home:{{ jenkins_master_container_home }}"
+              - "jenkins-{{ item }}-shared:{{ jenkins_master_shared_path }}"
+              - "{{ jenkins_master_socket_path_docker }}:{{ jenkins_master_socket_path_docker }}:ro"
+            env:
+              JENKINS_ENVIRONMENT: "{{ upgrade_env }}"
+              JENKINS_TEAM: "{{ item }}"
+              JENKINS_VERSION: "{{ target_version }}"
+              JENKINS_UPGRADE_MODE: "true"
+            memory: "{{ jenkins_teams | selectattr('team_name', 'equalto', item) | first | attr('resources.memory') }}"
+            cpus: "{{ jenkins_teams | selectattr('team_name', 'equalto', item) | first | attr('resources.cpu') }}"
+            labels:
+              service: "jenkins-master"
+              managed_by: "ansible"
+              team: "{{ item }}"
+              environment: "{{ upgrade_env }}"
+              version: "{{ target_version }}"
+              upgrade_mode: "true"
+            healthcheck:
+              test: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_master_port }}/login"]
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 180s  # Extended startup time for version upgrades
+          loop: "{{ jenkins_upgrade_teams }}"
+          register: container_deployment
+
+        - name: Wait for Jenkins instances to start
+          pause:
+            seconds: 90
+
+        - name: Verify containers are healthy
+          docker_container_info:
+            name: "jenkins-{{ item }}-{{ upgrade_env }}"
+          register: container_health
+          failed_when: container_health.container.State.Status != 'running'
+          retries: 10
+          delay: 15
+          loop: "{{ jenkins_upgrade_teams }}"
+
+        - name: Perform version upgrade health checks
+          script: >-
+            {{ jenkins_home_dir }}/scripts/version-upgrade-health-check.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+            --version {{ target_version }}
+          register: version_health_check
+          loop: "{{ jenkins_upgrade_teams }}"
+          retries: 5
+          delay: 30
+
+        - name: Validate Jenkins API compatibility
+          uri:
+            url: "http://{{ ansible_default_ipv4.address }}:{{ jenkins_master_port }}/api/json"
+            method: GET
+            timeout: 30
+            return_content: yes
+          register: api_compatibility_check
+          delegate_to: "{{ 'jenkins-' + item + '-' + upgrade_env }}"
+          loop: "{{ jenkins_upgrade_teams }}"
+
+        - name: Check plugin compatibility with new version
+          script: >-
+            {{ jenkins_home_dir }}/scripts/plugin-compatibility-post-upgrade.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+            --version {{ target_version }}
+          register: plugin_compatibility_check
+          loop: "{{ jenkins_upgrade_teams }}"
+
+        - name: Validate job compatibility
+          script: >-
+            {{ jenkins_home_dir }}/scripts/job-compatibility-validator.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+            --version {{ target_version }}
+          register: job_compatibility_check
+          loop: "{{ jenkins_upgrade_teams }}"
+
+        - name: Display version upgrade validation results
+          debug:
+            msg: |
+              ✅ Jenkins Version Upgrade Validation:
+              =====================================
+              {% for team in jenkins_upgrade_teams %}
+              Team: {{ team }}
+              Container Health: {{ container_health.results[loop.index0].container.State.Status }}
+              Jenkins Health: {{ 'PASS' if version_health_check.results[loop.index0].rc == 0 else 'FAIL' }}
+              API Compatibility: {{ 'PASS' if api_compatibility_check.results[loop.index0].status == 200 else 'FAIL' }}
+              Plugin Compatibility: {{ 'PASS' if plugin_compatibility_check.results[loop.index0].rc == 0 else 'FAIL' }}
+              Job Compatibility: {{ 'PASS' if job_compatibility_check.results[loop.index0].rc == 0 else 'FAIL' }}
+              {% endfor %}
+              =====================================
+
+        - name: Fail if any validation failed
+          fail:
+            msg: |
+              ❌ Version upgrade validation failed for one or more teams!
+              
+              Failed teams:
+              {% for result in version_health_check.results %}
+              {% if result.rc != 0 %}
+              - {{ jenkins_upgrade_teams[loop.index0] }}: Health check failed
+              {% endif %}
+              {% endfor %}
+              {% for result in api_compatibility_check.results %}
+              {% if result.status != 200 %}
+              - {{ jenkins_upgrade_teams[loop.index0] }}: API compatibility failed
+              {% endif %}
+              {% endfor %}
+              {% for result in plugin_compatibility_check.results %}
+              {% if result.rc != 0 %}
+              - {{ jenkins_upgrade_teams[loop.index0] }}: Plugin compatibility failed
+              {% endif %}
+              {% endfor %}
+              {% for result in job_compatibility_check.results %}
+              {% if result.rc != 0 %}
+              - {{ jenkins_upgrade_teams[loop.index0] }}: Job compatibility failed
+              {% endif %}
+              {% endfor %}
+          when: >
+            version_health_check.results | selectattr('rc', 'ne', 0) | list | length > 0 or
+            api_compatibility_check.results | selectattr('status', 'ne', 200) | list | length > 0 or
+            plugin_compatibility_check.results | selectattr('rc', 'ne', 0) | list | length > 0 or
+            job_compatibility_check.results | selectattr('rc', 'ne', 0) | list | length > 0
+
+    - name: Record successful version upgrade deployment
+      copy:
+        content: |
+          {
+            "timestamp": "{{ ansible_date_time.iso8601 }}",
+            "upgrade_type": "jenkins_version",
+            "version_from": "{{ jenkins_version }}",
+            "version_to": "{{ target_version }}",
+            "environment": "{{ upgrade_env }}",
+            "teams": {{ jenkins_upgrade_teams | to_json }},
+            "deployment_successful": true,
+            "containers_deployed": {{ container_deployment.results | length }},
+            "validation_passed": true
+          }
+        dest: "{{ upgrade_workspace }}/version-upgrade-success.json"
+        mode: '0644'
+
+  rescue:
+    - name: Handle version upgrade failure
+      block:
+        - name: Stop failed containers
+          docker_container:
+            name: "jenkins-{{ item }}-{{ upgrade_env }}"
+            state: stopped
+          loop: "{{ jenkins_upgrade_teams }}"
+          ignore_errors: true
+
+        - name: Remove failed containers
+          docker_container:
+            name: "jenkins-{{ item }}-{{ upgrade_env }}"
+            state: absent
+          loop: "{{ jenkins_upgrade_teams }}"
+          ignore_errors: true
+
+        - name: Clean up failed images
+          docker_image:
+            name: "jenkins-custom-{{ item }}:{{ target_version }}"
+            state: absent
+          loop: "{{ jenkins_upgrade_teams }}"
+          ignore_errors: true
+
+        - name: Log version upgrade failure
+          copy:
+            content: |
+              {
+                "timestamp": "{{ ansible_date_time.iso8601 }}",
+                "upgrade_type": "jenkins_version",
+                "version_from": "{{ jenkins_version }}",
+                "version_to": "{{ target_version }}",
+                "environment": "{{ upgrade_env }}",
+                "teams": {{ jenkins_upgrade_teams | to_json }},
+                "deployment_successful": false,
+                "failed_task": "{{ ansible_failed_task.name | default('unknown') }}",
+                "error_message": "{{ ansible_failed_result.msg | default('unknown error') }}"
+              }
+            dest: "{{ upgrade_workspace }}/version-upgrade-failure.json"
+            mode: '0644'
+
+        - name: Re-raise version upgrade failure
+          fail:
+            msg: |
+              ❌ Jenkins version upgrade failed!
+              Version: {{ jenkins_version }} → {{ target_version }}
+              Environment: {{ upgrade_env }}
+              Teams: {{ jenkins_upgrade_teams | join(', ') }}
+              
+              Check failure details: {{ upgrade_workspace }}/version-upgrade-failure.json

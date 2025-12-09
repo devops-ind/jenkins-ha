@@ -1,0 +1,51 @@
+---
+# Test playbook for enhanced monitoring setup
+- name: Test Enhanced Monitoring Setup
+  hosts: centos9-vm
+  become: true
+  vars:
+    deployment_mode: production
+    jenkins_teams:
+      - team_name: devops
+        active_environment: green
+        ports:
+          web: 8180
+      - team_name: ma
+        active_environment: blue
+        ports:
+          web: 8081
+  roles:
+    - role: ansible/roles/monitoring
+      tags: ['monitoring', 'test']
+
+  post_tasks:
+    - name: Display enhanced monitoring deployment summary
+      debug:
+        msg: |
+          🎉 Enhanced Monitoring Setup Test Completed!
+          
+          📊 Dashboards Deployed:
+          • Jenkins Overview - Production
+          • Jenkins Builds - Production  
+          • Jenkins Dynamic Agents - Production (NEW)
+          • Infrastructure Health - Production
+          • Security Metrics - Production
+          
+          🔧 Key Features Tested:
+          • ✅ Deployment mode standardization (using 'production')
+          • ✅ Grafana dashboard update logic (prevent duplication)
+          • ✅ Jenkins URL configuration (prevents placeholder URLs)
+          • ✅ Dynamic agent container labeling
+          • ✅ Multi-team metrics collection
+          
+          📊 Access URLs:
+          • Grafana: http://{{ ansible_default_ipv4.address }}:{{ grafana_port }}
+          • Prometheus: http://{{ ansible_default_ipv4.address }}:{{ prometheus_port }}
+          
+          🏷️ Container Labels Added:
+          • com.jenkins.agent=true (for agent discovery)
+          • team=[devops|ma|ba|tw] (for team filtering)
+          • agent_type=[maven|python|nodejs|dind] (for type filtering)
+          • deployment_mode={{ deployment_mode }} (for mode awareness)
+          • jenkins_environment=[blue|green] (for blue/green tracking)
+      tags: ['test', 'summary']

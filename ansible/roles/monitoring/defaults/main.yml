@@ -16,9 +16,43 @@ monitoring_home_dir: "{{ '/workspace/monitoring' if deployment_mode | default('l
 monitoring_network_name: "monitoring-net"
 monitoring_network_subnet: "172.26.0.0/16"
 
+# Monitoring server addressing (for separate VM deployment)
+# FQDN Configuration
+monitoring_use_fqdn: true  # Toggle: true = FQDN-based, false = IP-based (for migration)
+monitoring_fqdn_suffix: "internal.local"  # Default domain suffix if host_fqdn not in inventory
+
+# Smart Addressing: FQDN-first with IP fallback
+monitoring_server_address: "{% if monitoring_use_fqdn and (hostvars[inventory_hostname]['monitoring_fqdn'] is defined) %}{{ hostvars[inventory_hostname]['monitoring_fqdn'] }}{% elif monitoring_use_fqdn and (hostvars[inventory_hostname]['host_fqdn'] is defined) %}{{ hostvars[inventory_hostname]['host_fqdn'] }}{% elif monitoring_use_fqdn and (inventory_hostname | regex_search('\.')) %}{{ inventory_hostname }}{% elif monitoring_use_fqdn %}{{ inventory_hostname }}.{{ monitoring_fqdn_suffix }}{% else %}{{ ansible_default_ipv4.address | default('localhost') }}{% endif %}"
+
+prometheus_host: "{{ monitoring_server_address }}"
+grafana_host: "{{ monitoring_server_address }}"
+loki_host: "{{ monitoring_server_address }}"
+alertmanager_host: "{{ monitoring_server_address }}"
+
+# Consolidated monitoring service ports (standardized to 9000-9400 range)
+# Note: Ports chosen to avoid conflicts with common services and group them for clarity
+monitoring_ports:
+  prometheus: 9090      # Metrics scraping and querying
+  grafana: 9300         # Dashboards and visualization (changed from default 3000)
+  alertmanager: 9093    # Alert routing and management
+  node_exporter: 9100   # System metrics (Prometheus Node Exporter)
+  cadvisor: 9200        # Container metrics (changed to 9000 range)
+  loki: 9400            # Log aggregation
+  promtail: 9401        # Log shipping agent
+
+# Deployment type detection (separate vs colocated)
+monitoring_deployment_type: "{{ 'separate' if (groups['monitoring'] is defined and groups['jenkins_masters'] is defined and groups['monitoring'][0] not in groups['jenkins_masters']) else 'colocated' }}"
+
+# Target host configuration (NEW - for unified agent deployment)
+# Unified list of ALL hosts where agents should be deployed
+monitoring_target_hosts: "{% if monitoring_deployment_type == 'separate' %}{{ (groups['monitoring'] | default([]) + groups['jenkins_masters'] | default([])) | unique }}{% else %}{{ groups['monitoring'] | default(['localhost']) }}{% endif %}"
+
+# Server deployment host (single host where servers run)
+monitoring_server_host: "{{ groups['monitoring'][0] if groups['monitoring'] is defined and groups['monitoring'] | length > 0 else 'localhost' }}"
+
 # Service configuration
 prometheus_enabled: true
-prometheus_port: 9090
+prometheus_port: "{{ monitoring_ports.prometheus }}"  # References consolidated monitoring_ports dict
 prometheus_version: "latest"
 prometheus_data_retention: "15d"
 prometheus_scrape_interval: "30s"
@@ -26,41 +60,248 @@ prometheus_evaluation_interval: "30s"
 
 # Grafana configuration
 grafana_enabled: true
-grafana_port: 9300  # Changed from 3000 to 9300 for monitoring consistency
+grafana_port: "{{ monitoring_ports.grafana }}"  # References consolidated monitoring_ports dict
 grafana_version: "latest"
 grafana_admin_user: "admin"
 grafana_admin_password: "{{ vault_grafana_admin_password | default('admin123') }}"
 grafana_allow_sign_up: false
 grafana_disable_gravatar: true
+
+# GitHub Enterprise Datasource Configuration
+github_enterprise_enabled: true
+github_enterprise_url: "{{ vault_github_enterprise_url | default('https://github.yourcompany.com') }}"
+github_enterprise_org: "{{ vault_github_enterprise_org | default('') }}"
+github_enterprise_repos: "{{ vault_github_enterprise_repos | default([]) }}"
+github_enterprise_token: "{{ vault_github_enterprise_token | default('') }}"
+
+# Jira Cloud Datasource Configuration
+jira_cloud_enabled: true
+jira_cloud_url: "{{ vault_jira_cloud_url | default('https://company.atlassian.net') }}"
+jira_cloud_email: "{{ vault_jira_cloud_email | default('') }}"
+jira_cloud_projects: "{{ vault_jira_cloud_projects | default([]) }}"
+jira_cloud_token: "{{ vault_jira_cloud_token | default('') }}"
+
+# Enhanced dashboard configuration
+jenkins_enhanced_dashboards_enabled: true
+
+# Dashboard Deployment Control Flags
+dashboard_jinja2_enabled: true   # Enable Jinja2 template-based dashboards (Phase 3)
+dashboard_grafonnet_enabled: "{{ grafonnet_enabled | default(true) }}"  # Enable Grafonnet dashboards (Phase 5.5)
+
+# Centralized dashboard configuration registry
+grafana_dashboards:
+  # Core dashboards - infrastructure-wide
+  infrastructure-health:
+    category: core
+    enabled: true
+    title: "Infrastructure Health"
+    description: "VM and container infrastructure metrics"
+    refresh_interval: "1m"
+    time_range: "1h"
+    priority: 4
+    template_file: "infrastructure-health.json"
+    team_specific: false  # Global dashboard - monitors all infrastructure
+  
+  security-metrics:
+    category: core
+    enabled: true
+    title: "Security Metrics"
+    description: "Security events and compliance monitoring"
+    refresh_interval: "1m"
+    time_range: "4h"
+    priority: 5
+    template_file: "security-metrics.json"
+    team_specific: false  # Global dashboard - monitors all security events
+  
+  node-exporter-full:
+    category: core
+    enabled: true
+    title: "Node Exporter Full"
+    description: "Comprehensive infrastructure monitoring with 138+ panels covering CPU, memory, disk, network, and system health"
+    refresh_interval: "30s"
+    time_range: "1h"
+    priority: 6
+    template_file: "node-exporter-full.json"
+    team_specific: false  # Global infrastructure dashboard
+  
+  # Team-specific Jenkins dashboards
+  jenkins-overview:
+    category: core
+    enabled: true
+    title: "Jenkins Overview"
+    description: "General Jenkins metrics and health overview"
+    refresh_interval: "30s"
+    time_range: "5m"
+    priority: 1
+    template_file: "jenkins-overview.json"
+    team_specific: true  # Generate per-team versions
+  
+  jenkins-builds:
+    category: core
+    enabled: true
+    title: "Jenkins Builds"
+    description: "Build performance and trends"
+    refresh_interval: "1m"
+    time_range: "1h"
+    priority: 2
+    template_file: "jenkins-builds.json"
+    team_specific: true  # Generate per-team versions
+  
+  jenkins-dynamic-agents:
+    category: core
+    enabled: true
+    title: "Jenkins Dynamic Agents"
+    description: "Dynamic agent monitoring and resource usage"
+    refresh_interval: "30s"
+    time_range: "1h"
+    priority: 3
+    template_file: "jenkins-dynamic-agents.json"
+    team_specific: true  # Generate per-team versions
+  
+  # Enhanced team-specific dashboards
+  jenkins-performance-health:
+    category: enhanced
+    enabled: true
+    title: "Jenkins Performance Health"
+    description: "Performance and health monitoring with 26+ panels"
+    refresh_interval: "30s"
+    time_range: "30m"
+    priority: 10
+    template_file: "jenkins-performance-health.json"
+    team_specific: true  # Generate per-team versions
+  
+  jenkins-build-statistics:
+    category: enhanced
+    enabled: true
+    title: "Jenkins Build Statistics"
+    description: "Build statistics and job tracking dashboard"
+    refresh_interval: "1m"
+    time_range: "5m"
+    priority: 11
+    template_file: "jenkins-build-statistics.json"
+    team_specific: true  # Generate per-team versions
+  
+  jenkins-advanced-overview:
+    category: enhanced
+    enabled: true  # Re-enabled after fixing metric schema
+    title: "Advanced Jenkins Overview"
+    description: "Advanced Jenkins overview with comprehensive monitoring"
+    refresh_interval: "30s"
+    time_range: "1h"
+    priority: 12
+    template_file: "jenkins-advanced-overview.json"
+    team_specific: true  # Generate per-team versions
+
+  jenkins-build-logs:
+    category: enhanced
+    enabled: true
+    title: "Jenkins Build Logs"
+    description: "Comprehensive Jenkins build log analysis with Loki - 24 panels covering success rates, errors, durations, and team comparisons"
+    refresh_interval: "30s"
+    time_range: "24h"
+    priority: 13
+    template_file: "jenkins-build-logs.json.j2"
+    team_specific: true  # Generate per-team versions
+    datasource: "loki"  # Primary datasource for this dashboard
+    tags: ["jenkins", "loki", "builds", "ci-cd", "logs"]
+
+  github-jira-metrics:
+    category: enhanced
+    enabled: true
+    title: "GitHub & Jira Metrics"
+    description: "Repository activity, PR metrics, sprint progress, and issue tracking - correlates code and project management data"
+    refresh_interval: "5m"
+    time_range: "30d"
+    priority: 14
+    template_file: "github-jira-metrics.json.j2"
+    team_specific: false  # Global dashboard - monitors all repos and projects
+    datasources: ["github-enterprise", "jira-cloud"]  # Multiple datasources
+    tags: ["github", "jira", "ci-cd", "devops", "metrics"]
+
+# Dashboard deployment controls
+dashboard_deployment:
+  core_enabled: true
+  enhanced_enabled: "{{ jenkins_enhanced_dashboards_enabled | default(true) }}"
+  update_mode: "always"  # Dashboard update behavior: always, skip_existing, update_only
+  validation_strict: false  # Temporarily disabled during testing
+
+  # Jinja2 templating controls (Phase 3)
+  jinja2_enabled: "{{ dashboard_jinja2_enabled | default(true) }}"
+
+  # Team-specific dashboard generation
+  generate_team_specific: true
+  keep_global_dashboards: true  # Option to keep original multi-team dashboards
+  team_folder_organization: true  # Organize by team folders in Grafana
+  
+  # Team dashboard naming convention
+  team_dashboard_prefix: ""  # Optional prefix for team dashboards
+  team_dashboard_separator: "-"  # Separator between dashboard name and team
+
 grafana_prometheus_datasource:
   name: "Prometheus"
   type: "prometheus"
   access: "proxy"
-  url: "http://localhost:9090"
+  url: "http://{{ prometheus_host }}:{{ prometheus_port }}"
   isDefault: true
 
 # Alertmanager configuration
-alertmanager_enabled: false
-alertmanager_port: 9093
+alertmanager_enabled: true
+alertmanager_port: "{{ monitoring_ports.alertmanager }}"  # References consolidated monitoring_ports dict
 alertmanager_version: "latest"
+
+# Microsoft Teams notification configuration
+teams_notifications_enabled: true
+teams_notification_strategy: "hybrid"  # Options: single, per-team, hybrid
+
+# Teams webhook configuration (URLs from vault)
+teams_webhook_critical: "{{ vault_teams_webhook_critical | default('') }}"
+teams_webhook_warning: "{{ vault_teams_webhook_warning | default('') }}"
+teams_webhook_info: "{{ vault_teams_webhook_info | default('') }}"
+
+# Per-team Teams webhooks
+teams_webhooks:
+  devops:
+    webhook_url: "{{ vault_teams_devops_webhook | default('') }}"
+    enabled: true
+  dev-qa:
+    webhook_url: "{{ vault_teams_dev_qa_webhook | default('') }}"
+    enabled: true
+  infrastructure:
+    webhook_url: "{{ vault_teams_infrastructure_webhook | default('') }}"
+    enabled: true
 
 # Node Exporter configuration
 node_exporter_enabled: true
-node_exporter_port: 9100
+node_exporter_port: "{{ monitoring_ports.node_exporter }}"  # References consolidated monitoring_ports dict
 node_exporter_version: "latest"
 
-# Prometheus targets configuration
-prometheus_targets:
-  - job: "prometheus"
-    targets:
-      - "localhost:9090"
-  - job: "node-exporter"
-    targets:
-      - "localhost:9100"
-  - job: "jenkins"
-    targets:
-      - "localhost:8080"
-      - "localhost:8081"
+# Agent monitoring configuration
+monitoring_agent_health_check_enabled: true
+monitoring_agent_health_check_interval: "*/5 * * * *"  # Every 5 minutes
+monitoring_agent_health_timeout: 10
+monitoring_agent_health_retries: 3
+
+# DEPRECATED (v3.x): Static Prometheus targets are replaced by file-based service discovery.
+# These variables are kept for backward compatibility and will be removed in v4.0.
+# Target configuration is now managed dynamically via:
+#   - tasks/phase3-targets/generate-file-sd.yml - Generates JSON target files in targets.d/
+#   - templates/prometheus.yml.j2 - Uses file_sd_configs to discover targets from JSON files
+#
+# Base Prometheus targets configuration (DEPRECATED - not used in modern deployments)
+# prometheus_base_targets:
+#   - job: "prometheus"
+#     targets:
+#       - "localhost:9090"
+#   - job: "node-exporter"
+#     targets:
+#       - "localhost:9100"
+
+# Dynamic Jenkins targets - generated based on team configuration (DEPRECATED)
+# This will be overridden in tasks/main.yml with team-aware targets
+# prometheus_jenkins_targets: []
+
+# Combined prometheus targets (base + dynamic jenkins) (DEPRECATED)
+# prometheus_targets: "{{ prometheus_base_targets + prometheus_jenkins_targets }}"
 
 # Docker configuration for monitoring services
 monitoring_docker_network: "{{ monitoring_network_name }}"
@@ -68,22 +309,158 @@ monitoring_restart_policy: "unless-stopped"
 
 # Additional exporters
 cadvisor_enabled: true
-cadvisor_port: 9200  # Changed to 9000 range for monitoring consistency
+cadvisor_port: "{{ monitoring_ports.cadvisor }}"  # References consolidated monitoring_ports dict
+cadvisor_version: "latest"
+cadvisor_on_jenkins_vms: true  # Deploy cAdvisor on Jenkins VMs for container metrics
 
 # Directories to create
+# NOTE: This list could be auto-generated from enabled services in phase1-setup/infrastructure.yml
+# to reduce maintenance burden. Currently kept static for backward compatibility.
+# FUTURE: Generate dynamically based on which services are enabled (prometheus, grafana, etc).
 monitoring_directories:
   - "{{ monitoring_home_dir }}"
   - "{{ monitoring_home_dir }}/prometheus"
   - "{{ monitoring_home_dir }}/prometheus/data"
   - "{{ monitoring_home_dir }}/prometheus/config"
   - "{{ monitoring_home_dir }}/prometheus/rules"
+  - "{{ monitoring_home_dir }}/prometheus/targets.d"  # File-SD targets directory (Phase 1 Modernization)
   - "{{ monitoring_home_dir }}/grafana"
   - "{{ monitoring_home_dir }}/grafana/data"
   - "{{ monitoring_home_dir }}/grafana/dashboards"
+  - "{{ monitoring_home_dir }}/grafana/dashboards-generated"  # Grafonnet-generated dashboards (Phase 5.5 Modernization - separate directory)
   - "{{ monitoring_home_dir }}/grafana/provisioning"
   - "{{ monitoring_home_dir }}/grafana/provisioning/dashboards"
   - "{{ monitoring_home_dir }}/grafana/provisioning/datasources"
+  - "{{ monitoring_home_dir }}/grafana/provisioning/plugins"  # Plugin provisioning (GitHub & Jira datasources)
   - "{{ monitoring_home_dir }}/alertmanager"
   - "{{ monitoring_home_dir }}/exporters"
   - "{{ monitoring_home_dir }}/bin"
   - "{{ monitoring_home_dir }}/logs"
+  - "{{ monitoring_home_dir }}/loki"
+  - "{{ monitoring_home_dir }}/loki/data"
+  - "{{ monitoring_home_dir }}/loki/config"
+  - "{{ monitoring_home_dir }}/promtail"
+  - "{{ monitoring_home_dir }}/promtail/config"
+  - "{{ monitoring_home_dir }}/promtail/data"
+
+# Loki configuration
+loki_enabled: true
+loki_port: "{{ monitoring_ports.loki }}"  # References consolidated monitoring_ports dict
+loki_version: "latest"
+loki_retention: "30d"
+loki_max_chunk_age: "1h"
+loki_chunk_idle_period: "30m"
+loki_compactor_retention_enabled: true
+
+# Promtail configuration
+promtail_enabled: true
+promtail_port: "{{ monitoring_ports.promtail }}"  # References consolidated monitoring_ports dict
+promtail_version: "latest"
+promtail_positions_file: "{{ monitoring_home_dir }}/promtail/data/positions.yaml"
+
+# Log sources configuration
+# NOTE: Log paths are OS-specific. Update for your environment:
+#   RHEL/CentOS: /var/log/messages, /var/log/secure
+#   Ubuntu/Debian: /var/log/syslog, /var/log/auth.log
+#
+# HAProxy logs are included by default but may not exist on all systems.
+# Set haproxy_logs.enabled: false if HAProxy is not deployed.
+#
+# FUTURE: Team-specific filtering can be added to separately monitor logs per team.
+# This would enable team-specific Grafana dashboards for log analysis.
+log_sources:
+  jenkins_containers:
+    enabled: true
+    path: "/var/lib/docker/containers/*/*-json.log"
+    labels:
+      job: "jenkins"
+      source: "container"
+  haproxy_logs:
+    enabled: true
+    path: "/var/log/haproxy/*.log"
+    labels:
+      job: "haproxy"
+      source: "haproxy"
+  system_logs:
+    enabled: true
+    path: "/var/log/messages"
+    labels:
+      job: "system"
+      source: "syslog"
+  auth_logs:
+    enabled: true
+    path: "/var/log/secure"
+    labels:
+      job: "auth"
+      source: "security"
+
+# Loki data source for Grafana
+loki_datasource:
+  name: "Loki"
+  type: "loki"
+  access: "proxy"
+  url: "http://{{ loki_host }}:{{ loki_port }}"
+  isDefault: false
+
+# =============================================================================
+# PHASE 1 MODERNIZATION: FILE-BASED SERVICE DISCOVERY
+# =============================================================================
+# Enable/disable file-based Prometheus service discovery
+prometheus_file_sd_enabled: true
+
+# Refresh interval for discovering new target files
+prometheus_file_sd_refresh_interval: "30s"
+
+# Enable Prometheus HTTP reload (zero-downtime config updates)
+prometheus_reload_enabled: true
+
+# Target file validation
+prometheus_target_validation: true
+
+# Target file backup retention
+prometheus_targets_backup_retention_days: 30
+prometheus_targets_backup_versions: 10
+
+# Prometheus reload endpoint configuration
+prometheus_reload_retry_count: 3
+prometheus_reload_retry_delay: 2
+
+# =============================================================================
+# PHASE 5.5 MODERNIZATION: DASHBOARD-AS-CODE WITH GRAFONNET
+# =============================================================================
+# Enable/disable Dashboard-as-Code with Grafonnet
+grafonnet_enabled: true
+
+# Grafonnet project directory (where Jsonnet source files live)
+grafonnet_project_dir: "/opt/grafonnet"
+
+# Grafonnet output directory (SEPARATE from Jinja2 dashboards to avoid conflicts)
+grafonnet_output_dir: "{{ monitoring_home_dir }}/grafana/dashboards-generated"
+
+# Mount path inside Grafana container for Grafonnet dashboards
+grafonnet_container_mount: "/var/lib/grafana/dashboards-generated"
+
+# Grafonnet backup retention
+grafonnet_backup_retention_days: 30
+grafonnet_backup_versions: 7
+
+# Jsonnet compiler and bundler tools
+jsonnet_compiler: "jsonnet"
+jsonnet_bundler: "jb"
+
+# List of Grafonnet dashboards to generate
+grafonnet_dashboards:
+  - name: "infrastructure-health"
+    enabled: true
+    description: "System health monitoring dashboard"
+    tags:
+      - infrastructure
+      - system
+      - health
+  - name: "jenkins-overview"
+    enabled: true
+    description: "Comprehensive Jenkins monitoring dashboard"
+    tags:
+      - jenkins
+      - ci-cd
+      - pipelines

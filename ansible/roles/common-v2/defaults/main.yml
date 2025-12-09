@@ -1,0 +1,268 @@
+---
+# Default variables for common-v2 role (Podman-enhanced)
+
+# System configuration
+common_timezone: "UTC"
+common_locale: "en_US.UTF-8"
+common_update_packages: true
+common_install_tools: true
+
+# Essential packages (base packages from original common role)
+common_packages:
+  - curl
+  - wget
+  - git
+  - unzip
+  - tar
+  - vim
+  - htop
+  - rsync
+  - jq
+  - python3
+  - python3-pip
+
+# Container runtime configuration
+common_container_runtime: "podman"  # "podman" or "docker"
+
+# Podman-specific packages
+common_podman_packages:
+  - fuse-overlayfs
+  - slirp4netns
+  - uidmap
+  - crun
+
+# Container environment variables
+common_container_env_vars:
+  - "export CONTAINER_RUNTIME={{ common_container_runtime }}"
+  - "export BUILDAH_ISOLATION=chroot"
+
+# SSH configuration
+common_ssh_port: 22
+common_ssh_permit_root_login: "no"
+common_ssh_password_authentication: "no"
+common_ssh_max_auth_tries: 3
+
+# Firewall settings
+common_firewall_enabled: true
+common_firewall_allowed_ports:
+  - "22/tcp"  # SSH
+  - "80/tcp"  # HTTP
+  - "443/tcp" # HTTPS
+
+# Monitoring user configuration (enhanced for Podman)
+common_monitoring_user: "monitoring"
+common_monitoring_user_home: "/home/monitoring"
+common_monitoring_user_uid: 1005
+common_monitoring_user_groups:
+  - "wheel"
+
+# Rootless container configuration
+common_enable_rootless_containers: true
+common_monitoring_subuid_start: 200000
+common_monitoring_subuid_size: 65536
+common_monitoring_subgid_start: 200000
+common_monitoring_subgid_size: 65536
+
+# Podman socket configuration
+common_enable_podman_socket: true
+
+# Container registry authentication (use vault for sensitive data)
+common_registry_auth: {}
+  # Example:
+  # docker.io:
+  #   username: "{{ vault_docker_username }}"
+  #   password: "{{ vault_docker_password }}"
+
+# Log management (enhanced for containers)
+common_logrotate_enabled: true
+common_log_retention_days: 30
+
+# Container cleanup configuration
+common_container_cleanup_enabled: true
+common_container_cleanup_cron:
+  minute: "0"
+  hour: "3"
+  day: "*"
+  month: "*"
+  weekday: "0"  # Sunday
+  retention_days: 7
+
+# Container cleanup commands (runtime-specific)
+common_container_cleanup_command: >-
+  {%- if common_container_runtime == "podman" -%}
+  /usr/bin/podman system prune -af --volumes > /dev/null 2>&1
+  {%- else -%}
+  /usr/bin/docker system prune -af --volumes > /dev/null 2>&1
+  {%- endif -%}
+
+common_rootless_cleanup_command: >-
+  {%- if common_container_runtime == "podman" -%}
+  /usr/bin/podman system prune -af --volumes > /dev/null 2>&1
+  {%- else -%}
+  /usr/bin/docker system prune -af --volumes > /dev/null 2>&1
+  {%- endif -%}
+
+# Users for rootless container cleanup
+common_rootless_users:
+  - "vscode"
+  - "jenkins"
+
+# Container health check configuration
+common_container_health_check_enabled: true
+common_health_check_containers:
+  - prometheus-production
+  - grafana-production
+  - alertmanager-production
+  - node-exporter-production
+
+# NTP configuration
+common_ntp_enabled: true
+common_ntp_servers:
+  - "0.pool.ntp.org"
+  - "1.pool.ntp.org"
+  - "2.pool.ntp.org"
+  - "3.pool.ntp.org"
+
+# NTP service name mapping by OS
+ntp_service_name: >-
+  {%- if ansible_os_family == 'Debian' -%}
+    {%- if ansible_distribution_major_version|int >= 16 -%}
+      systemd-timesyncd
+    {%- else -%}
+      ntp
+    {%- endif -%}
+  {%- elif ansible_os_family == 'RedHat' -%}
+    {%- if ansible_distribution_major_version|int >= 8 -%}
+      chronyd
+    {%- else -%}
+      ntpd
+    {%- endif -%}
+  {%- elif ansible_os_family == 'Darwin' -%}
+    
+  {%- else -%}
+    ntpd
+  {%- endif -%}
+
+# Networking configuration for containers
+common_configure_networking: true
+common_enable_ipv6: false
+
+# Bridge networking sysctl settings
+common_bridge_sysctl_settings:
+  net.bridge.bridge-nf-call-iptables: 1
+  net.bridge.bridge-nf-call-ip6tables: 1
+  net.ipv4.ip_forward: 1
+
+# Container management utilities
+common_container_utilities:
+  - skopeo  # Container image operations
+  - buildah  # Container building (Podman ecosystem)
+  - runc    # Low-level container runtime
+  - conmon  # Container monitoring
+
+# SELinux configuration for containers
+common_selinux_container_booleans:
+  - container_manage_cgroup
+  - container_use_cephfs
+  - virt_use_nfs
+  - virt_use_samba
+
+# Container data directories
+common_container_data_dirs:
+  - "/opt/containers/volumes"
+  - "/opt/containers/configs"
+  - "/opt/containers/secrets"
+
+# Monitoring integration
+common_enable_monitoring_integration: true
+common_monitoring_access_groups:
+  - "systemd-journal"  # For reading container logs
+
+# Container monitoring utilities
+common_monitoring_utilities:
+  - lsof
+  - netstat-nat
+  - iotop
+
+# Security settings
+common_enable_container_security: true
+common_container_security_options:
+  - "--security-opt=no-new-privileges"
+  - "--cap-drop=ALL"
+  - "--cap-add=CHOWN,SETUID,SETGID"
+
+# Performance tuning
+common_enable_performance_tuning: true
+common_performance_sysctl_settings:
+  vm.max_map_count: 262144
+  fs.inotify.max_user_watches: 524288
+  fs.inotify.max_user_instances: 256
+
+# Development/debugging options
+common_debug_enabled: false
+common_enable_container_debugging: false
+
+# Backup configuration
+common_enable_backup: false
+common_backup_directories:
+  - "{{ common_monitoring_user_home }}/.config"
+  - "/etc/containers"
+
+# Integration settings
+common_jenkins_integration: true
+common_grafana_integration: true
+common_prometheus_integration: true
+
+# Container image management
+common_enable_image_management: true
+common_image_prune_schedule: "0 4 * * 0"  # Weekly on Sunday at 4 AM
+common_image_retention_days: 30
+
+# Resource limits for monitoring user
+common_monitoring_resource_limits:
+  memory: "1G"
+  cpu_quota: "50%"
+  pids_limit: 512
+
+# Systemd integration
+common_enable_systemd_integration: true
+common_systemd_service_timeout: "300s"
+
+# Logging configuration
+common_enable_structured_logging: true
+common_log_format: "json"
+common_log_max_size: "50M"
+common_log_max_files: 5
+
+# Container networking
+common_container_networks:
+  - name: monitoring-net
+    subnet: "172.25.0.0/16"
+  - name: jenkins-net
+    subnet: "172.26.0.0/16"
+
+# Pod support (Podman-specific)
+common_enable_pods: true
+common_default_pod_network: "monitoring-net"
+
+# Secrets management
+common_enable_secrets: true
+common_secrets_dir: "/opt/containers/secrets"
+
+# Auto-update configuration
+common_enable_auto_update: false
+common_auto_update_schedule: "weekly"
+
+# Compatibility settings
+common_enable_docker_compatibility: true  # Creates docker symlink for Podman
+
+# Development environment settings
+common_development_mode: "{{ deployment_mode | default('production') in ['local', 'development'] }}"
+common_enable_dev_tools: "{{ common_development_mode }}"
+
+# Additional development packages (only in dev mode)
+common_dev_packages:
+  - strace
+  - tcpdump
+  - wireshark-common
+  - nmap-ncat

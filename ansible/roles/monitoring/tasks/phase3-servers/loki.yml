@@ -1,0 +1,95 @@
+---
+# Loki Server Deployment
+# Centralized log aggregation server (Promtail agents deployed separately in phase2-agents)
+
+- name: Create Loki configuration from template
+  template:
+    src: "loki/loki-config.yml.j2"
+    dest: "{{ monitoring_home_dir }}/loki/config/loki-config.yml"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  notify: restart loki
+
+- name: Create TSDB and rules directories for Loki
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+  loop:
+    - "{{ monitoring_home_dir }}/loki/tsdb-index"
+    - "{{ monitoring_home_dir }}/loki/tsdb-cache"
+    - "{{ monitoring_home_dir }}/loki/chunks"
+    - "{{ monitoring_home_dir }}/loki/compactor"
+    - "{{ monitoring_home_dir }}/loki/wal"
+    - "{{ monitoring_home_dir }}/loki/rules"
+    - "{{ monitoring_home_dir }}/loki/rules-temp"
+
+- name: Deploy Loki alerting rules
+  template:
+    src: loki/loki-alerting-rules.yml.j2
+    dest: "{{ monitoring_home_dir }}/loki/rules/jenkins.yml"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  notify: restart loki
+
+- name: Deploy Loki container
+  community.docker.docker_container:
+    name: loki-{{ deployment_environment | default('local') }}
+    image: "grafana/loki:{{ loki_version }}"
+    state: started
+    restart_policy: "{{ monitoring_restart_policy }}"
+    ports:
+      - "{{ loki_port }}:3100"
+    volumes:
+      - "{{ monitoring_home_dir }}/loki/config:/etc/loki"
+      - "{{ monitoring_home_dir }}/loki/tsdb-index:/tmp/loki/tsdb-index"
+      - "{{ monitoring_home_dir }}/loki/tsdb-cache:/tmp/loki/tsdb-cache"
+      - "{{ monitoring_home_dir }}/loki/chunks:/tmp/loki/chunks"
+      - "{{ monitoring_home_dir }}/loki/compactor:/tmp/loki/compactor"
+      - "{{ monitoring_home_dir }}/loki/wal:/tmp/loki/wal"
+      - "{{ monitoring_home_dir }}/loki/rules:/tmp/loki/rules:ro"
+      - "{{ monitoring_home_dir }}/loki/rules-temp:/tmp/loki/rules-temp"
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    networks:
+      - name: "{{ monitoring_docker_network }}"
+    user: "{{ monitoring_uid }}:{{ monitoring_gid }}"
+    env:
+      LOKI_RETENTION_PERIOD: "{{ loki_retention }}"
+  when: loki_enabled | default(true)
+
+- name: Wait for Loki to be ready
+  uri:
+    url: "http://{{ loki_host }}:{{ loki_port }}/ready"
+    method: GET
+    status_code: 200
+  register: loki_ready
+  until: loki_ready.status == 200
+  retries: 30
+  delay: 2
+  when: loki_enabled | default(true)
+
+- name: Display Loki deployment status
+  debug:
+    msg: |
+      ==========================================================
+      📊 Loki Server Deployment Status
+      ==========================================================
+      Loki Service: {{ 'Running' if loki_enabled else 'Disabled' }} (Port: {{ loki_port }})
+      Retention Period: {{ loki_retention }}
+      Data Directory: {{ monitoring_home_dir }}/loki/data
+
+      Access URLs:
+      - Loki API: http://{{ loki_host }}:{{ loki_port }}
+      - Loki Ready: http://{{ loki_host }}:{{ loki_port }}/ready
+      - Loki Metrics: http://{{ loki_host }}:{{ loki_port }}/metrics
+
+      Query Examples:
+      - List labels: curl http://{{ loki_host }}:{{ loki_port }}/loki/api/v1/labels
+      - Query logs: curl 'http://{{ loki_host }}:{{ loki_port }}/loki/api/v1/query_range?query={job="system-logs"}&limit=10'
+
+      Note: Promtail agents deployed separately to all monitoring target hosts
+      ==========================================================

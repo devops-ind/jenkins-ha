@@ -1,0 +1,108 @@
+#!/bin/bash
+# Workspace Cleanup Monitoring Script
+# Monitors workspace cleanup execution and provides alerts
+
+set -euo pipefail
+
+# Configuration
+LOG_DIR="/var/log/glusterfs-retention"
+ALERT_THRESHOLD_HOURS=48  # Alert if cleanup hasn't run in 48 hours
+WORKSPACE_BASE_PATH="{{ glusterfs_mount_base_path | default('/var/jenkins') }}"
+
+echo "======================================================"
+echo "GlusterFS Workspace Cleanup Monitoring Report"
+echo "======================================================"
+echo "Generated: $(date)"
+echo ""
+
+# Check each team's cleanup status
+{% for team in jenkins_teams if jenkins_teams is defined %}
+TEAM="{{ team.team_name }}"
+CLEANUP_LOG="$LOG_DIR/${TEAM}-cleanup.log"
+WORKSPACE_PATH="$WORKSPACE_BASE_PATH/$TEAM/data/workspace"
+RETENTION_DAYS="{{ team.workspace_retention_days | default(glusterfs_workspace_retention_days) }}"
+
+echo "Team: $TEAM"
+echo "----------------------------------------"
+
+if [ -f "$CLEANUP_LOG" ]; then
+    # Get last cleanup time
+    LAST_CLEANUP=$(grep "Workspace cleanup finished" "$CLEANUP_LOG" | tail -1 | cut -d' ' -f1,2)
+    if [ -n "$LAST_CLEANUP" ]; then
+        LAST_CLEANUP_TIMESTAMP=$(date -d "$LAST_CLEANUP" +%%s 2>/dev/null || date -j -f "%%Y-%%m-%%d %%H:%%M:%%S" "$LAST_CLEANUP" +%%s 2>/dev/null)
+        CURRENT_TIMESTAMP=$(date +%%s)
+        HOURS_SINCE_CLEANUP=$(( (CURRENT_TIMESTAMP - LAST_CLEANUP_TIMESTAMP) / 3600 ))
+
+        echo "Last cleanup: $LAST_CLEANUP ($HOURS_SINCE_CLEANUP hours ago)"
+
+        if [ "$HOURS_SINCE_CLEANUP" -gt "$ALERT_THRESHOLD_HOURS" ]; then
+            echo "STATUS: WARNING - Cleanup hasn't run in $HOURS_SINCE_CLEANUP hours"
+        else
+            echo "STATUS: OK"
+        fi
+
+        # Count recent deletions
+        RECENT_DELETIONS=$(grep "Successfully deleted:" "$CLEANUP_LOG" | grep "$(date +%%Y-%%m-%%d)" | wc -l)
+        echo "Deletions today: $RECENT_DELETIONS workspaces"
+    else
+        echo "STATUS: WARNING - No successful cleanup found in log"
+    fi
+
+    # Show cleanup errors if any
+    ERROR_COUNT=$(grep "ERROR" "$CLEANUP_LOG" | wc -l)
+    if [ "$ERROR_COUNT" -gt 0 ]; then
+        echo "Errors in log: $ERROR_COUNT (check $CLEANUP_LOG for details)"
+    fi
+else
+    echo "STATUS: ERROR - Cleanup log not found"
+fi
+
+# Check workspace disk usage
+if [ -d "$WORKSPACE_PATH" ]; then
+    WORKSPACE_COUNT=$(find "$WORKSPACE_PATH" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+    WORKSPACE_SIZE=$(du -sh "$WORKSPACE_PATH" 2>/dev/null | cut -f1)
+    OLD_WORKSPACE_COUNT=$(find "$WORKSPACE_PATH" -mindepth 1 -maxdepth 1 -type d -mtime +${RETENTION_DAYS} 2>/dev/null | wc -l)
+
+    echo "Current workspaces: $WORKSPACE_COUNT ($WORKSPACE_SIZE)"
+    echo "Cleanup candidates (>${RETENTION_DAYS} days): $OLD_WORKSPACE_COUNT"
+
+    if [ "$OLD_WORKSPACE_COUNT" -gt 100 ]; then
+        echo "STATUS: WARNING - High number of old workspaces detected"
+    fi
+else
+    echo "Workspace path: Not found"
+fi
+
+echo ""
+{% endfor %}
+
+echo "======================================================"
+echo "Monitoring Summary"
+echo "======================================================"
+
+# Overall system health
+TOTAL_WARNINGS=0
+TOTAL_ERRORS=0
+
+for log in "$LOG_DIR"/*-cleanup.log; do
+    if [ -f "$log" ]; then
+        WARNINGS=$(grep "WARNING" "$log" | wc -l)
+        ERRORS=$(grep "ERROR" "$log" | wc -l)
+        TOTAL_WARNINGS=$((TOTAL_WARNINGS + WARNINGS))
+        TOTAL_ERRORS=$((TOTAL_ERRORS + ERRORS))
+    fi
+done
+
+echo "Total warnings: $TOTAL_WARNINGS"
+echo "Total errors: $TOTAL_ERRORS"
+
+if [ "$TOTAL_ERRORS" -gt 0 ]; then
+    echo "Overall status: CRITICAL - Cleanup errors detected"
+    exit 2
+elif [ "$TOTAL_WARNINGS" -gt 0 ]; then
+    echo "Overall status: WARNING - Cleanup warnings detected"
+    exit 1
+else
+    echo "Overall status: OK"
+    exit 0
+fi

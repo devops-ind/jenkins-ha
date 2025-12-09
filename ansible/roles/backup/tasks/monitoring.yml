@@ -1,0 +1,109 @@
+---
+# Backup Monitoring Integration Tasks
+# Integration with Prometheus and Grafana for backup observability
+
+- name: Create backup metrics collection script
+  template:
+    src: backup-metrics.sh.j2
+    dest: "{{ backup_home_dir }}/scripts/backup-metrics.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  tags:
+    - monitoring
+    - metrics
+    - prometheus
+
+- name: Create backup status endpoint
+  template:
+    src: backup-status.json.j2
+    dest: "{{ backup_nfs_path }}/backup-status.json"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0644'
+  tags:
+    - monitoring
+    - status
+    - json
+
+- name: Setup Prometheus node exporter textfile for backup metrics
+  file:
+    path: /var/lib/node_exporter/textfile_collector
+    state: directory
+    owner: prometheus
+    group: prometheus
+    mode: '0755'
+  become: yes
+  ignore_errors: yes
+  tags:
+    - monitoring
+    - prometheus
+    - textfile
+
+- name: Create backup alerting rules for Prometheus
+  template:
+    src: backup-alerts.yml.j2
+    dest: "{{ monitoring_rules_path | default('/etc/prometheus/rules') }}/backup-alerts.yml"
+    owner: prometheus
+    group: prometheus
+    mode: '0644'
+    backup: yes
+  become: yes
+  notify: reload prometheus
+  when: prometheus_server is defined
+  tags:
+    - monitoring
+    - alerts
+    - prometheus
+
+- name: Create Grafana dashboard for backup monitoring
+  template:
+    src: backup-dashboard.json.j2
+    dest: "{{ grafana_dashboards_path | default('/var/lib/grafana/dashboards') }}/jenkins-backup-dashboard.json"
+    owner: grafana
+    group: grafana
+    mode: '0644'
+    backup: yes
+  become: yes
+  when: grafana_server is defined
+  tags:
+    - monitoring
+    - grafana
+    - dashboard
+
+- name: Configure backup notification webhook
+  template:
+    src: backup-webhook.sh.j2
+    dest: "{{ backup_home_dir }}/scripts/backup-webhook.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  when: backup_webhook_url is defined
+  tags:
+    - monitoring
+    - notifications
+    - webhook
+
+- name: Create backup health check endpoint
+  template:
+    src: backup-health.sh.j2
+    dest: "{{ backup_home_dir }}/scripts/backup-health.sh"
+    owner: "{{ backup_user }}"
+    group: "{{ backup_group }}"
+    mode: '0755'
+  tags:
+    - monitoring
+    - health
+    - check
+
+- name: Setup backup metrics collection cron
+  cron:
+    name: "Backup Metrics Collection"
+    job: "{{ backup_home_dir }}/scripts/backup-metrics.sh > /var/lib/node_exporter/textfile_collector/backup_metrics.prom"
+    minute: "*/5"
+    user: "{{ backup_user }}"
+    state: "{{ 'present' if backup_monitoring_enabled else 'absent' }}"
+  tags:
+    - monitoring
+    - cron
+    - metrics

@@ -1,0 +1,194 @@
+---
+# Handlers for podman-v2 role
+
+- name: restart podman system service
+  systemd:
+    name: podman.service
+    state: restarted
+    enabled: yes
+    daemon_reload: yes
+  listen: "restart podman system service"
+  when: 
+    - not podman_rootless_only
+    - deployment_mode | default('local') not in ['devcontainer', 'local']
+
+- name: skip podman restart in devcontainer
+  debug:
+    msg: "Skipping Podman system service restart in devcontainer environment"
+  listen: "restart podman system service"
+  when: deployment_mode | default('local') in ['devcontainer', 'local']
+
+- name: restart podman socket
+  systemd:
+    name: podman.socket
+    state: restarted
+    enabled: yes
+    daemon_reload: yes
+  listen: "restart podman socket"
+  when: 
+    - not podman_rootless_only
+    - deployment_mode | default('local') not in ['devcontainer', 'local']
+
+- name: reload systemd
+  systemd:
+    daemon_reload: yes
+  listen: "reload systemd"
+
+- name: restart user podman services
+  block:
+    - name: Get user services
+      shell: systemctl --user list-units podman-* --no-legend | awk '{print $1}' | grep '\.service$'
+      register: user_services
+      become_user: "{{ item }}"
+      loop: "{{ podman_users }}"
+      failed_when: false
+      changed_when: false
+
+    - name: Restart user Podman services
+      systemd:
+        name: "{{ service }}"
+        state: restarted
+        scope: user
+      become_user: "{{ user_service.item }}"
+      loop: "{{ user_services.results | selectattr('stdout', 'defined') | list }}"
+      loop_control:
+        loop_var: user_service
+      when: user_service.stdout | length > 0
+      vars:
+        service: "{{ user_service.stdout.split('\n') | first }}"
+  listen: "restart user podman services"
+  when: podman_enable_rootless
+
+- name: regenerate podman networks
+  containers.podman.podman_network:
+    name: "{{ item.name }}"
+    state: absent
+  loop: "{{ podman_networks }}"
+  listen: "regenerate podman networks"
+  become: "{{ not podman_rootless_only }}"
+
+- name: recreate podman networks
+  containers.podman.podman_network:
+    name: "{{ item.name }}"
+    driver: "{{ item.driver | default('bridge') }}"
+    subnet: "{{ item.subnet | default(omit) }}"
+    gateway: "{{ item.gateway | default(omit) }}"
+    internal: "{{ item.internal | default(false) }}"
+    disable_dns: "{{ item.disable_dns | default(false) }}"
+    state: present
+  loop: "{{ podman_networks }}"
+  listen: "recreate podman networks"
+  become: "{{ not podman_rootless_only }}"
+
+- name: restart podman auto-update timer
+  systemd:
+    name: podman-auto-update.timer
+    state: restarted
+    enabled: yes
+    daemon_reload: yes
+  listen: "restart podman auto-update timer"
+  when: 
+    - podman_auto_update_enabled
+    - not podman_rootless_only
+
+- name: update subuid subgid mappings
+  command: podman system migrate
+  listen: "update subuid subgid mappings"
+  become_user: "{{ item }}"
+  loop: "{{ podman_users }}"
+  when: podman_enable_rootless
+
+- name: refresh podman machine
+  block:
+    - name: Stop podman machine
+      command: podman machine stop {{ podman_machine_name }}
+      become: false
+      failed_when: false
+
+    - name: Start podman machine
+      command: podman machine start {{ podman_machine_name }}
+      become: false
+  listen: "refresh podman machine"
+  when: 
+    - ansible_os_family == "Darwin"
+    - podman_machine_enabled
+
+- name: prune podman system
+  command: podman system prune -af --volumes
+  listen: "prune podman system"
+  become: "{{ not podman_rootless_only }}"
+
+- name: prune user podman systems
+  command: podman system prune -af --volumes
+  become_user: "{{ item }}"
+  loop: "{{ podman_users }}"
+  listen: "prune user podman systems"
+  when: podman_enable_rootless
+
+- name: restart conmon
+  systemd:
+    name: conmon
+    state: restarted
+  listen: "restart conmon"
+  failed_when: false  # conmon might not be a service
+
+- name: restart crio
+  systemd:
+    name: crio
+    state: restarted
+    enabled: yes
+  listen: "restart crio"
+  when: 
+    - podman_runtime == "crun"
+    - ansible_facts.services['crio.service'] is defined
+  failed_when: false
+
+- name: update selinux context
+  command: restorecon -R /etc/containers
+  listen: "update selinux context"
+  when: 
+    - ansible_selinux is defined
+    - ansible_selinux.status == "enabled"
+    - ansible_os_family == "RedHat"
+
+- name: generate systemd units
+  command: podman generate systemd --files --name "{{ item }}"
+  loop: "{{ podman_systemd_services | default([]) }}"
+  listen: "generate systemd units"
+  args:
+    chdir: "{{ podman_systemd_units_dir }}"
+  become: "{{ not podman_rootless_only }}"
+  when: podman_systemd_integration
+
+- name: restart buildah
+  command: buildah system prune -af
+  listen: "restart buildah"
+  when: podman_buildah_enabled
+  become: "{{ not podman_rootless_only }}"
+
+- name: update image signature policy
+  command: podman system info --format json
+  listen: "update image signature policy"
+  register: podman_system_info
+  changed_when: false
+  become: "{{ not podman_rootless_only }}"
+
+- name: restart netavark
+  systemd:
+    name: netavark
+    state: restarted
+  listen: "restart netavark"
+  when: podman_network_backend == "netavark"
+  failed_when: false  # netavark might not be a standalone service
+
+- name: flush iptables podman chains
+  command: "{{ item }}"
+  loop:
+    - "iptables -t nat -F CNI-HOSTPORT-DNAT"
+    - "iptables -t filter -F PODMAN-FORWARD"
+    - "iptables -t nat -F PODMAN-MASQ"
+  listen: "flush iptables podman chains"
+  failed_when: false
+  when: 
+    - not podman_rootless_only
+    - ansible_os_family != "Darwin"

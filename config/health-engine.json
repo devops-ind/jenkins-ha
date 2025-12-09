@@ -1,0 +1,580 @@
+{
+  "global": {
+    "prometheus_url": "http://localhost:9090",
+    "loki_url": "http://localhost:3100",
+    "grafana_url": "http://localhost:9300",
+    "health_check_timeout": 30,
+    "circuit_breaker_threshold": 3,
+    "circuit_breaker_timeout": 300,
+    "evaluation_window": "5m",
+    "trend_analysis_window": "30m",
+    "flapping_prevention": {
+      "enabled": true,
+      "threshold_changes": 3,
+      "time_window": "10m",
+      "stabilization_period": "5m"
+    },
+    "auto_scaling": {
+      "enabled": false,
+      "scale_up_threshold": 85,
+      "scale_down_threshold": 30,
+      "cool_down_period": "5m"
+    },
+    "integration": {
+      "blue_green_switch_script": "/Users/jitinchawla/Data/projects/jenkins-ha/scripts/blue-green-switch.sh",
+      "restart_script": "/Users/jitinchawla/Data/projects/jenkins-ha/scripts/restart-jenkins.sh",
+      "health_check_scripts": "/opt/jenkins/scripts/",
+      "notification_webhook": "",
+      "grafana_dashboard_uid": "jenkins-health-engine"
+    }
+  },
+  "teams": {
+    "devops": {
+      "enabled": true,
+      "tier": "production",
+      "active_environment": "green",
+      "blue_green_enabled": true,
+      "weights": {
+        "prometheus_metrics": 40,
+        "loki_logs": 30,
+        "health_checks": 30
+      },
+      "thresholds": {
+        "error_rate_max": 5.0,
+        "response_time_p95_max": 2000,
+        "service_availability_min": 99.0,
+        "memory_usage_max": 85.0,
+        "cpu_usage_max": 80.0,
+        "disk_usage_max": 85.0,
+        "build_failure_rate_max": 10.0,
+        "queue_size_max": 20,
+        "deployment_success_rate_min": 95.0,
+        "ssl_certificate_expiry_days_min": 30
+      },
+      "log_patterns": {
+        "error_patterns": [
+          "ERROR",
+          "Exception",
+          "java\\.lang\\..*Exception",
+          "OutOfMemoryError",
+          "Connection refused",
+          "Timeout",
+          "Failed to connect",
+          "Build failed",
+          "Plugin.*error",
+          "Authentication failed",
+          "SSL.*error"
+        ],
+        "critical_patterns": [
+          "FATAL",
+          "OutOfMemoryError",
+          "Connection reset",
+          "Service unavailable",
+          "502 Bad Gateway",
+          "503 Service Unavailable",
+          "504 Gateway Timeout",
+          "All masters down",
+          "HA degraded",
+          "Backup failed",
+          "SSL certificate expired",
+          "Security breach",
+          "Unauthorized access"
+        ],
+        "warning_patterns": [
+          "WARN",
+          "WARNING",
+          "Deprecated",
+          "Plugin.*deprecated",
+          "Memory.*low",
+          "Disk.*full",
+          "Queue.*backlog",
+          "Agent.*disconnected"
+        ]
+      },
+      "health_score_thresholds": {
+        "healthy": 85,
+        "warning": 70,
+        "critical": 50
+      },
+      "sli_targets": {
+        "availability": 99.5,
+        "error_rate": 1.0,
+        "response_time_p95": 1500,
+        "deployment_frequency": 10,
+        "mttr_minutes": 15,
+        "change_failure_rate": 5.0
+      },
+      "auto_healing": {
+        "enabled": true,
+        "actions": ["restart", "switch_environment", "scale_up"],
+        "max_attempts": 3,
+        "backoff_multiplier": 2,
+        "safety_checks": {
+          "min_healthy_instances": 1,
+          "max_restarts_per_hour": 3,
+          "business_hours_only": false
+        },
+        "escalation": {
+          "levels": ["restart", "switch_environment", "manual_intervention"],
+          "escalation_time": "10m",
+          "notification_channels": ["slack", "email", "pagerduty"]
+        }
+      },
+      "monitoring": {
+        "dashboards": ["devops-health", "infrastructure-overview"],
+        "alert_channels": ["#devops-alerts"],
+        "notification_severity": ["warning", "critical", "fatal"],
+        "metrics_retention": "30d"
+      }
+    },
+    "dev-qa": {
+      "enabled": true,
+      "tier": "production",
+      "active_environment": "green",
+      "blue_green_enabled": true,
+      "weights": {
+        "prometheus_metrics": 45,
+        "loki_logs": 25,
+        "health_checks": 30
+      },
+      "thresholds": {
+        "error_rate_max": 3.0,
+        "response_time_p95_max": 1500,
+        "service_availability_min": 99.5,
+        "memory_usage_max": 80.0,
+        "cpu_usage_max": 75.0,
+        "disk_usage_max": 80.0,
+        "build_failure_rate_max": 8.0,
+        "queue_size_max": 15,
+        "deployment_success_rate_min": 97.0,
+        "ssl_certificate_expiry_days_min": 30,
+        "test_coverage_min": 85.0,
+        "security_scan_pass_rate_min": 95.0
+      },
+      "log_patterns": {
+        "error_patterns": [
+          "ERROR",
+          "Exception",
+          "Test.*failed",
+          "Failed to process",
+          "Connection timeout",
+          "QA.*error",
+          "Security.*scan.*failed",
+          "Coverage.*below.*threshold",
+          "Quality.*gate.*failed"
+        ],
+        "critical_patterns": [
+          "FATAL",
+          "Service down",
+          "Database connection failed",
+          "Critical.*vulnerability",
+          "Security.*breach",
+          "All.*tests.*failed",
+          "Quality.*gate.*blocked"
+        ],
+        "warning_patterns": [
+          "WARN",
+          "Test.*skipped",
+          "Performance.*degraded",
+          "Memory.*pressure",
+          "Queue.*growing"
+        ]
+      },
+      "health_score_thresholds": {
+        "healthy": 90,
+        "warning": 75,
+        "critical": 60
+      },
+      "sli_targets": {
+        "availability": 99.5,
+        "error_rate": 1.5,
+        "response_time_p95": 1200,
+        "deployment_frequency": 15,
+        "mttr_minutes": 10,
+        "change_failure_rate": 3.0,
+        "test_success_rate": 95.0,
+        "security_compliance": 98.0
+      },
+      "auto_healing": {
+        "enabled": true,
+        "actions": ["restart", "switch_environment"],
+        "max_attempts": 2,
+        "backoff_multiplier": 1.5,
+        "safety_checks": {
+          "min_healthy_instances": 1,
+          "max_restarts_per_hour": 2,
+          "business_hours_only": false
+        },
+        "escalation": {
+          "levels": ["restart", "switch_environment", "manual_intervention"],
+          "escalation_time": "8m",
+          "notification_channels": ["slack", "email"]
+        }
+      },
+      "monitoring": {
+        "dashboards": ["dev-qa-health", "quality-metrics"],
+        "alert_channels": ["#dev-qa-alerts"],
+        "notification_severity": ["critical", "fatal"],
+        "metrics_retention": "14d"
+      }
+    },
+    "ma": {
+      "enabled": true,
+      "tier": "production",
+      "active_environment": "green",
+      "blue_green_enabled": true,
+      "weights": {
+        "prometheus_metrics": 50,
+        "loki_logs": 20,
+        "health_checks": 30
+      },
+      "thresholds": {
+        "error_rate_max": 2.0,
+        "response_time_p95_max": 1000,
+        "service_availability_min": 99.8,
+        "memory_usage_max": 75.0,
+        "cpu_usage_max": 70.0,
+        "disk_usage_max": 75.0,
+        "build_failure_rate_max": 5.0,
+        "queue_size_max": 10,
+        "deployment_success_rate_min": 98.0,
+        "ssl_certificate_expiry_days_min": 45,
+        "analytics_data_freshness_hours": 1,
+        "model_accuracy_min": 95.0
+      },
+      "log_patterns": {
+        "error_patterns": [
+          "ERROR",
+          "Exception",
+          "Analytics processing failed",
+          "Model.*error",
+          "Data.*pipeline.*failed",
+          "ML.*training.*failed",
+          "Feature.*extraction.*error"
+        ],
+        "critical_patterns": [
+          "FATAL",
+          "Data corruption",
+          "Analytics service down",
+          "Model.*crashed",
+          "Data.*loss",
+          "Critical.*analytics.*failure"
+        ],
+        "warning_patterns": [
+          "WARN",
+          "Model.*accuracy.*low",
+          "Data.*delay",
+          "Feature.*drift",
+          "Performance.*degraded"
+        ]
+      },
+      "health_score_thresholds": {
+        "healthy": 95,
+        "warning": 80,
+        "critical": 65
+      },
+      "sli_targets": {
+        "availability": 99.8,
+        "error_rate": 0.5,
+        "response_time_p95": 800,
+        "deployment_frequency": 20,
+        "mttr_minutes": 8,
+        "change_failure_rate": 2.0,
+        "data_processing_success_rate": 99.5,
+        "model_accuracy": 96.0
+      },
+      "auto_healing": {
+        "enabled": true,
+        "actions": ["restart"],
+        "max_attempts": 2,
+        "backoff_multiplier": 2,
+        "safety_checks": {
+          "min_healthy_instances": 1,
+          "max_restarts_per_hour": 1,
+          "business_hours_only": false,
+          "data_consistency_check": true
+        },
+        "escalation": {
+          "levels": ["restart", "manual_intervention"],
+          "escalation_time": "5m",
+          "notification_channels": ["slack", "email", "pagerduty"]
+        }
+      },
+      "monitoring": {
+        "dashboards": ["ma-health", "analytics-performance"],
+        "alert_channels": ["#ma-alerts"],
+        "notification_severity": ["warning", "critical", "fatal"],
+        "metrics_retention": "90d"
+      }
+    },
+    "ba": {
+      "enabled": true,
+      "tier": "production",
+      "active_environment": "green", 
+      "blue_green_enabled": true,
+      "weights": {
+        "prometheus_metrics": 50,
+        "loki_logs": 20,
+        "health_checks": 30
+      },
+      "thresholds": {
+        "error_rate_max": 2.0,
+        "response_time_p95_max": 1000,
+        "service_availability_min": 99.8,
+        "memory_usage_max": 75.0,
+        "cpu_usage_max": 70.0,
+        "disk_usage_max": 75.0,
+        "build_failure_rate_max": 3.0,
+        "queue_size_max": 8,
+        "deployment_success_rate_min": 99.0,
+        "ssl_certificate_expiry_days_min": 45,
+        "report_generation_success_rate_min": 98.0,
+        "data_accuracy_min": 99.5
+      },
+      "log_patterns": {
+        "error_patterns": [
+          "ERROR",
+          "Exception",
+          "Analytics processing failed",
+          "Report.*generation.*failed",
+          "Data.*validation.*error",
+          "BI.*dashboard.*error",
+          "ETL.*pipeline.*failed"
+        ],
+        "critical_patterns": [
+          "FATAL",
+          "Data corruption",
+          "Analytics service down", 
+          "Critical.*data.*loss",
+          "BI.*service.*down",
+          "Report.*server.*crashed"
+        ],
+        "warning_patterns": [
+          "WARN",
+          "Data.*quality.*issue",
+          "Report.*delayed",
+          "Dashboard.*slow",
+          "ETL.*lag"
+        ]
+      },
+      "health_score_thresholds": {
+        "healthy": 95,
+        "warning": 80,
+        "critical": 65
+      },
+      "sli_targets": {
+        "availability": 99.8,
+        "error_rate": 0.5,
+        "response_time_p95": 800,
+        "deployment_frequency": 25,
+        "mttr_minutes": 6,
+        "change_failure_rate": 1.5,
+        "report_accuracy": 99.8,
+        "data_freshness_hours": 0.5
+      },
+      "auto_healing": {
+        "enabled": true,
+        "actions": ["restart"],
+        "max_attempts": 2,
+        "backoff_multiplier": 2,
+        "safety_checks": {
+          "min_healthy_instances": 1,
+          "max_restarts_per_hour": 1,
+          "business_hours_only": false,
+          "data_integrity_check": true
+        },
+        "escalation": {
+          "levels": ["restart", "manual_intervention"],
+          "escalation_time": "5m",
+          "notification_channels": ["slack", "email", "pagerduty"]
+        }
+      },
+      "monitoring": {
+        "dashboards": ["ba-health", "business-analytics"],
+        "alert_channels": ["#ba-alerts"],
+        "notification_severity": ["warning", "critical", "fatal"],
+        "metrics_retention": "90d"
+      }
+    },
+    "tw": {
+      "enabled": true,
+      "tier": "testing",
+      "active_environment": "green",
+      "blue_green_enabled": true,
+      "weights": {
+        "prometheus_metrics": 35,
+        "loki_logs": 35,
+        "health_checks": 30
+      },
+      "thresholds": {
+        "error_rate_max": 8.0,
+        "response_time_p95_max": 3000,
+        "service_availability_min": 98.0,
+        "memory_usage_max": 90.0,
+        "cpu_usage_max": 85.0,
+        "disk_usage_max": 90.0,
+        "build_failure_rate_max": 15.0,
+        "queue_size_max": 30,
+        "deployment_success_rate_min": 90.0,
+        "ssl_certificate_expiry_days_min": 15,
+        "test_execution_success_rate_min": 85.0,
+        "test_environment_uptime_min": 95.0
+      },
+      "log_patterns": {
+        "error_patterns": [
+          "ERROR",
+          "Test failed",
+          "Build failed",
+          "Exception",
+          "Timeout",
+          "Test.*execution.*error",
+          "Environment.*setup.*failed",
+          "Load.*test.*failed"
+        ],
+        "critical_patterns": [
+          "FATAL",
+          "Test suite crashed",
+          "CI/CD pipeline failed",
+          "Test.*environment.*down",
+          "Critical.*test.*failure",
+          "Performance.*regression.*severe"
+        ],
+        "warning_patterns": [
+          "WARN",
+          "Test.*skipped",
+          "Flaky.*test",
+          "Environment.*unstable",
+          "Performance.*degraded",
+          "Resource.*constraint"
+        ]
+      },
+      "health_score_thresholds": {
+        "healthy": 80,
+        "warning": 65,
+        "critical": 45
+      },
+      "sli_targets": {
+        "availability": 98.0,
+        "error_rate": 5.0,
+        "response_time_p95": 2500,
+        "deployment_frequency": 5,
+        "mttr_minutes": 30,
+        "change_failure_rate": 10.0,
+        "test_pass_rate": 90.0,
+        "environment_stability": 95.0
+      },
+      "auto_healing": {
+        "enabled": true,
+        "actions": ["restart", "switch_environment"],
+        "max_attempts": 4,
+        "backoff_multiplier": 1.8,
+        "safety_checks": {
+          "min_healthy_instances": 0,
+          "max_restarts_per_hour": 5,
+          "business_hours_only": false,
+          "test_data_preservation": true
+        },
+        "escalation": {
+          "levels": ["restart", "switch_environment", "rebuild_environment"],
+          "escalation_time": "15m",
+          "notification_channels": ["slack", "email"]
+        }
+      },
+      "monitoring": {
+        "dashboards": ["tw-health", "test-metrics"],
+        "alert_channels": ["#tw-alerts"],
+        "notification_severity": ["critical", "fatal"],
+        "metrics_retention": "7d"
+      }
+    }
+  },
+  "health_policies": {
+    "global_policies": {
+      "minimum_health_score": 50,
+      "emergency_threshold": 30,
+      "flapping_detection": {
+        "enabled": true,
+        "state_changes_threshold": 3,
+        "time_window": "10m"
+      },
+      "maintenance_windows": {
+        "enabled": true,
+        "suppress_alerts": true,
+        "suppress_auto_healing": false,
+        "default_duration": "2h"
+      }
+    },
+    "tier_policies": {
+      "production": {
+        "minimum_availability": 99.0,
+        "max_error_rate": 2.0,
+        "auto_healing_aggressive": true,
+        "notification_priority": "high"
+      },
+      "testing": {
+        "minimum_availability": 95.0,
+        "max_error_rate": 10.0,
+        "auto_healing_aggressive": false,
+        "notification_priority": "medium"
+      }
+    }
+  },
+  "integration_settings": {
+    "prometheus": {
+      "custom_metrics": [
+        "jenkins_health_engine_score",
+        "jenkins_health_engine_assessment_timestamp",
+        "jenkins_health_engine_trend_confidence",
+        "jenkins_health_engine_circuit_breaker_status"
+      ],
+      "metric_labels": ["team", "environment", "tier", "status"],
+      "push_gateway_url": "http://localhost:9091"
+    },
+    "grafana": {
+      "dashboard_provisioning": true,
+      "annotation_api": true,
+      "alert_integration": true
+    },
+    "external_tools": {
+      "jenkins_api": {
+        "enabled": true,
+        "url_template": "http://{team}jenkins.local.dev:8080",
+        "authentication": "api_token"
+      },
+      "slack": {
+        "enabled": false,
+        "webhook_url": "",
+        "channel_mapping": {
+          "devops": "#devops-alerts",
+          "dev-qa": "#dev-qa-alerts",
+          "ma": "#ma-alerts",
+          "ba": "#ba-alerts",
+          "tw": "#tw-alerts"
+        }
+      },
+      "pagerduty": {
+        "enabled": false,
+        "integration_key": "",
+        "severity_mapping": {
+          "critical": "critical",
+          "failed": "critical",
+          "warning": "warning"
+        }
+      }
+    }
+  },
+  "data_retention": {
+    "historical_assessments": "30d",
+    "circuit_breaker_events": "7d",
+    "auto_healing_attempts": "14d",
+    "trend_analysis_data": "7d",
+    "log_files": "14d"
+  },
+  "performance": {
+    "max_concurrent_assessments": 5,
+    "assessment_timeout": "5m",
+    "cache_duration": "1m",
+    "batch_processing": true,
+    "compression_enabled": true
+  }
+}

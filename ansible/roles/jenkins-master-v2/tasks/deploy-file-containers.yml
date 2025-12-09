@@ -1,0 +1,106 @@
+---
+# File-Based Single Container Deployment (jenkins-master-v2)
+# Uses file copying for config updates instead of symlinks (Docker-friendly)
+
+- name: Deploy Jenkins containers with file-based configuration (Hot-Reload Mode)
+  block:
+    - name: Deploy Jenkins single containers with file config mounts
+      community.docker.docker_container:
+        name: "jenkins-{{ item.team_name }}"
+        image: "{{ _jenkins_image }}"
+        state: started
+        restart_policy: "{{ jenkins_master_restart_policy }}"
+        networks:
+          - name: "{{ jenkins_master_network_name }}"
+        ports: "{{ _container_ports }}"
+        volumes: "{{ _container_volumes }}"
+        env: "{{ _jenkins_env_vars }}"
+        memory: "{{ item.resources.memory }}"
+        cpus: "{{ item.resources.cpu }}"
+        log_driver: "{{ jenkins_master_log_driver }}"
+        log_options: "{{ _log_options }}"
+        labels:
+          service: "jenkins-master"
+          managed_by: "ansible"
+          team: "{{ item.team_name }}"
+          deployment_mode: "file-hot-reload"
+          config_update_mode: "hot-reload"
+        healthcheck:
+          test: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_master_port }}/login"]
+          interval: 30s
+          timeout: 10s
+          retries: 3
+          start_period: 60s
+      vars:
+        _jenkins_env_vars: >-
+          {{ jenkins_master_env_vars | combine(item.env_vars | default({})) | combine({
+            'CASC_JENKINS_CONFIG': '/var/jenkins_home/casc_configs/jenkins.yaml',
+            'JAVA_OPTS': '-Djenkins.install.runSetupWizard=false -Dhudson.DNSMultiCast.disabled=true -Djenkins.model.Jenkins.slaveAgentPort=' + (item.ports.agent | string),
+            'JENKINS_OPTS': '--httpPort=' + jenkins_master_port|string + ' --httpListenAddress=0.0.0.0',
+            'JENKINS_TEAM': item.team_name
+          }) }}
+        _jenkins_image: >-
+          {%- if jenkins_master_build_custom_images | default(true) -%}
+            {{ jenkins_master_custom_image_prefix }}-{{ item.team_name }}:{{ jenkins_master_image_tag }}
+          {%- else -%}
+            {{ jenkins_master_image_registry }}/{{ jenkins_master_image_name }}:{{ jenkins_master_image_tag }}
+          {%- endif -%}
+        _container_ports:
+          - "{{ item.ports.web }}:{{ jenkins_master_port }}"
+          - "{{ item.ports.agent }}:{{ jenkins_jnlp_port }}"
+        _container_volumes:
+          # MAIN JENKINS HOME: Docker volume for persistence
+          - "jenkins-{{ item.team_name }}-blue-home:{{ jenkins_master_container_home }}"
+          # CONFIG FILE: Mount single file for hot-reload (works reliably with Docker)
+          # When we copy blue.yaml -> current.yaml on host, container sees the change
+          - "/var/jenkins/{{ item.team_name }}/configs/current.yaml:{{ jenkins_master_container_home }}/casc_configs/jenkins.yaml:ro"
+          # CACHE: Local Docker volume for performance
+          - "jenkins-{{ item.team_name }}-cache:{{ jenkins_master_container_home }}/.cache"
+          # DOCKER SOCKET: Read-only access for agents
+          - "{{ jenkins_master_socket_path_docker }}:{{ jenkins_master_socket_path_docker }}:ro"
+        _log_options: "{{ {'max-size': jenkins_master_log_max_size, 'max-file': jenkins_master_log_max_files} if jenkins_master_log_driver == 'json-file' else {} }}"
+      loop: "{{ jenkins_teams_config }}"
+      loop_control:
+        label: "jenkins-{{ item.team_name }}"
+      register: jenkins_file_containers
+
+    - name: Wait for file-based containers to be operational
+      pause:
+        seconds: "{{ jenkins_master_startup_wait_time }}"
+
+    - name: Verify file-based containers are healthy
+      uri:
+        url: "http://{{ jenkins_master_host_ip }}:{{ item.ports.web }}/login"
+        method: GET
+        status_code: [200, 403]
+        timeout: 30
+      loop: "{{ jenkins_teams_config }}"
+      loop_control:
+        label: "jenkins-{{ item.team_name }}"
+      register: jenkins_file_health_verification
+      retries: 3
+      delay: 10
+
+    - name: Display file-based deployment summary
+      debug:
+        msg: |
+          ====================================
+          File-Based Hot-Reload Deployment Complete
+          ====================================
+          {% for team in jenkins_teams_config %}
+          • {{ team.team_name }}: Single container with hot-reload config
+            - Container: jenkins-{{ team.team_name }}
+            - Host file: /var/jenkins/{{ team.team_name }}/configs/current.yaml
+            - Container file: /var/jenkins_home/casc_configs/jenkins.yaml (ro)
+            - Port: {{ team.ports.web }}
+          {% endfor %}
+
+          Deployment Mode: File-Based Hot-Reload (Zero-downtime config updates)
+          Containers: {{ jenkins_teams_config | length }} (single container per team)
+          Resource Savings: 50% compared to blue-green containers
+          Update Method: File copy + JCasC hot-reload API
+
+          IMPORTANT: Single file mount (not symlink) for Docker compatibility
+          To switch: cp blue.yaml current.yaml && curl POST /configuration-as-code/reload
+          ====================================
+  tags: ['containers', 'deploy', 'file-config']

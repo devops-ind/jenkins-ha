@@ -1,0 +1,60 @@
+---
+# Create per-team Grafana folders for dashboard organization
+
+- name: Create per-team Grafana folders via API
+  uri:
+    url: "http://{{ grafana_host }}:{{ grafana_port }}/api/folders"
+    method: POST
+    user: "{{ grafana_admin_user }}"
+    password: "{{ grafana_admin_password }}"
+    force_basic_auth: yes
+    status_code: 200, 201
+    body_format: json
+    body:
+      title: "{{ item.display_name }}"
+      description: "Dashboards for {{ item.display_name }} (Team: {{ item.team_name }})"
+      tags: ["team", "{{ item.team_name }}", "auto-generated"]
+  register: grafana_folder_response
+  loop: "{{ jenkins_teams }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  when: grafana_enabled | default(true)
+  tags: ['monitoring', 'phase6-team-isolation', 'grafana', 'folders']
+
+- name: Store team folder IDs for dashboard deployment
+  copy:
+    content: |
+      # Grafana Team Folders - UID/ID Mapping
+      # Used for dashboard deployment to correct team folders
+      # Generated: {{ ansible_date_time.iso8601 }}
+
+      {% for item in grafana_folder_response.results %}
+      {% if item.json is defined and item.json.id is defined %}
+      team_folder_ids:
+        {{ item.item.team_name }}: {{ item.json.id }}  # {{ item.item.display_name }}
+      {% endif %}
+      {% endfor %}
+    dest: "{{ monitoring_home_dir }}/reports/grafana-team-folders-{{ ansible_date_time.date }}.yml"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  when: grafana_folder_response is succeeded
+  tags: ['monitoring', 'phase6-team-isolation', 'grafana', 'folders']
+
+- name: Display Grafana team folders created
+  debug:
+    msg: |
+      Grafana Per-Team Folders Created:
+
+      {% for item in grafana_folder_response.results %}
+      - Team: {{ item.item.display_name }} ({{ item.item.team_name }})
+        Folder ID: {{ item.json.id | default('N/A') }}
+        URL: http://{{ grafana_host }}:{{ grafana_port }}/dashboards/f/{{ item.json.uid | default('') }}/{{ item.item.display_name | lower | replace(' ', '-') }}
+      {% endfor %}
+
+      Folders are now available for dashboard deployment.
+      All team-specific dashboards should be deployed to their respective team folder.
+
+      Next Step: Deploy per-team Grafonnet dashboards to team folders
+
+  tags: ['monitoring', 'phase6-team-isolation', 'grafana', 'display']

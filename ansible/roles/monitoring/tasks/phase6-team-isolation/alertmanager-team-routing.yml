@@ -1,0 +1,98 @@
+---
+# Configure per-team Alertmanager routing
+# Routes alerts from each team to team-specific receivers
+
+- name: Create Alertmanager team routing configuration
+  copy:
+    content: |
+      # Alertmanager team-based routing configuration
+      # Route alerts to team-specific receivers/channels
+
+      route:
+        # Default route for alerts without team label
+        receiver: 'default'
+        group_by: ['team', 'alertname', 'instance']
+        group_wait: 10s
+        group_interval: 10s
+        repeat_interval: 12h
+
+        # Team-specific routes
+        routes:
+      {% for team in jenkins_teams %}
+          - match:
+              team: '{{ team.name }}'
+            receiver: 'team-{{ team.name }}'
+            group_by: ['alertname', 'instance']
+            group_wait: 10s
+            group_interval: 10s
+            repeat_interval: 12h
+            continue: false
+      {% endfor %}
+
+      # Team-specific receivers (update with actual webhook URLs)
+      receivers:
+        - name: 'default'
+          # Add default receiver config (email, Slack, etc.)
+
+      {% for team in jenkins_teams %}
+        - name: 'team-{{ team.name }}'
+          # Team {{ team.display_name }} receiver
+          # Configure with team-specific webhook/email
+          # Examples:
+          #   - slack_configs:
+          #       - api_url: 'https://hooks.slack.com/services/...'
+          #         channel: '#{{ team.name }}-alerts'
+          #   - email_configs:
+          #       - to: '{{ team.name }}-team@example.com'
+      {% endfor %}
+
+      # Inhibition rules (suppress certain alerts)
+      inhibit_rules:
+        # If Jenkins master is down, suppress queue/executor alerts
+        - source_match:
+            severity: critical
+            alertname: JenkinsMasterDown
+          target_match_re:
+            alertname: 'Jenkins(Queue|Executor).*'
+          equal: ['team', 'instance']
+
+    dest: "{{ monitoring_home_dir }}/alertmanager/routing-{{ ansible_date_time.date }}.yml.j2"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  tags: ['monitoring', 'phase6-team-isolation', 'alertmanager', 'routing']
+  when: alertmanager_enabled | default(false)
+
+- name: Display Alertmanager team routing configuration
+  debug:
+    msg: |
+      Alertmanager Team-Based Routing Configured:
+
+      Route Strategy:
+      - Group alerts by: team, alertname, instance
+      - Group wait: 10s (wait for similar alerts before sending)
+      - Repeat interval: 12h (repeat unresolved alerts)
+
+      Team-Specific Routes:
+      {% for team in jenkins_teams %}
+      - Team: {{ team.display_name }} ({{ team.name }})
+        Receiver: team-{{ team.name }}
+        Alert Selector: team="{{ team.name }}"
+      {% endfor %}
+
+      Inhibition Rules:
+      - If Jenkins master is critical down, suppress queue/executor alerts
+      - Prevents alert storms
+
+      Receiver Configuration:
+      Each team receiver needs to be configured with:
+      - Slack webhook URL OR
+      - Email address OR
+      - Other notification channel
+
+      Action Items:
+      1. Configure team-specific webhook URLs in Alertmanager config
+      2. Update email addresses for each team
+      3. Test alert routing per team
+
+  tags: ['monitoring', 'phase6-team-isolation', 'alertmanager', 'display']

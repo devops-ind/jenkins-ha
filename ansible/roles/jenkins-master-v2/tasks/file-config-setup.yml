@@ -1,0 +1,113 @@
+---
+# File-Based Configuration Management for Dynamic JCasC Updates (jenkins-master-v2)
+# Uses file copying instead of symlinks to avoid Docker mount resolution issues
+
+- name: Create main config directory for file-based management
+  file:
+    path: "/var/jenkins/{{ item.team_name }}/configs"
+    state: directory
+    owner: "{{ jenkins_user_id | default(1000) }}"
+    group: "{{ jenkins_group_id | default(1000) }}"
+    mode: '0755'
+  loop: "{{ jenkins_teams_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  tags: ['config-files', 'file-setup']
+
+- name: Create backup directory
+  file:
+    path: "/var/jenkins/{{ item.team_name }}/backups"
+    state: directory
+    owner: "{{ jenkins_user_id | default(1000) }}"
+    group: "{{ jenkins_group_id | default(1000) }}"
+    mode: '0755'
+  loop: "{{ jenkins_teams_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  tags: ['config-files', 'file-setup']
+
+- name: Deploy blue configuration file
+  copy:
+    src: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}/blue/jenkins.yaml"
+    dest: "/var/jenkins/{{ item.team_name }}/configs/blue.yaml"
+    remote_src: yes
+    owner: "{{ jenkins_user_id | default(1000) }}"
+    group: "{{ jenkins_group_id | default(1000) }}"
+    mode: '0644'
+  loop: "{{ jenkins_teams_config }}"
+  loop_control:
+    label: "{{ item.team_name }}/blue.yaml"
+  tags: ['config-files', 'file-setup']
+
+- name: Deploy green configuration file
+  copy:
+    src: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}/green/jenkins.yaml"
+    dest: "/var/jenkins/{{ item.team_name }}/configs/green.yaml"
+    remote_src: yes
+    owner: "{{ jenkins_user_id | default(1000) }}"
+    group: "{{ jenkins_group_id | default(1000) }}"
+    mode: '0644'
+  loop: "{{ jenkins_teams_config }}"
+  loop_control:
+    label: "{{ item.team_name }}/green.yaml"
+  tags: ['config-files', 'file-setup']
+
+- name: Check if current config file exists
+  stat:
+    path: "/var/jenkins/{{ item.team_name }}/configs/current.yaml"
+  register: current_config_stats
+  loop: "{{ jenkins_teams_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  tags: ['config-files', 'file-setup']
+
+- name: Create initial current.yaml from blue (if not exists)
+  copy:
+    src: "/var/jenkins/{{ item.item.team_name }}/configs/blue.yaml"
+    dest: "/var/jenkins/{{ item.item.team_name }}/configs/current.yaml"
+    remote_src: yes
+    owner: "{{ jenkins_user_id | default(1000) }}"
+    group: "{{ jenkins_group_id | default(1000) }}"
+    mode: '0644'
+  loop: "{{ current_config_stats.results }}"
+  loop_control:
+    label: "{{ item.item.team_name }}/current.yaml"
+  when: not item.stat.exists
+  tags: ['config-files', 'file-setup']
+
+- name: Create state tracking file for file-based config
+  copy:
+    content: |
+      {
+        "config_mode": "file-copy",
+        "active_config": "blue",
+        "last_update": "{{ ansible_date_time.iso8601 }}",
+        "team_name": "{{ item.team_name }}",
+        "container_name": "jenkins-{{ item.team_name }}",
+        "config_file": "/var/jenkins/{{ item.team_name }}/configs/current.yaml"
+      }
+    dest: "/var/jenkins/{{ item.team_name }}/config-state.json"
+    owner: "{{ jenkins_user_id | default(1000) }}"
+    group: "{{ jenkins_group_id | default(1000) }}"
+    mode: '0644'
+  loop: "{{ jenkins_teams_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  tags: ['config-files', 'file-setup']
+
+- name: Display file-based configuration summary
+  debug:
+    msg: |
+      File-Based Configuration for {{ item.team_name }}:
+      - Blue config: /var/jenkins/{{ item.team_name }}/configs/blue.yaml
+      - Green config: /var/jenkins/{{ item.team_name }}/configs/green.yaml
+      - Current (active): /var/jenkins/{{ item.team_name }}/configs/current.yaml
+      - Backups: /var/jenkins/{{ item.team_name }}/backups/
+      - Container mount: /var/jenkins/{{ item.team_name }}/configs/current.yaml:/var/jenkins_home/casc_configs/jenkins.yaml:ro
+
+      To switch configs: cp blue.yaml current.yaml (or green.yaml current.yaml)
+      Then trigger hot-reload via JCasC API
+  loop: "{{ jenkins_teams_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  tags: ['config-files', 'file-setup']

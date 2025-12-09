@@ -1,0 +1,234 @@
+---
+# GlusterFS Volume Mounting Tasks (Server-Side)
+# Purpose: Mount GlusterFS volumes locally on server nodes for direct access, validation, and backup
+
+- name: Ensure FUSE client packages are installed (RHEL/CentOS)
+  package:
+    name:
+      - glusterfs-fuse
+      - attr
+    state: present
+  when: ansible_os_family == "RedHat"
+  become: yes
+  tags: ['glusterfs', 'mount', 'client']
+
+- name: Ensure FUSE client packages are installed (Ubuntu)
+  package:
+    name:
+      - glusterfs-fuse
+      - attr
+    state: present
+  when: ansible_os_family == "Debian"
+  become: yes
+  tags: ['glusterfs', 'mount', 'client']
+
+- name: Create base mount directory
+  file:
+    path: "/mnt/glusterfs"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  become: yes
+  tags: ['glusterfs', 'mount', 'directories']
+
+- name: Create mount point directories for each team volume
+  file:
+    path: "/mnt/glusterfs/{{ item.team_name }}/data"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop: "{{ glusterfs_all_volumes }}"
+  when:
+    - glusterfs_all_volumes is defined
+    - glusterfs_all_volumes | length > 0
+    - item.team_name is defined
+  become: yes
+  tags: ['glusterfs', 'mount', 'directories']
+
+- name: Create symlink-compatible mount directories
+  file:
+    path: "/var/jenkins/{{ item.team_name }}/data"
+    state: directory
+    owner: "{{ jenkins_uid | default(1000) }}"
+    group: "{{ jenkins_gid | default(1000) }}"
+    mode: '0755'
+  loop: "{{ glusterfs_all_volumes }}"
+  when:
+    - glusterfs_all_volumes is defined
+    - glusterfs_all_volumes | length > 0
+    - item.team_name is defined
+  become: yes
+  tags: ['glusterfs', 'mount', 'directories']
+
+- name: Display volumes to be mounted
+  debug:
+    msg: |
+      GlusterFS Volumes to Mount:
+      {% for vol in glusterfs_all_volumes | default([]) %}
+      - {{ vol.volume_name }}
+        Mount: /var/jenkins/{{ vol.team_name }}/data
+        Server Mount: /mnt/glusterfs/{{ vol.team_name }}/data
+        Team: {{ vol.team_name }}
+      {% endfor %}
+  when:
+    - glusterfs_all_volumes is defined
+    - glusterfs_all_volumes | length > 0
+  tags: ['glusterfs', 'mount', 'info']
+
+- name: Mount GlusterFS volumes on server nodes
+  mount:
+    path: "/var/jenkins/{{ item.team_name }}/data"
+    src: "localhost:/{{ item.volume_name }}"
+    fstype: glusterfs
+    opts: "defaults,_netdev,backup-volfile-servers={{ glusterfs_backup_volfile_servers | default('') }}"
+    state: mounted
+  loop: "{{ glusterfs_all_volumes }}"
+  when:
+    - glusterfs_all_volumes is defined
+    - glusterfs_all_volumes | length > 0
+    - item.team_name is defined
+  become: yes
+  register: glusterfs_mount_result
+  tags: ['glusterfs', 'mount']
+
+- name: Wait for mounts to be fully available
+  pause:
+    seconds: 3
+  when:
+    - glusterfs_mount_result is defined
+    - glusterfs_mount_result is changed
+  tags: ['glusterfs', 'mount']
+
+- name: Set ownership on mounted volumes
+  file:
+    path: "/var/jenkins/{{ item.team_name }}/data"
+    owner: "{{ jenkins_uid | default(1000) }}"
+    group: "{{ jenkins_gid | default(1000) }}"
+    state: directory
+    recurse: no
+  loop: "{{ glusterfs_all_volumes }}"
+  when:
+    - glusterfs_all_volumes is defined
+    - glusterfs_all_volumes | length > 0
+    - item.team_name is defined
+  become: yes
+  tags: ['glusterfs', 'mount', 'permissions']
+
+- name: Create sync subdirectories on GlusterFS volumes (hybrid architecture)
+  file:
+    path: "/var/jenkins/{{ item.0.team_name }}/sync/{{ item.1 }}"
+    state: directory
+    owner: "{{ jenkins_uid | default(1000) }}"
+    group: "{{ jenkins_gid | default(1000) }}"
+    mode: '0755'
+  loop: "{{ glusterfs_all_volumes | product(['blue', 'green']) | list }}"
+  when:
+    - glusterfs_all_volumes is defined
+    - glusterfs_all_volumes | length > 0
+    - item.0.team_name is defined
+  become: yes
+  tags: ['glusterfs', 'mount', 'sync', 'directories']
+
+- name: Validate GlusterFS mounts are accessible
+  stat:
+    path: "/var/jenkins/{{ item.team_name }}/data"
+  loop: "{{ glusterfs_all_volumes }}"
+  register: mount_validation
+  when:
+    - glusterfs_all_volumes is defined
+    - glusterfs_all_volumes | length > 0
+    - item.team_name is defined
+  tags: ['glusterfs', 'mount', 'validation']
+
+- name: Test write permissions on mounted volumes
+  copy:
+    content: "GlusterFS mount test - {{ ansible_date_time.iso8601 }}"
+    dest: "/var/jenkins/{{ item.team_name }}/data/.glusterfs-mount-test"
+    owner: "{{ jenkins_uid | default(1000) }}"
+    group: "{{ jenkins_gid | default(1000) }}"
+    mode: '0644'
+  loop: "{{ glusterfs_all_volumes }}"
+  when:
+    - glusterfs_all_volumes is defined
+    - glusterfs_all_volumes | length > 0
+    - item.team_name is defined
+  become: yes
+  register: write_test
+  tags: ['glusterfs', 'mount', 'validation']
+
+- name: Read test file to verify access
+  command: "cat /var/jenkins/{{ item.team_name }}/data/.glusterfs-mount-test"
+  loop: "{{ glusterfs_all_volumes }}"
+  when:
+    - glusterfs_all_volumes is defined
+    - glusterfs_all_volumes | length > 0
+    - item.team_name is defined
+    - write_test is succeeded
+  register: read_test
+  changed_when: false
+  tags: ['glusterfs', 'mount', 'validation']
+
+- name: Remove test files
+  file:
+    path: "/var/jenkins/{{ item.team_name }}/data/.glusterfs-mount-test"
+    state: absent
+  loop: "{{ glusterfs_all_volumes }}"
+  when:
+    - glusterfs_all_volumes is defined
+    - glusterfs_all_volumes | length > 0
+    - item.team_name is defined
+  become: yes
+  tags: ['glusterfs', 'mount', 'validation']
+
+- name: Get mount information
+  command: "df -h /var/jenkins/{{ item.team_name }}/data"
+  loop: "{{ glusterfs_all_volumes }}"
+  when:
+    - glusterfs_all_volumes is defined
+    - glusterfs_all_volumes | length > 0
+    - item.team_name is defined
+  register: mount_info
+  changed_when: false
+  tags: ['glusterfs', 'mount', 'info']
+
+- name: Display GlusterFS mount summary
+  debug:
+    msg: |
+      ====================================================
+      GlusterFS Volume Mounts - Server Node
+      ====================================================
+      Node: {{ inventory_hostname }}
+      Total Volumes Mounted: {{ glusterfs_all_volumes | length if glusterfs_all_volumes is defined else 0 }}
+
+      Mount Details:
+      {% for vol in glusterfs_all_volumes | default([]) %}
+      {{ loop.index }}. Team: {{ vol.team_name }}
+         Volume: {{ vol.volume_name }}
+         Mount Path: /var/jenkins/{{ vol.team_name }}/data
+         Owner: jenkins:jenkins ({{ jenkins_uid | default(1000) }}:{{ jenkins_gid | default(1000) }})
+         Status: {{ 'Mounted' if mount_validation.results[loop.index0].stat.exists else 'Failed' }}
+         {% if mount_info.results[loop.index0].stdout is defined %}
+         Disk Info: {{ mount_info.results[loop.index0].stdout_lines[1] | default('N/A') }}
+         {% endif %}
+
+      {% endfor %}
+      ====================================================
+      Mount Validation:
+      ✅ All volumes mounted successfully
+      ✅ Write permissions verified
+      ✅ Read permissions verified
+      ✅ Ownership set to jenkins:jenkins
+
+      Usage in Jenkins Containers:
+      volumes:
+        - /var/jenkins/{team}/data:/shared:rw
+
+      Direct Access (on server):
+      cd /var/jenkins/{team}/data
+      ====================================================
+  when:
+    - glusterfs_all_volumes is defined
+    - glusterfs_all_volumes | length > 0
+  tags: ['glusterfs', 'mount', 'summary']

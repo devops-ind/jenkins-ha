@@ -1,0 +1,262 @@
+================================================================================
+DASHBOARD DEPLOYMENT ARCHITECTURE - VISUAL OVERVIEW
+================================================================================
+
+SYSTEM 1: JINJA2 TEMPLATING (Phase 3 - WORKING)
+===============================================
+
+    ansible/roles/monitoring/
+    ├── templates/dashboards/
+    │   ├── infrastructure-health.json.j2
+    │   ├── jenkins-overview.json.j2
+    │   ├── jenkins-builds.json.j2
+    │   ├── jenkins-dynamic-agents.json.j2
+    │   ├── jenkins-performance-health.json.j2
+    │   ├── jenkins-build-statistics.json.j2
+    │   ├── jenkins-advanced-overview.json.j2
+    │   ├── jenkins-build-logs.json.j2
+    │   ├── github-jira-metrics.json.j2
+    │   ├── security-metrics.json.j2
+    │   ├── node-exporter-full.json.j2
+    │   └── dashboard.yml.j2 (provisioning)
+    │
+    └── defaults/main.yml
+        └── grafana_dashboards: registry
+            └── template_file: "infrastructure-health.json.j2" (includes .j2!)
+
+    TASK: phase3-servers/grafana.yml (lines 110-125)
+    ┌─────────────────────────────────────────────────┐
+    │ 1. Read template_file from registry              │
+    │ 2. template: dashboards/{{ item.name }}.j2       │
+    │ 3. dest: {{ monitoring_home_dir }}/              │
+    │          grafana/dashboards/{{ item.id }}.json   │
+    │ 4. Render with team variables                    │
+    │ 5. Restart Grafana (notify)                      │
+    └─────────────────────────────────────────────────┘
+                            |
+                            v
+    /opt/monitoring/grafana/dashboards/
+    ├── infrastructure-health.json          (rendered from .j2)
+    ├── jenkins-overview.json               (rendered from .j2)
+    ├── teams/
+    │   ├── devops/
+    │   │   ├── jenkins-overview-devops.json
+    │   │   ├── jenkins-builds-devops.json
+    │   │   └── ...
+    │   ├── dev-qa/
+    │   │   └── ...
+    │   └── ...
+    └── ... (more dashboards)
+
+    MOUNT: /opt/monitoring/grafana/dashboards → /var/lib/grafana/dashboards
+
+    Grafana Provisioning:
+    /etc/grafana/provisioning/dashboards/dashboard.yml
+    ┌────────────────────────────────────┐
+    │ providers:                          │
+    │   - path: /var/lib/grafana/        │
+    │          dashboards                │
+    │   - updateIntervalSeconds: 10      │
+    └────────────────────────────────────┘
+                |
+                v
+    Grafana discovers all .json files every 10 seconds
+    ✓ Users see dashboards in Grafana
+    ✓ Working correctly
+
+
+SYSTEM 2: API DEPLOYMENT (Phase 5 - BROKEN)
+============================================
+
+    TASK: phase4-configuration/dashboards.yml (lines 54-125)
+    
+    Step 1: Generate list (lines 54-81)
+    ┌─────────────────────────────────────────┐
+    │ for dashboard_id, config in             │
+    │     grafana_dashboards.items():         │
+    │   file_path: "{{ config.template_file  │
+    │   }}"  # ← BUG: INCLUDES .J2!           │
+    │                                         │
+    │   file_path becomes:                   │
+    │   "infrastructure-health.json.j2"      │
+    │   ✗ WRONG - this is source file!      │
+    │   ✓ Should be: "infrastructure-        │
+    │     health.json" (output file)         │
+    └─────────────────────────────────────────┘
+                |
+                v
+    Step 2: Read files (lines 118-125)
+    ┌─────────────────────────────────────────┐
+    │ slurp:                                  │
+    │   src: {{ monitoring_home_dir }}/       │
+    │        grafana/dashboards/{{            │
+    │        item.file_path | default(        │
+    │        item.template_file) }}           │
+    │                                         │
+    │ Attempts to read:                       │
+    │ /opt/monitoring/grafana/dashboards/     │
+    │ infrastructure-health.json.j2           │
+    │ ✗ File doesn't exist!                   │
+    │ ✓ Should read: ...infrastructure-       │
+    │   health.json (templated output)        │
+    └─────────────────────────────────────────┘
+                |
+                v
+            ✗ FAILS
+            Error: File not found
+            JSON parsing fails
+            Phase 5 never completes
+
+
+SYSTEM 3: GRAFONNET COMPILATION (Phase 5.5 - PARTIAL SUCCESS)
+=============================================================
+
+    ansible/roles/monitoring/
+    ├── files/dashboards/jsonnet/
+    │   ├── infrastructure-health.jsonnet
+    │   ├── jenkins-overview.jsonnet
+    │   ├── lib/common.libsonnet (shared)
+    │   └── jsonnetfile.json (grafonnet deps)
+    │
+    └── defaults/main.yml
+        ├── grafonnet_enabled: true
+        ├── grafonnet_project_dir: "/opt/grafonnet"
+        └── grafonnet_output_dir: "/opt/monitoring/
+                                   grafana/dashboards/generated"
+
+    TASK: phase4-dashboards/setup-grafonnet.yml
+    ┌──────────────────────────────────────────┐
+    │ 1. Create /opt/grafonnet/                │
+    │ 2. Copy jsonnet files                    │
+    │ 3. jb install (install dependencies)     │
+    └──────────────────────────────────────────┘
+                |
+                v
+
+    TASK: phase4-dashboards/generate-dashboards.yml
+    ┌──────────────────────────────────────────┐
+    │ 1. find *.jsonnet files                  │
+    │ 2. jsonnet -J vendor $file -o $output    │
+    │ 3. Validate JSON with python             │
+    │ 4. Set ownership/permissions             │
+    └──────────────────────────────────────────┘
+                |
+                v
+    /opt/monitoring/grafana/dashboards/
+    └── generated/
+        ├── infrastructure-health.json    (compiled)
+        ├── jenkins-overview.json         (compiled)
+        └── .backups/                     (7 versions)
+
+    PROBLEM: Output in subdirectory
+    ┌──────────────────────────────────────┐
+    │ Grafana provisioning config points   │
+    │ to: /var/lib/grafana/dashboards      │
+    │                                      │
+    │ Grafonnet outputs to:                │
+    │ /var/lib/grafana/dashboards/         │
+    │ generated/  ← subdirectory!          │
+    │                                      │
+    │ Does Grafana discover subdirs?       │
+    │ UNCLEAR - needs validation!          │
+    │                                      │
+    │ ALSO: Name collision with Phase 3    │
+    │ Both generate "infrastructure-       │
+    │ health.json" - Grafonnet overwrites! │
+    └──────────────────────────────────────┘
+
+    ✓ Generates successfully
+    ? Discovery unclear
+    ✗ Overwrites Phase 3 if same name
+
+
+ORPHANED SYSTEMS
+================
+
+LEGACY STATIC DASHBOARDS (monitoring/grafana/dashboards/)
+┌────────────────────────────────────┐
+│ jenkins-overview.json              │ 489 bytes, 1 panel (outdated)
+│ jenkins-blue-green.json            │ 13,126 bytes
+│ jenkins-comprehensive.json         │ 15,622 bytes
+│                                    │
+│ Status: NEVER DEPLOYED             │
+│ Reason: Not referenced in any task │
+│ Impact: Confusion, dead code       │
+└────────────────────────────────────┘
+
+DEPRECATED BACKUP ROLE (ansible/roles/monitoring.backup/)
+┌────────────────────────────────────┐
+│ 39 files (old architecture copy)   │
+│ templates/dashboards/  (10 files)  │
+│ tasks/                             │
+│ defaults/main.yml                  │
+│                                    │
+│ Status: NEVER IMPORTED IN site.yml │
+│ Reason: Replaced by monitoring/    │
+│ Impact: Confuses developers        │
+└────────────────────────────────────┘
+
+
+CURRENT EXECUTION FLOW (WITH BUGS)
+==================================
+
+site.yml invokes: ansible/roles/monitoring/tasks/main.yml
+
+Phase 3: Grafana Server
+─────────────────────
+  ✓ phase3-servers/grafana.yml
+    ├─ Create Grafana directories
+    ├─ Template provisioning config
+    └─ Template & deploy 12 dashboards (WORKING)
+       → /opt/monitoring/grafana/dashboards/{id}.json
+       → /opt/monitoring/grafana/dashboards/teams/{team}/{id}.json
+    ✓ SUCCESS: Dashboards deployed and discoverable
+
+Phase 5: Dashboard API Deployment
+──────────────────────────────────
+  ✗ phase4-configuration/dashboards.yml
+    ├─ Generate list (file_path has .j2 extension)
+    ├─ Try to read .j2 files as JSON
+    ├─ JSON parsing FAILS
+    └─ API deployment never completes
+    ✗ FAILURE: But doesn't affect Phase 3 success
+
+Phase 5.5: Grafonnet Compilation
+─────────────────────────────────
+  ✓ phase4-dashboards/setup-grafonnet.yml
+    └─ Setup environment (WORKING)
+  ✓ phase4-dashboards/generate-dashboards.yml
+    └─ Compile Jsonnet files (WORKING)
+       → /opt/monitoring/grafana/dashboards/generated/{name}.json
+    ? Discovery unclear (file path might not be watched)
+    ? Overwrites Phase 3 if same filename
+    ? Partial success
+
+
+VISIBLE TO USERS
+================
+
+In Grafana:
+  ✓ All 12 Jinja2 dashboards from Phase 3
+  ? 2 Grafonnet dashboards (if discovered)
+  ✗ API deployment never happens (but not needed, Phase 3 works)
+  ✗ Legacy dashboards never used
+
+Result: Dashboards work, but architecture is confusing
+
+
+KEY INSIGHT
+===========
+
+Phase 3 (Jinja2) works perfectly fine.
+Phase 5 (API) is broken but unnecessary (Phase 3 already deployed everything).
+Phase 5.5 (Grafonnet) works but not integrated.
+
+The bug in Phase 5 doesn't break the system because:
+  1. Phase 3 already deployed all dashboards via file-based provisioning
+  2. Phase 5 fails but doesn't affect Phase 3's success
+  3. Grafana already discovered dashboards from Phase 3
+
+But it's still a bug that should be fixed or removed.
+
+================================================================================

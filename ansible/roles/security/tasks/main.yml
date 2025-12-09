@@ -25,7 +25,7 @@
 # SSL/TLS Certificate Management
 - name: Include SSL certificate tasks
   include_tasks: ssl-certificates.yml
-  when: ssl_enabled | default(true)
+  when: ssl_enabled | default(false)
   tags: ['security', 'ssl', 'certificates']
 
 - name: Configure fail2ban for SSH protection

@@ -1,0 +1,382 @@
+---
+# Infrastructure Upgrade Handler
+# Handles zero-downtime infrastructure upgrades (Ansible roles, configurations, networking)
+
+- name: Execute infrastructure upgrade
+  block:
+    - name: Prepare infrastructure upgrade environment
+      set_fact:
+        infra_upgrade_teams: "{{ team_list }}"
+        infrastructure_changes: "{{ infrastructure_changes | default({}) }}"
+
+    - name: Analyze infrastructure changes
+      block:
+        - name: Create infrastructure backup
+          script: >-
+            {{ jenkins_home_dir }}/scripts/infrastructure-backup-creator.sh
+            --teams "{{ infra_upgrade_teams | join(',') }}"
+            --environment {{ upgrade_env }}
+            --backup-dir "{{ upgrade_workspace }}/infrastructure-backup"
+          register: infrastructure_backup
+
+        - name: Analyze configuration drift
+          script: >-
+            {{ jenkins_home_dir }}/scripts/config-drift-analyzer.sh
+            --teams "{{ infra_upgrade_teams | join(',') }}"
+            --environment {{ upgrade_env }}
+            --baseline "{{ upgrade_workspace }}/infrastructure-backup"
+          register: config_drift_analysis
+
+        - name: Validate infrastructure compatibility
+          script: >-
+            {{ jenkins_home_dir }}/scripts/infrastructure-compatibility-validator.sh
+            --teams "{{ infra_upgrade_teams | join(',') }}"
+            --environment {{ upgrade_env }}
+            --changes "{{ infrastructure_changes | to_json }}"
+          register: infrastructure_compatibility
+
+        - name: Check resource requirements
+          script: >-
+            {{ jenkins_home_dir }}/scripts/resource-requirement-checker.sh
+            --teams "{{ infra_upgrade_teams | join(',') }}"
+            --environment {{ upgrade_env }}
+            --host {{ ansible_hostname }}
+          register: resource_check
+
+        - name: Display infrastructure analysis results
+          debug:
+            msg: |
+              🏗️ Infrastructure Analysis Results:
+              ===================================
+              Backup: {{ 'SUCCESS' if infrastructure_backup.rc == 0 else 'FAILED' }}
+              Config Drift: {{ 'ANALYZED' if config_drift_analysis.rc == 0 else 'ANALYSIS_FAILED' }}
+              Compatibility: {{ 'COMPATIBLE' if infrastructure_compatibility.rc == 0 else 'INCOMPATIBLE' }}
+              Resources: {{ 'SUFFICIENT' if resource_check.rc == 0 else 'INSUFFICIENT' }}
+              ===================================
+
+        - name: Abort on infrastructure validation failure
+          fail:
+            msg: |
+              ❌ Infrastructure validation failed!
+              
+              Validation issues:
+              {% if infrastructure_backup.rc != 0 %}
+              - Infrastructure backup creation failed
+              {% endif %}
+              {% if config_drift_analysis.rc != 0 %}
+              - Configuration drift analysis failed
+              {% endif %}
+              {% if infrastructure_compatibility.rc != 0 %}
+              - Infrastructure compatibility check failed
+              {% endif %}
+              {% if resource_check.rc != 0 %}
+              - Resource requirement check failed
+              {% endif %}
+          when: >
+            infrastructure_backup.rc != 0 or
+            config_drift_analysis.rc != 0 or
+            infrastructure_compatibility.rc != 0 or
+            resource_check.rc != 0
+
+    - name: Execute infrastructure changes
+      block:
+        - name: Apply Ansible role updates
+          block:
+            - name: Update jenkins-master-v2 role configuration
+              script: >-
+                {{ jenkins_home_dir }}/scripts/role-config-updater.sh
+                --role jenkins-master-v2
+                --teams "{{ infra_upgrade_teams | join(',') }}"
+                --environment {{ upgrade_env }}
+                --changes "{{ infrastructure_changes.jenkins_master | default({}) | to_json }}"
+              register: jenkins_role_update
+              when: infrastructure_changes.jenkins_master is defined
+
+            - name: Update high-availability-v2 role configuration
+              script: >-
+                {{ jenkins_home_dir }}/scripts/role-config-updater.sh
+                --role high-availability-v2
+                --teams "{{ infra_upgrade_teams | join(',') }}"
+                --environment {{ upgrade_env }}
+                --changes "{{ infrastructure_changes.high_availability | default({}) | to_json }}"
+              register: ha_role_update
+              when: infrastructure_changes.high_availability is defined
+
+            - name: Update monitoring role configuration
+              script: >-
+                {{ jenkins_home_dir }}/scripts/role-config-updater.sh
+                --role monitoring
+                --teams "{{ infra_upgrade_teams | join(',') }}"
+                --environment {{ upgrade_env }}
+                --changes "{{ infrastructure_changes.monitoring | default({}) | to_json }}"
+              register: monitoring_role_update
+              when: infrastructure_changes.monitoring is defined
+
+        - name: Apply network configuration changes
+          block:
+            - name: Update Docker network configuration
+              script: >-
+                {{ jenkins_home_dir }}/scripts/network-config-updater.sh
+                --teams "{{ infra_upgrade_teams | join(',') }}"
+                --environment {{ upgrade_env }}
+                --network-changes "{{ infrastructure_changes.networking | default({}) | to_json }}"
+              register: network_config_update
+              when: infrastructure_changes.networking is defined
+
+            - name: Update HAProxy configuration
+              script: >-
+                {{ jenkins_home_dir }}/scripts/haproxy-config-updater.sh
+                --teams "{{ infra_upgrade_teams | join(',') }}"
+                --environment {{ upgrade_env }}
+                --haproxy-changes "{{ infrastructure_changes.haproxy | default({}) | to_json }}"
+              register: haproxy_config_update
+              when: infrastructure_changes.haproxy is defined
+
+        - name: Apply security configuration updates
+          block:
+            - name: Update security policies
+              script: >-
+                {{ jenkins_home_dir }}/scripts/security-policy-updater.sh
+                --teams "{{ infra_upgrade_teams | join(',') }}"
+                --environment {{ upgrade_env }}
+                --security-changes "{{ infrastructure_changes.security | default({}) | to_json }}"
+              register: security_policy_update
+              when: infrastructure_changes.security is defined
+
+            - name: Update SSL/TLS configuration
+              script: >-
+                {{ jenkins_home_dir }}/scripts/ssl-config-updater.sh
+                --teams "{{ infra_upgrade_teams | join(',') }}"
+                --environment {{ upgrade_env }}
+                --ssl-changes "{{ infrastructure_changes.ssl | default({}) | to_json }}"
+              register: ssl_config_update
+              when: infrastructure_changes.ssl is defined
+
+        - name: Apply container configuration changes
+          block:
+            - name: Update container runtime configuration
+              script: >-
+                {{ jenkins_home_dir }}/scripts/container-config-updater.sh
+                --teams "{{ infra_upgrade_teams | join(',') }}"
+                --environment {{ upgrade_env }}
+                --container-changes "{{ infrastructure_changes.containers | default({}) | to_json }}"
+              register: container_config_update
+              when: infrastructure_changes.containers is defined
+
+            - name: Restart affected containers
+              docker_container:
+                name: "jenkins-{{ item }}-{{ upgrade_env }}"
+                state: started
+                restart: yes
+              loop: "{{ infra_upgrade_teams }}"
+              register: container_restart
+              when: restart_containers | default(true)
+
+        - name: Wait for services to stabilize
+          pause:
+            seconds: 45
+
+    - name: Validate infrastructure changes
+      block:
+        - name: Verify container health after changes
+          script: >-
+            {{ jenkins_home_dir }}/scripts/infrastructure-health-validator.sh
+            --team {{ item }}
+            --environment {{ upgrade_env }}
+            --check-type comprehensive
+          register: infrastructure_health_check
+          loop: "{{ infra_upgrade_teams }}"
+          retries: 5
+          delay: 15
+
+        - name: Validate network connectivity
+          script: >-
+            {{ jenkins_home_dir }}/scripts/network-connectivity-validator.sh
+            --teams "{{ infra_upgrade_teams | join(',') }}"
+            --environment {{ upgrade_env }}
+          register: network_connectivity_check
+
+        - name: Validate security configuration
+          script: >-
+            {{ jenkins_home_dir }}/scripts/security-config-validator.sh
+            --teams "{{ infra_upgrade_teams | join(',') }}"
+            --environment {{ upgrade_env }}
+          register: security_config_check
+
+        - name: Test load balancer functionality
+          script: >-
+            {{ jenkins_home_dir }}/scripts/load-balancer-functional-tester.sh
+            --teams "{{ infra_upgrade_teams | join(',') }}"
+            --environment {{ upgrade_env }}
+          register: load_balancer_test
+
+        - name: Validate monitoring integration
+          script: >-
+            {{ jenkins_home_dir }}/scripts/monitoring-integration-validator.sh
+            --teams "{{ infra_upgrade_teams | join(',') }}"
+            --environment {{ upgrade_env }}
+          register: monitoring_integration_check
+
+        - name: Run infrastructure compliance check
+          script: >-
+            {{ jenkins_home_dir }}/scripts/infrastructure-compliance-checker.sh
+            --teams "{{ infra_upgrade_teams | join(',') }}"
+            --environment {{ upgrade_env }}
+            --compliance-framework enterprise
+          register: compliance_check
+
+        - name: Display infrastructure validation results
+          debug:
+            msg: |
+              🔧 Infrastructure Validation Results:
+              ====================================
+              {% for team in infra_upgrade_teams %}
+              Team {{ team }} Health: {{ 'PASS' if infrastructure_health_check.results[loop.index0].rc == 0 else 'FAIL' }}
+              {% endfor %}
+              Network Connectivity: {{ 'PASS' if network_connectivity_check.rc == 0 else 'FAIL' }}
+              Security Config: {{ 'PASS' if security_config_check.rc == 0 else 'FAIL' }}
+              Load Balancer: {{ 'FUNCTIONAL' if load_balancer_test.rc == 0 else 'ISSUES_DETECTED' }}
+              Monitoring: {{ 'INTEGRATED' if monitoring_integration_check.rc == 0 else 'INTEGRATION_FAILED' }}
+              Compliance: {{ 'COMPLIANT' if compliance_check.rc == 0 else 'NON_COMPLIANT' }}
+              ====================================
+
+        - name: Fail if infrastructure validation failed
+          fail:
+            msg: |
+              ❌ Infrastructure upgrade validation failed!
+              
+              Failed validations:
+              {% for result in infrastructure_health_check.results %}
+              {% if result.rc != 0 %}
+              - {{ infra_upgrade_teams[loop.index0] }}: Infrastructure health check failed
+              {% endif %}
+              {% endfor %}
+              {% if network_connectivity_check.rc != 0 %}
+              - Network connectivity validation failed
+              {% endif %}
+              {% if security_config_check.rc != 0 %}
+              - Security configuration validation failed
+              {% endif %}
+              {% if load_balancer_test.rc != 0 %}
+              - Load balancer functionality test failed
+              {% endif %}
+              {% if monitoring_integration_check.rc != 0 %}
+              - Monitoring integration validation failed
+              {% endif %}
+              {% if compliance_check.rc != 0 %}
+              - Compliance check failed
+              {% endif %}
+          when: >
+            infrastructure_health_check.results | selectattr('rc', 'ne', 0) | list | length > 0 or
+            network_connectivity_check.rc != 0 or
+            security_config_check.rc != 0 or
+            load_balancer_test.rc != 0 or
+            monitoring_integration_check.rc != 0 or
+            compliance_check.rc != 0
+
+    - name: Finalize infrastructure upgrade
+      block:
+        - name: Update infrastructure version tracking
+          script: >-
+            {{ jenkins_home_dir }}/scripts/infrastructure-version-tracker.sh
+            --teams "{{ infra_upgrade_teams | join(',') }}"
+            --environment {{ upgrade_env }}
+            --changes "{{ infrastructure_changes | to_json }}"
+          register: infrastructure_version_update
+
+        - name: Generate infrastructure change report
+          script: >-
+            {{ jenkins_home_dir }}/scripts/infrastructure-change-reporter.sh
+            --teams "{{ infra_upgrade_teams | join(',') }}"
+            --environment {{ upgrade_env }}
+            --backup-dir "{{ upgrade_workspace }}/infrastructure-backup"
+            --changes "{{ infrastructure_changes | to_json }}"
+          register: infrastructure_change_report
+
+        - name: Update configuration management database
+          script: >-
+            {{ jenkins_home_dir }}/scripts/cmdb-updater.sh
+            --teams "{{ infra_upgrade_teams | join(',') }}"
+            --environment {{ upgrade_env }}
+            --changes "{{ infrastructure_changes | to_json }}"
+          register: cmdb_update
+
+    - name: Record successful infrastructure upgrade
+      copy:
+        content: |
+          {
+            "timestamp": "{{ ansible_date_time.iso8601 }}",
+            "upgrade_type": "infrastructure",
+            "environment": "{{ upgrade_env }}",
+            "teams": {{ infra_upgrade_teams | to_json }},
+            "changes_applied": {{ infrastructure_changes | to_json }},
+            "deployment_successful": true,
+            "validation_passed": true,
+            "containers_restarted": {{ container_restart.results | length if container_restart is defined else 0 }},
+            "compliance_status": "{{ 'compliant' if compliance_check.rc == 0 else 'non_compliant' }}"
+          }
+        dest: "{{ upgrade_workspace }}/infrastructure-upgrade-success.json"
+        mode: '0644'
+
+  rescue:
+    - name: Handle infrastructure upgrade failure
+      block:
+        - name: Restore infrastructure backup
+          script: >-
+            {{ jenkins_home_dir }}/scripts/infrastructure-backup-restorer.sh
+            --teams "{{ infra_upgrade_teams | join(',') }}"
+            --environment {{ upgrade_env }}
+            --backup-dir "{{ upgrade_workspace }}/infrastructure-backup"
+            --restore-point latest
+          register: infrastructure_restore
+          ignore_errors: true
+
+        - name: Restart containers with restored configuration
+          docker_container:
+            name: "jenkins-{{ item }}-{{ upgrade_env }}"
+            state: started
+            restart: yes
+          loop: "{{ infra_upgrade_teams }}"
+          ignore_errors: true
+
+        - name: Wait for service recovery
+          pause:
+            seconds: 60
+
+        - name: Verify restoration success
+          script: >-
+            {{ jenkins_home_dir }}/scripts/infrastructure-restoration-validator.sh
+            --teams "{{ infra_upgrade_teams | join(',') }}"
+            --environment {{ upgrade_env }}
+          register: restore_verification
+          ignore_errors: true
+
+        - name: Log infrastructure upgrade failure
+          copy:
+            content: |
+              {
+                "timestamp": "{{ ansible_date_time.iso8601 }}",
+                "upgrade_type": "infrastructure",
+                "environment": "{{ upgrade_env }}",
+                "teams": {{ infra_upgrade_teams | to_json }},
+                "changes_attempted": {{ infrastructure_changes | to_json }},
+                "deployment_successful": false,
+                "failed_task": "{{ ansible_failed_task.name | default('unknown') }}",
+                "error_message": "{{ ansible_failed_result.msg | default('unknown error') }}",
+                "rollback_attempted": true,
+                "rollback_successful": {{ infrastructure_restore.rc == 0 if infrastructure_restore is defined else false }}
+              }
+            dest: "{{ upgrade_workspace }}/infrastructure-upgrade-failure.json"
+            mode: '0644'
+
+        - name: Re-raise infrastructure upgrade failure
+          fail:
+            msg: |
+              ❌ Infrastructure upgrade failed!
+              Environment: {{ upgrade_env }}
+              Teams: {{ infra_upgrade_teams | join(', ') }}
+              Changes: {{ infrastructure_changes.keys() | list | join(', ') }}
+              
+              Rollback Status: {{ 'SUCCESS' if infrastructure_restore.rc == 0 else 'FAILED' }}
+              
+              Check failure details: {{ upgrade_workspace }}/infrastructure-upgrade-failure.json

@@ -21,7 +21,7 @@ pipelineJob('Infrastructure/SSH-Key-Exchange') {
     ''')
     
     parameters {
-        stringParam('TARGET_HOSTS', '', 'Comma-separated list of target host IPs or hostnames (e.g., 192.168.1.10,server1.example.com)')
+        stringParam('TARGET_HOSTS', '', 'Comma-separated list of target host IPs or hostnames (e.g., 192.168.188.142,server1.example.com)')
         stringParam('SSH_USERNAME', 'root', 'Username for SSH connection to target hosts')
         credentialsParam('SSH_PRIVATE_KEY_ID') {
             type('com.cloudbees.jenkins.plugins.sshcredentials.impl.BasicSSHUserPrivateKey')

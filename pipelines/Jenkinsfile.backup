@@ -47,6 +47,29 @@ pipeline {
     }
     
     stages {
+        stage('Checkout Code') {
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "📦 Checking out repository..."
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                }
+
+                checkout scm
+
+                script {
+                    // Verify repository contents
+                    sh '''
+                        echo "✅ Repository checked out successfully"
+                        echo ""
+                        echo "Verifying required directories..."
+                        ls -la ansible/ || echo "Warning: ansible/ not found"
+                        ls -la scripts/ || echo "Warning: scripts/ not found"
+                    '''
+                }
+            }
+        }
+
         stage('Environment Setup') {
             steps {
                 script {

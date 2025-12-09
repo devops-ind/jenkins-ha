@@ -65,7 +65,7 @@ pipelineJob('Infrastructure/Infrastructure-Update') {
                 }
             }
             scriptPath('pipelines/Jenkinsfile.infrastructure-update')
-            lightweight(true)
+            lightweight(false)  // Full repository checkout required for ansible code
         }
     }
 }

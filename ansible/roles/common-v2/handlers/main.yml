@@ -1,0 +1,270 @@
+---
+# Handlers for common-v2 role (Podman-enhanced)
+
+- name: restart rsyslog
+  systemd:
+    name: rsyslog
+    state: restarted
+  listen: "restart rsyslog"
+  when: deployment_mode | default('local') not in ['devcontainer', 'local']
+
+- name: restart ntp
+  systemd:
+    name: "{{ ntp_service_name }}"
+    state: restarted
+    enabled: yes
+  listen: "restart ntp"
+  when: 
+    - common_ntp_enabled
+    - ntp_service_name is defined
+    - deployment_mode | default('local') not in ['devcontainer', 'local']
+
+- name: restart timesyncd
+  systemd:
+    name: systemd-timesyncd
+    state: restarted
+    enabled: yes
+  listen: "restart ntp"
+  when:
+    - ansible_os_family == "Debian"
+    - ansible_distribution_major_version|int >= 16
+    - deployment_mode | default('local') not in ['devcontainer', 'local']
+
+- name: restart chronyd
+  systemd:
+    name: chronyd
+    state: restarted
+    enabled: yes
+  listen: "restart ntp"
+  when:
+    - ansible_os_family == "RedHat"
+    - ansible_distribution_major_version|int >= 8
+    - deployment_mode | default('local') not in ['devcontainer', 'local']
+
+- name: restart podman system service
+  systemd:
+    name: podman.service
+    state: restarted
+    enabled: yes
+    daemon_reload: yes
+  listen: "restart container runtime"
+  when: 
+    - common_container_runtime == "podman"
+    - deployment_mode | default('local') not in ['devcontainer', 'local']
+
+- name: restart docker service
+  systemd:
+    name: docker
+    state: restarted
+    enabled: yes
+    daemon_reload: yes
+  listen: "restart container runtime"
+  when: 
+    - common_container_runtime == "docker"
+    - deployment_mode | default('local') not in ['devcontainer', 'local']
+
+- name: skip container runtime restart in devcontainer
+  debug:
+    msg: "Skipping {{ common_container_runtime }} service restart in devcontainer environment"
+  listen: "restart container runtime"
+  when: deployment_mode | default('local') in ['devcontainer', 'local']
+
+- name: restart podman socket
+  systemd:
+    name: podman.socket
+    state: restarted
+    enabled: yes
+    daemon_reload: yes
+  listen: "restart podman socket"
+  when: 
+    - common_container_runtime == "podman"
+    - common_enable_podman_socket
+    - deployment_mode | default('local') not in ['devcontainer', 'local']
+
+- name: restart user podman services
+  block:
+    - name: Get user Podman services
+      shell: >
+        systemctl --user list-units podman-* --no-legend | 
+        awk '{print $1}' | 
+        grep '\.service$' || true
+      register: user_podman_services
+      become_user: "{{ item }}"
+      loop: "{{ common_rootless_users + [common_monitoring_user] }}"
+      failed_when: false
+      changed_when: false
+
+    - name: Restart user Podman services
+      systemd:
+        name: "{{ service }}"
+        state: restarted
+        scope: user
+      become_user: "{{ user_service.item }}"
+      loop: "{{ user_podman_services.results }}"
+      loop_control:
+        loop_var: user_service
+      vars:
+        service: "{{ user_service.stdout.split('\n') | select | first | default('') }}"
+      when: 
+        - user_service.stdout is defined
+        - user_service.stdout | length > 0
+        - service | length > 0
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ common_monitoring_user_uid | default('1005') }}"
+  listen: "restart user podman services"
+  when: 
+    - common_container_runtime == "podman"
+    - common_enable_rootless_containers
+
+- name: reload systemd
+  systemd:
+    daemon_reload: yes
+  listen: "reload systemd"
+
+- name: restart monitoring containers
+  block:
+    - name: Stop monitoring containers
+      command: "{{ common_container_runtime }} stop {{ item }}"
+      loop: "{{ common_health_check_containers }}"
+      failed_when: false
+      changed_when: false
+
+    - name: Start monitoring containers
+      command: "{{ common_container_runtime }} start {{ item }}"
+      loop: "{{ common_health_check_containers }}"
+      failed_when: false
+      changed_when: false
+
+    - name: Wait for containers to be ready
+      pause:
+        seconds: 10
+  listen: "restart monitoring containers"
+
+- name: update subuid subgid
+  command: "{{ common_container_runtime }} system migrate"
+  listen: "update subuid subgid"
+  become_user: "{{ item }}"
+  loop: "{{ common_rootless_users + [common_monitoring_user] }}"
+  when: 
+    - common_container_runtime == "podman"
+    - common_enable_rootless_containers
+  failed_when: false
+
+- name: restart auditd
+  systemd:
+    name: auditd
+    state: restarted
+    enabled: yes
+  listen: "restart auditd"
+  when: 
+    - deployment_mode | default('local') not in ['devcontainer', 'local']
+    - ansible_facts.services['auditd.service'] is defined
+
+- name: skip auditd restart in devcontainer
+  debug:
+    msg: "Skipping auditd service restart - not available in development environment"
+  listen: "restart auditd"
+  when: deployment_mode | default('local') in ['devcontainer', 'local']
+
+- name: reload sysctl
+  command: sysctl --system
+  listen: "reload sysctl"
+  when: common_configure_networking
+
+- name: restart firewalld
+  systemd:
+    name: firewalld
+    state: restarted
+    enabled: yes
+  listen: "restart firewall"
+  when: 
+    - common_firewall_enabled
+    - ansible_os_family == "RedHat"
+    - deployment_mode | default('local') not in ['devcontainer', 'local']
+
+- name: restart ufw
+  systemd:
+    name: ufw
+    state: restarted
+    enabled: yes
+  listen: "restart firewall"
+  when: 
+    - common_firewall_enabled
+    - ansible_os_family == "Debian"
+    - deployment_mode | default('local') not in ['devcontainer', 'local']
+
+- name: prune container system
+  command: "{{ common_container_runtime }} system prune -af --volumes"
+  listen: "prune container system"
+  failed_when: false
+
+- name: prune user container systems
+  command: "{{ common_container_runtime }} system prune -af --volumes"
+  become_user: "{{ item }}"
+  loop: "{{ common_rootless_users + [common_monitoring_user] }}"
+  listen: "prune user container systems"
+  when: common_enable_rootless_containers
+  failed_when: false
+
+- name: restart container health check
+  systemd:
+    name: container-health-check.timer
+    state: restarted
+    enabled: yes
+    daemon_reload: yes
+  listen: "restart container health check"
+  when: 
+    - common_container_health_check_enabled
+    - deployment_mode | default('local') not in ['devcontainer', 'local']
+
+- name: update selinux context
+  command: restorecon -R {{ item }}
+  loop:
+    - /etc/containers
+    - "{{ common_monitoring_user_home }}"
+    - /opt/containers
+  listen: "update selinux context"
+  when: 
+    - ansible_selinux is defined
+    - ansible_selinux.status == "enabled"
+    - ansible_os_family == "RedHat"
+  failed_when: false
+
+- name: restart container networks
+  block:
+    - name: Remove existing container networks
+      command: "{{ common_container_runtime }} network rm {{ item.name }}"
+      loop: "{{ common_container_networks }}"
+      failed_when: false
+
+    - name: Recreate container networks
+      command: >
+        {{ common_container_runtime }} network create 
+        --driver bridge 
+        --subnet {{ item.subnet }} 
+        {{ item.name }}
+      loop: "{{ common_container_networks }}"
+      failed_when: false
+  listen: "restart container networks"
+
+- name: flush iptables container chains
+  command: "{{ item }}"
+  loop:
+    - "iptables -t nat -F PODMAN-MASQ || true"
+    - "iptables -t filter -F PODMAN-FORWARD || true"
+    - "iptables -t nat -F CNI-HOSTPORT-DNAT || true"
+  listen: "flush iptables container chains"
+  when: 
+    - common_container_runtime == "podman"
+    - ansible_os_family != "Darwin"
+  failed_when: false
+
+- name: restart logrotate
+  systemd:
+    name: logrotate.timer
+    state: restarted
+    enabled: yes
+  listen: "restart logrotate"
+  when: 
+    - common_logrotate_enabled
+    - deployment_mode | default('local') not in ['devcontainer', 'local']

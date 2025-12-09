@@ -1,0 +1,109 @@
+---
+# Phase 2 Modernization: Generate dashboards from Grafonnet source files
+# Compiles Jsonnet files to JSON and validates output
+
+- name: Find all Grafonnet dashboard files
+  find:
+    path: "{{ grafonnet_project_dir }}"
+    patterns: '*.jsonnet'
+    depth: 1
+  register: grafonnet_files
+  tags: ['monitoring', 'phase2-dashboards', 'generate']
+
+- name: Backup existing dashboards (version rotation)
+  shell: |
+    if [ -d "{{ grafonnet_output_dir }}" ]; then
+      BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
+      mkdir -p "{{ grafonnet_output_dir }}/.backups"
+      for file in {{ grafonnet_output_dir }}/*.json; do
+        if [ -f "$file" ] && [ ! -d "$file" ]; then
+          cp "$file" "{{ grafonnet_output_dir }}/.backups/$(basename $file)-${BACKUP_DATE}"
+        fi
+      done
+
+      # Keep only last N versions
+      find "{{ grafonnet_output_dir }}/.backups" -type f -name "*.json-*" | \
+        sort -r | tail -n +{{ grafonnet_backup_versions | default(7) + 1 }} | xargs -r rm
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+  tags: ['monitoring', 'phase2-dashboards', 'generate', 'backup']
+
+- name: Generate dashboards from Grafonnet files
+  shell: |
+    cd "{{ grafonnet_project_dir }}"
+    DASHBOARD_FILE="{{ item.path }}"
+    DASHBOARD_NAME=$(basename "${DASHBOARD_FILE}" .jsonnet)
+    OUTPUT_FILE="{{ grafonnet_output_dir }}/${DASHBOARD_NAME}.json"
+
+    echo "Compiling $DASHBOARD_NAME..."
+    jsonnet -J vendor "${DASHBOARD_FILE}" -o "${OUTPUT_FILE}"
+
+    if [ $? -eq 0 ]; then
+      echo "✓ Generated: ${OUTPUT_FILE}"
+    else
+      echo "✗ Failed to compile ${DASHBOARD_NAME}"
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  loop: "{{ grafonnet_files.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  register: dashboard_generation
+  tags: ['monitoring', 'phase2-dashboards', 'generate']
+
+- name: Validate generated dashboard JSON files
+  shell: |
+    ERROR_COUNT=0
+    for file in {{ grafonnet_output_dir }}/*.json; do
+      if [ -f "$file" ]; then
+        if ! python3 -m json.tool "$file" > /dev/null 2>&1; then
+          echo "ERROR: Invalid JSON in $file"
+          ERROR_COUNT=$((ERROR_COUNT + 1))
+        else
+          FILE_SIZE=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file")
+          echo "✓ $(basename $file): $(echo "scale=1; $FILE_SIZE / 1024" | bc)KB"
+        fi
+      fi
+    done
+
+    if [ $ERROR_COUNT -gt 0 ]; then
+      echo "ERROR: $ERROR_COUNT generated dashboard(s) have invalid JSON"
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+  tags: ['monitoring', 'phase2-dashboards', 'generate', 'validate']
+
+- name: Update dashboard file ownership and permissions
+  file:
+    path: "{{ grafonnet_output_dir }}"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+    recurse: yes
+    state: directory
+  tags: ['monitoring', 'phase2-dashboards', 'generate']
+
+- name: Display generated dashboards
+  debug:
+    msg: |
+      ========================================================
+      ✅ Grafonnet Dashboards Generated Successfully
+      ========================================================
+      Output Directory: {{ grafonnet_output_dir }}
+
+      Generated Dashboards:
+      {% for file in grafonnet_files.files %}
+      • {{ file.path | basename | replace('.jsonnet', '.json') }}
+      {% endfor %}
+
+      Backup Retention: {{ grafonnet_backup_versions | default(7) }} versions
+      Backup Location: {{ grafonnet_output_dir }}/.backups/
+
+      Next Step: Deploy dashboards to Grafana via API
+      ========================================================
+  tags: ['monitoring', 'phase2-dashboards', 'generate']

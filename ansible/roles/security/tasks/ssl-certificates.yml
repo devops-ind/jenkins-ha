@@ -92,6 +92,10 @@
   when: not ca_private_key_stat.stat.exists or ssl_force_regenerate | default(false)
   tags: ['ssl', 'ca', 'certificate']
 
+# Note: Wildcard SSL certificate generation moved to high-availability-v2 role
+# SSL certificates are now generated where they are consumed (HAProxy)
+# This improves role separation and reduces cross-role dependencies
+
 # Service-specific SSL certificates
 - name: Generate SSL certificates for services
   include_tasks: generate-service-certificate.yml

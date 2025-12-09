@@ -1,0 +1,105 @@
+---
+# Simplified Jenkins Master Role v2 - Internal Variables
+# Reduced complexity while maintaining functionality
+
+# ====================================
+# VERIFICATION HOST RESOLUTION
+# ====================================
+jenkins_verification_host: >-
+  {%- if deployment_mode | default('') in ['local', 'devcontainer'] or deployment_environment | default('') == 'local' -%}
+    localhost
+  {%- elif ansible_virtualization_type | default('') == 'docker' -%}
+    host.docker.internal
+  {%- elif ansible_connection | default('') == 'local' -%}
+    localhost
+  {%- elif hostvars[inventory_hostname]['ansible_host'] is defined -%}
+    {{ hostvars[inventory_hostname]['ansible_host'] }}
+  {%- elif ansible_default_ipv4 is defined and ansible_default_ipv4.address is defined -%}
+    {{ ansible_default_ipv4.address }}
+  {%- elif ansible_all_ipv4_addresses is defined and ansible_all_ipv4_addresses | length > 0 -%}
+    {{ ansible_all_ipv4_addresses[0] }}
+  {%- else -%}
+    localhost
+  {%- endif -%}
+
+# Host IP address for Jenkins containers and scripts (vars override)
+# Uses cascading fallback to handle various deployment scenarios
+jenkins_master_host_ip: >-
+  {%- if hostvars[inventory_hostname]['ansible_host'] is defined -%}
+  {{ hostvars[inventory_hostname]['ansible_host'] }}
+  {%- elif ansible_default_ipv4 is defined and ansible_default_ipv4.address is defined -%}
+  {{ ansible_default_ipv4.address }}
+  {%- elif ansible_all_ipv4_addresses is defined and ansible_all_ipv4_addresses | length > 0 -%}
+  {{ ansible_all_ipv4_addresses[0] }}
+  {%- elif host_fqdn is defined -%}
+  {{ host_fqdn }}
+  {%- else -%}
+  127.0.0.1
+  {%- endif -%}
+
+# ====================================
+# DOCKER SOCKET CONFIGURATION
+# ====================================
+jenkins_docker_socket: "/var/run/docker.sock"
+
+# ====================================
+# SIMPLIFIED PORT CONFIGURATION
+# ====================================
+# Note: Port mapping is handled dynamically in tasks based on team configuration
+# Active environment gets exposed ports, inactive environment has no exposed ports
+
+# ====================================
+# CONTAINER LABELS (UNIFIED)
+# ====================================
+jenkins_master_default_labels:
+  service: "jenkins-master"
+  managed_by: "ansible"
+  role: "jenkins-master-v2"
+  version: "simplified"
+
+# ====================================
+# HEALTH CHECK CONFIGURATION
+# ====================================
+jenkins_health_check_config:
+  test_command: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_master_port }}/login"]
+  interval: "30s"
+  timeout: "10s"
+  retries: 3
+  start_period: "60s"
+
+# ====================================
+# VOLUME NAMING PATTERNS
+# ====================================
+jenkins_volume_patterns:
+  home: "jenkins-{team}-{environment}-home"
+  shared: "jenkins-{team}-shared"
+
+# ====================================
+# CONTAINER NAMING PATTERNS
+# ====================================
+jenkins_container_patterns:
+  blue: "jenkins-{team}-blue"
+  green: "jenkins-{team}-green"
+
+# ====================================
+# SIMPLIFIED IMAGE RESOLUTION
+# ====================================
+# Custom images use pattern: {prefix}-{team}:{tag}
+# Fallback images use: {registry}/{name}:{tag}
+
+# ====================================
+# ENVIRONMENT-SPECIFIC CONFIGURATIONS
+# ====================================
+jenkins_env_specific_configs:
+  blue:
+    port_offset: 0
+  green:
+    port_offset: 0  # Green uses same ports as blue when active
+
+# ====================================
+# CLEANUP CONFIGURATION MAPPING
+# ====================================
+jenkins_cleanup_operations:
+  containers: "docker ps -aq --filter 'name=jenkins-*' --filter 'status=exited'"
+  volumes: "docker volume ls --filter 'dangling=true' --filter 'name=jenkins-*' -q"
+  images: "docker image prune -f"

@@ -3,7 +3,7 @@
 # These are default values that can be overridden in environment-specific group_vars
 
 # Default Jenkins version (can be overridden per environment)
-jenkins_version: "2.426.1"
+jenkins_version: "2.516.2-lts-jdk21"
 jenkins_dynamic_agent_version: "{{ jenkins_version }}"
 
 # Default ports
@@ -18,6 +18,9 @@ jenkins_uid: 1002
 jenkins_gid: 1002
 
 # Default Jenkins configuration
+images_to_build: "master"
+build_jenkins_images: true
+jenkins_images_push: false
 jenkins_admin_user: "admin"
 jenkins_enable_security: true
 jenkins_enable_csrf: true
@@ -109,7 +112,7 @@ jenkins_active_network_alias: "jenkins-active"  # DNS alias pointing to active e
 # Image Building Configuration
 jenkins_images_build_dir: "/tmp/jenkins-images-build"  # Used by jenkins-images role
 jenkins_images_force_rebuild: false
-jenkins_images_push: false
+# jenkins_images_push: false
 jenkins_images_cleanup: true
 
 # Jenkins Version Configuration

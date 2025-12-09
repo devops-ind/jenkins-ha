@@ -1,0 +1,11 @@
+---
+# Test playbook for jenkins-images role
+- name: Test Jenkins Images Build
+  hosts: centos9-vm
+  become: true
+  vars:
+    images_to_build: master
+    jenkins_master_image_tag: latest
+    jenkins_agent_image_tag: latest
+  roles:
+    - role: ansible/roles/jenkins-images

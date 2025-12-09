@@ -4,10 +4,10 @@
 
 set -euo pipefail
 
-PROMETHEUS_URL="http://localhost:{{ prometheus_port }}"
-GRAFANA_URL="http://localhost:{{ grafana_port }}"
+PROMETHEUS_URL="http://{{ prometheus_host }}:{{ prometheus_port }}"
+GRAFANA_URL="http://{{ grafana_host }}:{{ grafana_port }}"
 {% if alertmanager_enabled | default(false) %}
-ALERTMANAGER_URL="http://localhost:{{ alertmanager_port }}"
+ALERTMANAGER_URL="http://{{ alertmanager_host }}:{{ alertmanager_port }}"
 {% endif %}
 
 LOG_FILE="{{ monitoring_home_dir }}/logs/health-check.log"

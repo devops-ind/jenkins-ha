@@ -1,0 +1,96 @@
+# Test inventory for blue-green deployment testing
+all:
+  vars:
+    # Domain configuration
+    jenkins_domain: "test.local"
+    jenkins_wildcard_domain: "*.test.local"
+    
+    # SSL configuration (disabled for testing)
+    ssl_enabled: false
+    ssl_certificate_path: "/tmp/ssl/combined.pem"
+    ssl_certificate_dir: "/tmp/ssl/certs"
+    ssl_private_key_dir: "/tmp/ssl/private"
+    
+    # Environment settings
+    deployment_environment: "test"
+    deployment_mode: "local"
+    
+    # Team configuration for testing
+    jenkins_teams:
+      - team_name: "devops"
+        active_environment: "blue"
+        blue_green_enabled: true
+        ports:
+          web: 8081
+          agent: 50001
+        resources:
+          memory: "1g"
+          cpu: "1.0"
+        env_vars:
+          JENKINS_TEAM: "devops"
+          JENKINS_ADMIN_PASSWORD: "admin123"
+        labels:
+          team: "devops"
+          tier: "production"
+          
+      - team_name: "qa"
+        active_environment: "green"
+        blue_green_enabled: true
+        ports:
+          web: 8082
+          agent: 50002
+        resources:
+          memory: "512m"
+          cpu: "0.5"
+        env_vars:
+          JENKINS_TEAM: "qa"
+          JENKINS_ADMIN_PASSWORD: "qa123"
+        labels:
+          team: "qa"
+          tier: "testing"
+    
+    # HAProxy configuration
+    jenkins_load_balancer_enabled: true
+    haproxy_stats_port: 8404
+    haproxy_user: "haproxy"
+    
+    # Monitoring configuration
+    monitoring_enabled: false
+    prometheus_port: 9090
+    grafana_port: 3000
+    
+    # Blue-green specific settings
+    blue_green_switch_timeout: 120
+    blue_green_health_check_retries: 3
+    blue_green_health_check_interval: 10
+    
+    # Testing specific settings
+    testing_mode: true
+    skip_production_checks: true
+    container_cleanup_enabled: true
+
+jenkins_masters:
+  hosts:
+    test-jenkins-01:
+      ansible_host: localhost
+      ansible_connection: local
+      jenkins_master_port_blue: 8081
+      jenkins_master_port_green: 8082
+      jenkins_agent_port_blue: 50001
+      jenkins_agent_port_green: 50002
+
+load_balancers:
+  hosts:
+    test-haproxy-01:
+      ansible_host: localhost
+      ansible_connection: local
+      haproxy_frontend_port: 8080
+      haproxy_stats_port: 8404
+
+monitoring:
+  hosts:
+    test-monitor-01:
+      ansible_host: localhost
+      ansible_connection: local
+      prometheus_port: 9090
+      grafana_port: 3000

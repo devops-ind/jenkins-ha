@@ -1,0 +1,370 @@
+---
+# Comprehensive Jenkins BuildKit Images Testing Playbook
+# Tests the new production-ready BuildKit Docker image building solution
+#
+# Usage:
+#   # Test all images with BuildKit
+#   ansible-playbook -i ansible/inventories/local/hosts.yml test-buildkit-images.yml
+#
+#   # Test specific image type
+#   ansible-playbook -i ansible/inventories/local/hosts.yml test-buildkit-images.yml -e images_to_build=master
+#
+#   # Test with fallback disabled
+#   ansible-playbook -i ansible/inventories/local/hosts.yml test-buildkit-images.yml -e jenkins_build_use_buildkit=false
+#
+#   # Test with comprehensive validation
+#   ansible-playbook -i ansible/inventories/local/hosts.yml test-buildkit-images.yml -e jenkins_build_validate_images=true
+
+- name: Test Jenkins BuildKit Docker Image Building
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  vars:
+    # Test Configuration
+    test_mode: true
+    jenkins_images_build_dir: "/tmp/jenkins-buildkit-test"
+    images_to_build: "{{ images_to_build | default('all') }}"
+    
+    # BuildKit Test Configuration
+    jenkins_build_use_buildkit: "{{ jenkins_build_use_buildkit | default(true) }}"
+    jenkins_build_validate_images: "{{ jenkins_build_validate_images | default(true) }}"
+    jenkins_build_scan_vulnerabilities: "{{ jenkins_build_scan_vulnerabilities | default(false) }}"  # Disable for faster testing
+    jenkins_images_force_rebuild: true
+    jenkins_images_push: false
+    jenkins_images_cleanup: true
+    
+    # Test Environment Variables
+    jenkins_version: "2.516.2-lts-jdk21"
+    jenkins_master_image_tag: "buildkit-test-{{ ansible_date_time.epoch }}"
+    jenkins_agent_image_tag: "buildkit-test-{{ ansible_date_time.epoch }}"
+    
+    # Enhanced Build Configuration
+    jenkins_build_retry_count: 2
+    jenkins_build_retry_delay: 15
+    jenkins_build_timeout: 900  # 15 minutes for testing
+    jenkins_build_progress: "plain"
+    
+    # Test-specific overrides
+    maven_version: "3.9.6"
+    python_version: "3.12"
+    nodejs_version: "20"
+    default_jdk_version: "21"
+    jenkins_agent_version: "{{ jenkins_version }}"
+    
+    # User/Group configuration
+    jenkins_user: "jenkins"
+    jenkins_group: "jenkins"
+    jenkins_uid: 1002
+    jenkins_gid: 1002
+    
+    # Test ports (avoid conflicts)
+    jenkins_port: 8080
+    jenkins_agent_port: 50000
+    jenkins_context_path: ""
+
+  pre_tasks:
+    - name: Display test configuration
+      debug:
+        msg: |
+          🧪 Jenkins BuildKit Images Testing Configuration:
+          
+          🎯 Images to Build: {{ images_to_build }}
+          🏗️  BuildKit Enabled: {{ jenkins_build_use_buildkit }}
+          🔍 Validation Enabled: {{ jenkins_build_validate_images }}
+          🛡️  Security Scan: {{ jenkins_build_scan_vulnerabilities }}
+          🏷️  Master Tag: {{ jenkins_master_image_tag }}
+          🏷️  Agent Tag: {{ jenkins_agent_image_tag }}
+          📂 Build Directory: {{ jenkins_images_build_dir }}
+
+    - name: Check prerequisites
+      block:
+        - name: Verify Docker is running
+          command: docker info
+          register: docker_info
+          failed_when: false
+          changed_when: false
+
+        - name: Fail if Docker is not available
+          fail:
+            msg: |
+              ❌ Docker is not running or not available!
+              
+              Please ensure Docker is installed and running:
+              - sudo systemctl start docker
+              - sudo usermod -aG docker $USER (logout/login required)
+          when: docker_info.rc != 0
+
+        - name: Check BuildKit availability
+          command: docker buildx version
+          register: buildx_check
+          failed_when: false
+          changed_when: false
+
+        - name: Display BuildKit status
+          debug:
+            msg: |
+              🏗️ BuildKit Status: {{ 'Available ✅' if buildx_check.rc == 0 else 'Not Available ❌' }}
+              {{ buildx_check.stdout if buildx_check.rc == 0 else 'BuildKit not found - will use fallback method' }}
+
+    - name: Clean up previous test artifacts
+      shell: |
+        # Remove test build directory
+        rm -rf "{{ jenkins_images_build_dir }}"
+        
+        # Remove previous test images
+        docker images --format "{{.Repository}}:{{.Tag}}" | grep "buildkit-test" | xargs -r docker rmi -f || true
+        
+        # Clean up test BuildKit builder
+        docker buildx rm jenkins-builder-test 2>/dev/null || true
+      ignore_errors: true
+      changed_when: true
+
+  tasks:
+    - name: Execute Jenkins Images Build Role
+      include_role:
+        name: jenkins-images
+      vars:
+        # Override builder name for testing
+        jenkins_build_builder_name: "jenkins-builder-test"
+
+  post_tasks:
+    - name: Validate test results
+      block:
+        - name: Check built images exist locally
+          shell: |
+            set -e
+            images_found=0
+            total_expected=0
+            
+            check_image() {
+              local image_name="$1"
+              local tag="$2"
+              local full_image="${image_name}:${tag}"
+              
+              echo "🔍 Checking image: ${full_image}"
+              total_expected=$((total_expected + 1))
+              
+              if docker inspect "${full_image}" >/dev/null 2>&1; then
+                echo "✅ Found: ${full_image}"
+                
+                # Get image details
+                size=$(docker inspect "${full_image}" --format '{{.Size}}' | numfmt --to=iec)
+                layers=$(docker inspect "${full_image}" --format '{{len .RootFS.Layers}}')
+                created=$(docker inspect "${full_image}" --format '{{.Created}}')
+                
+                echo "   📊 Size: ${size}, Layers: ${layers}"
+                echo "   📅 Created: ${created}"
+                
+                images_found=$((images_found + 1))
+              else
+                echo "❌ Missing: ${full_image}"
+              fi
+              echo ""
+            }
+            
+            # Check images based on what was requested to be built
+            {% if images_to_build == 'all' or images_to_build == 'master' %}
+            check_image "jenkins/jenkins-master" "{{ jenkins_master_image_tag }}"
+            {% endif %}
+            
+            {% if images_to_build == 'all' or images_to_build == 'dind-agent' %}
+            check_image "jenkins/jenkins-agent-dind" "{{ jenkins_agent_image_tag }}"
+            {% endif %}
+            
+            {% if images_to_build == 'all' or images_to_build == 'maven-agent' %}
+            check_image "jenkins/jenkins-agent-maven" "{{ jenkins_agent_image_tag }}"
+            {% endif %}
+            
+            {% if images_to_build == 'all' or images_to_build == 'python-agent' %}
+            check_image "jenkins/jenkins-agent-python" "{{ jenkins_agent_image_tag }}"
+            {% endif %}
+            
+            {% if images_to_build == 'all' or images_to_build == 'nodejs-agent' %}
+            check_image "jenkins/jenkins-agent-nodejs" "{{ jenkins_agent_image_tag }}"
+            {% endif %}
+            
+            echo "📊 Test Results Summary:"
+            echo "   Images Found: ${images_found}/${total_expected}"
+            echo "   Success Rate: $((images_found * 100 / total_expected))%"
+            
+            if [ "${images_found}" -eq "${total_expected}" ]; then
+              echo "✅ All expected images built successfully!"
+              exit 0
+            else
+              echo "❌ Some images failed to build"
+              exit 1
+            fi
+          register: image_validation
+          failed_when: image_validation.rc != 0
+
+        - name: Test Jenkins master functionality (if built)
+          block:
+            - name: Quick Jenkins master startup test
+              shell: |
+                set -e
+                
+                IMAGE_NAME="jenkins/jenkins-master:{{ jenkins_master_image_tag }}"
+                
+                echo "🚀 Testing Jenkins master startup..."
+                
+                # Start Jenkins in background with unique name
+                CONTAINER_NAME="jenkins-test-$(date +%s)"
+                docker run -d --name "${CONTAINER_NAME}" \
+                  -p 0:8080 \
+                  -e JENKINS_OPTS="--httpPort=8080" \
+                  -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false -Xmx512m" \
+                  "${IMAGE_NAME}"
+                
+                # Wait for startup (with timeout)
+                echo "⏳ Waiting for Jenkins to start..."
+                timeout=60
+                counter=0
+                
+                while [ $counter -lt $timeout ]; do
+                  if docker logs "${CONTAINER_NAME}" 2>&1 | grep -q "Jenkins is fully up and running"; then
+                    echo "✅ Jenkins started successfully!"
+                    break
+                  fi
+                  
+                  if docker logs "${CONTAINER_NAME}" 2>&1 | grep -q "ERROR\|SEVERE\|Exception"; then
+                    echo "❌ Jenkins startup failed with errors:"
+                    docker logs "${CONTAINER_NAME}" | tail -20
+                    docker stop "${CONTAINER_NAME}"
+                    docker rm "${CONTAINER_NAME}"
+                    exit 1
+                  fi
+                  
+                  sleep 2
+                  counter=$((counter + 2))
+                done
+                
+                if [ $counter -ge $timeout ]; then
+                  echo "❌ Jenkins startup timeout"
+                  docker logs "${CONTAINER_NAME}" | tail -20
+                  docker stop "${CONTAINER_NAME}"
+                  docker rm "${CONTAINER_NAME}"
+                  exit 1
+                fi
+                
+                # Test HTTP endpoint
+                PORT=$(docker port "${CONTAINER_NAME}" 8080/tcp | cut -d: -f2)
+                if [ -n "$PORT" ]; then
+                  echo "🌐 Testing HTTP endpoint on port ${PORT}..."
+                  if curl -f -s --max-time 10 "http://localhost:${PORT}/login" >/dev/null; then
+                    echo "✅ Jenkins HTTP endpoint is accessible!"
+                  else
+                    echo "❌ Jenkins HTTP endpoint not accessible"
+                    docker stop "${CONTAINER_NAME}"
+                    docker rm "${CONTAINER_NAME}"
+                    exit 1
+                  fi
+                fi
+                
+                # Cleanup
+                echo "🧹 Cleaning up test container..."
+                docker stop "${CONTAINER_NAME}"
+                docker rm "${CONTAINER_NAME}"
+                
+                echo "✅ Jenkins master functionality test passed!"
+              register: jenkins_functionality_test
+              when: 
+                - images_to_build == 'all' or images_to_build == 'master'
+                - jenkins_build_functional_tests | default(true)
+          rescue:
+            - name: Display Jenkins master test failure details
+              debug:
+                msg: |
+                  ❌ Jenkins master functionality test failed!
+                  
+                  This could indicate issues with:
+                  - Image build process
+                  - Jenkins configuration
+                  - Container startup
+                  - Network connectivity
+                  
+                  Check the build logs and try manual container startup for debugging.
+
+    - name: Generate test report
+      set_fact:
+        buildkit_test_report:
+          test_timestamp: "{{ ansible_date_time.iso8601 }}"
+          test_configuration:
+            images_to_build: "{{ images_to_build }}"
+            buildkit_enabled: "{{ jenkins_build_use_buildkit }}"
+            validation_enabled: "{{ jenkins_build_validate_images }}"
+            functional_tests: "{{ jenkins_build_functional_tests | default(true) }}"
+          test_environment:
+            ansible_host: "{{ inventory_hostname }}"
+            docker_version: "{{ docker_info.stdout_lines | select('match', '.*Server Version.*') | first | default('unknown') }}"
+            buildkit_available: "{{ buildx_check.rc == 0 }}"
+          test_results:
+            image_validation_passed: "{{ image_validation is succeeded }}"
+            jenkins_functionality_passed: "{{ jenkins_functionality_test is succeeded | default(false) }}"
+            build_method_used: "{{ jenkins_build_report.build_results.jenkins_master.method | default('unknown') }}"
+
+    - name: Display comprehensive test results
+      debug:
+        msg: |
+          🧪 Jenkins BuildKit Images Test Results
+          ========================================
+          
+          ⏰ Test Completed: {{ buildkit_test_report.test_timestamp }}
+          
+          📋 Configuration:
+          ├─ Images Built: {{ buildkit_test_report.test_configuration.images_to_build }}
+          ├─ BuildKit Enabled: {{ buildkit_test_report.test_configuration.buildkit_enabled }}
+          ├─ Validation Enabled: {{ buildkit_test_report.test_configuration.validation_enabled }}
+          └─ Functional Tests: {{ buildkit_test_report.test_configuration.functional_tests }}
+          
+          🌐 Environment:
+          ├─ Host: {{ buildkit_test_report.test_environment.ansible_host }}
+          ├─ Docker: {{ buildkit_test_report.test_environment.docker_version }}
+          └─ BuildKit Available: {{ buildkit_test_report.test_environment.buildkit_available }}
+          
+          📊 Results:
+          ├─ Image Validation: {{ '✅ PASSED' if buildkit_test_report.test_results.image_validation_passed else '❌ FAILED' }}
+          ├─ Functionality Test: {{ '✅ PASSED' if buildkit_test_report.test_results.jenkins_functionality_passed else '❌ FAILED/SKIPPED' }}
+          └─ Build Method: {{ buildkit_test_report.test_results.build_method_used }}
+          
+          🎯 Overall Status: {{ '✅ ALL TESTS PASSED' if (buildkit_test_report.test_results.image_validation_passed and (buildkit_test_report.test_results.jenkins_functionality_passed or images_to_build != 'all' and images_to_build != 'master')) else '❌ SOME TESTS FAILED' }}
+
+    - name: Export test report
+      copy:
+        content: "{{ buildkit_test_report | to_nice_yaml }}"
+        dest: "{{ jenkins_images_build_dir }}/buildkit-test-report-{{ ansible_date_time.epoch }}.yml"
+        mode: '0644'
+
+    - name: Cleanup test artifacts
+      shell: |
+        # Clean up test images
+        echo "🧹 Cleaning up test images..."
+        docker images --format "{{.Repository}}:{{.Tag}}" | grep "buildkit-test" | xargs -r docker rmi -f || true
+        
+        # Clean up test builder
+        echo "🏗️ Cleaning up test builder..."
+        docker buildx rm jenkins-builder-test 2>/dev/null || true
+        
+        # Clean up build directory (keep reports)
+        echo "📂 Cleaning up build artifacts..."
+        find "{{ jenkins_images_build_dir }}" -type f -not -name "*report*" -delete 2>/dev/null || true
+        
+        echo "✅ Cleanup completed"
+      when: jenkins_images_cleanup | default(true)
+      ignore_errors: true
+
+    - name: Final test status
+      fail:
+        msg: |
+          ❌ Jenkins BuildKit Images Test Failed!
+          
+          Check the test report at: {{ jenkins_images_build_dir }}/buildkit-test-report-{{ ansible_date_time.epoch }}.yml
+          
+          Common issues:
+          1. Docker BuildKit not available - install docker-buildx
+          2. Insufficient disk space for builds
+          3. Network connectivity issues during image pulls
+          4. Resource constraints (memory/CPU)
+          
+          Run with increased verbosity: -vvv
+      when: not (buildkit_test_report.test_results.image_validation_passed and (buildkit_test_report.test_results.jenkins_functionality_passed or images_to_build not in ['all', 'master']))

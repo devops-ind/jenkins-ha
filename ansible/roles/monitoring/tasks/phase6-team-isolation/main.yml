@@ -1,0 +1,61 @@
+---
+# Phase 6: Team-Based Monitoring Isolation
+# Configure per-team Prometheus scrape configs, alert rules, and Grafana folders
+# All configurations are dynamically generated from jenkins_teams.yml
+
+# Step 1: Generate per-team Prometheus scrape configurations
+- name: Generate per-team Prometheus scrape configs
+  import_tasks: prometheus-team-configs.yml
+  tags: ['monitoring', 'phase6-team-isolation', 'prometheus', 'scrape-configs']
+
+# Step 2: Generate per-team alert rules
+- name: Generate per-team alert rules
+  import_tasks: alert-rules-by-team.yml
+  tags: ['monitoring', 'phase6-team-isolation', 'alerts', 'alert-rules']
+
+# Step 3: Configure per-team Alertmanager routing
+- name: Configure per-team Alertmanager routing
+  import_tasks: alertmanager-team-routing.yml
+  tags: ['monitoring', 'phase6-team-isolation', 'alerts', 'alertmanager']
+
+# Step 4: Create per-team Grafana folders
+- name: Create per-team Grafana folders
+  import_tasks: grafana-team-folders.yml
+  tags: ['monitoring', 'phase6-team-isolation', 'grafana', 'folders']
+
+# Step 5: Verify team isolation configuration
+- name: Verify team isolation configuration
+  import_tasks: verify-team-isolation.yml
+  tags: ['monitoring', 'phase6-team-isolation', 'verify']
+
+# Step 6: Summary
+- name: Display Phase 6 Team Isolation Summary
+  debug:
+    msg: |
+      ========================================================
+      Phase 6: Team-Based Monitoring Isolation - COMPLETE
+      ========================================================
+
+      Teams Configured: {{ jenkins_teams | length }}
+      {% for team in jenkins_teams %}
+      - {{ team.display_name }} ({{ team.name }})
+        * Alert Severity: {{ team.monitoring.alert_severity_threshold }}
+        * SLO Availability: {{ team.monitoring.slo_target_availability }}
+        * SLO MTTR: {{ team.monitoring.slo_target_mttr }}
+      {% endfor %}
+
+      Completed Tasks:
+      1. Generated per-team Prometheus scrape configs
+      2. Generated per-team alert rules with thresholds
+      3. Configured per-team Alertmanager routing
+      4. Created per-team Grafana folders
+      5. Verified team isolation configuration
+
+      Configuration Structure:
+      - Prometheus rules: {{ prometheus_rules_dir }}/alerts-*.yml
+      - Grafana folders: Per-team dashboards isolated in team folders
+      - Alertmanager routing: Per-team alert receivers
+
+      Next Step: Deploy Phase 7 (Agent Health Monitoring)
+      ========================================================
+  tags: ['monitoring', 'phase6-team-isolation']

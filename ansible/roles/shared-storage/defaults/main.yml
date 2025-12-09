@@ -1,4 +1,45 @@
 ---
 # Default variables for shared-storage role
-shared-storage_enabled: true
-shared-storage_version: "latest"
+
+# Core shared storage settings
+shared_storage_enabled: true
+shared_storage_type: "local"  # Options: local, nfs, glusterfs
+shared_storage_path: "/opt/jenkins-shared"
+shared_storage_owner: "jenkins"
+shared_storage_group: "jenkins"
+
+# NFS Configuration (when shared_storage_type == "nfs")
+nfs_server_role: false  # Set to true on the NFS server node
+nfs_server: "localhost"  # NFS server hostname/IP
+nfs_export_path: "/exports"  # Base path for NFS exports on server
+nfs_client_networks: "*"  # Networks allowed to mount (e.g., "192.168.1.0/24")
+nfs_export_options: "rw,sync,no_root_squash,no_subtree_check"
+nfs_mount_options: "rw,hard,intr,bg,tcp"
+
+# GlusterFS Configuration (when shared_storage_type == "glusterfs")
+glusterfs_servers: []  # List of GlusterFS server hostnames/IPs
+glusterfs_volume: "jenkins-shared"  # GlusterFS volume name (legacy - prefer team volumes)
+glusterfs_mount_options: "defaults,_netdev,backup-volfile-servers={{ glusterfs_servers[1:] | join(':') if glusterfs_servers | length > 1 else '' }}"
+glusterfs_backup_servers: ""  # Comma-separated backup volfile servers for failover
+glusterfs_create_team_volumes: true  # Auto-create team-specific volume mounts
+glusterfs_team_volume_prefix: "jenkins"  # Prefix for team volumes (e.g., jenkins-devops-data)
+glusterfs_team_volume_suffix: "data"  # Suffix for team volumes
+
+# Jenkins-specific shared data configuration
+jenkins_user: "jenkins"
+jenkins_group: "jenkins" 
+jenkins_uid: 1000
+jenkins_gid: 1000
+
+# Data synchronization settings
+sync_enabled: true
+sync_interval: "*/5"  # Cron format for sync frequency (every 5 minutes)
+sync_method: "rsync"  # Options: rsync, cp
+
+# Backup integration
+backup_to_shared_storage: true
+backup_retention_shared: 30  # Days to retain backups in shared storage
+
+# Performance and monitoring
+storage_monitoring_enabled: true
+storage_health_check_interval: 60  # Seconds between health checks

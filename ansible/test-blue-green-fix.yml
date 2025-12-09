@@ -1,0 +1,138 @@
+---
+# Test playbook for blue-green deployment fix
+# Tests that both blue and green containers run simultaneously
+
+- hosts: centos9-vm
+  become: yes
+  gather_facts: yes
+  vars:
+    # Test with our actual teams configuration but smaller resources
+    jenkins_teams:
+      - team_name: "devops"
+        active_environment: "green"  # Changed to green to test switching
+        blue_green_enabled: true
+        ports:
+          web: 8080
+          agent: 50000
+        resources:
+          memory: "1g"  # Reduced for testing
+          cpu: "1.0"
+        env_vars:
+          JENKINS_TEAM: "devops"
+          JENKINS_ADMIN_PASSWORD: "admin123"
+        labels:
+          team: "devops"
+          tier: "testing"
+          environment: "testing"
+    
+    # Override settings for testing
+    jenkins_master_build_custom_images: true
+    jenkins_master_custom_image_prefix: "jenkins-custom"
+    jenkins_master_startup_wait_time: 20
+
+  pre_tasks:
+    - name: Display blue-green test configuration
+      debug:
+        msg: |
+          =================================================
+          Testing Blue-Green Deployment Fix
+          =================================================
+          Team: {{ jenkins_teams[0].team_name }}
+          Active Environment: {{ jenkins_teams[0].active_environment }}
+          Expected: Both blue AND green containers should run
+          Only GREEN should have external ports (8080, 50000)
+          =================================================
+
+  tasks:
+    - name: Import jenkins-master-v2 role
+      import_role:
+        name: jenkins-master-v2
+
+  post_tasks:
+    - name: Wait for containers to stabilize
+      pause:
+        seconds: 10
+
+    - name: Check blue container status
+      command: docker inspect jenkins-devops-blue --format='{{ '{{' }}.State.Status{{ '}}' }}'
+      register: blue_status
+      failed_when: false
+
+    - name: Check green container status
+      command: docker inspect jenkins-devops-green --format='{{ '{{' }}.State.Status{{ '}}' }}'
+      register: green_status
+      failed_when: false
+
+    - name: Check blue container ports
+      command: docker port jenkins-devops-blue
+      register: blue_ports
+      failed_when: false
+
+    - name: Check green container ports
+      command: docker port jenkins-devops-green
+      register: green_ports
+      failed_when: false
+
+    - name: Verify blue-green deployment results
+      debug:
+        msg: |
+          =================================================
+          Blue-Green Deployment Test Results
+          =================================================
+          
+          Container Status:
+          • Blue Container: {{ blue_status.stdout | default('NOT FOUND') }}
+          • Green Container: {{ green_status.stdout | default('NOT FOUND') }}
+          
+          Port Mappings:
+          • Blue Ports: {{ blue_ports.stdout_lines | default(['No ports exposed']) | join(', ') }}
+          • Green Ports: {{ green_ports.stdout_lines | default(['No ports exposed']) | join(', ') }}
+          
+          Expected Results:
+          ✅ Both containers should be "running"
+          ✅ Only GREEN should have ports 8080->8080 and 50000->50000
+          ✅ Blue should have NO external ports
+          
+          Test Results:
+          {% set both_running = (blue_status.stdout == 'running' and green_status.stdout == 'running') %}
+          {% set green_has_ports = green_ports.stdout_lines | length > 0 %}
+          {% set blue_no_ports = blue_ports.stdout_lines | length == 0 %}
+          
+          • Both containers running: {{ '✅ PASS' if both_running else '❌ FAIL' }}
+          • Green has ports: {{ '✅ PASS' if green_has_ports else '❌ FAIL' }}
+          • Blue has no ports: {{ '✅ PASS' if blue_no_ports else '❌ FAIL' }}
+          
+          {% if both_running and green_has_ports and blue_no_ports %}
+          🎉 BLUE-GREEN DEPLOYMENT FIX: SUCCESS!
+          {% else %}
+          ❌ BLUE-GREEN DEPLOYMENT FIX: FAILED
+          {% endif %}
+          =================================================
+
+    - name: Test Jenkins accessibility on green environment
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}:8080/login"
+        method: GET
+        status_code: [200, 403]
+        timeout: 30
+      retries: 5
+      delay: 10
+      register: jenkins_access_test
+      failed_when: false
+
+    - name: Display final test summary
+      debug:
+        msg: |
+          =================================================
+          Final Blue-Green Test Summary
+          =================================================
+          Jenkins Accessibility: {{ '✅ ACCESSIBLE' if jenkins_access_test.status in [200, 403] else '❌ FAILED' }}
+          {% if jenkins_access_test.status in [200, 403] %}
+          Access URL: http://{{ ansible_default_ipv4.address }}:8080
+          {% endif %}
+          
+          Next Steps:
+          1. Switch active_environment back to 'blue' 
+          2. Re-run deployment
+          3. Verify blue gets ports and green loses ports
+          =================================================

@@ -27,11 +27,29 @@
   become: yes
   tags: ['shared-storage', 'nfs']
 
-- name: Install GlusterFS client
+- name: Install GlusterFS client (RHEL/CentOS)
   package:
-    name: glusterfs-client
+    name:
+      - glusterfs-client
+      - glusterfs-fuse
+      - attr
     state: present
-  when: shared_storage_type == "glusterfs"
+  when:
+    - shared_storage_type == "glusterfs"
+    - ansible_os_family == "RedHat"
+  become: yes
+  tags: ['shared-storage', 'glusterfs']
+
+- name: Install GlusterFS client (Debian/Ubuntu)
+  package:
+    name:
+      - glusterfs-client
+      - glusterfs-fuse
+      - attr
+    state: present
+  when:
+    - shared_storage_type == "glusterfs"
+    - ansible_os_family == "Debian"
   become: yes
   tags: ['shared-storage', 'glusterfs']
 
@@ -122,18 +140,81 @@
   become: yes
   tags: ['shared-storage', 'nfs', 'mount']
 
-- name: Mount GlusterFS shared storage
-  mount:
-    path: "{{ shared_storage_path }}"
-    src: "{{ glusterfs_servers | join(',') }}:{{ glusterfs_volume }}"
-    fstype: glusterfs
-    opts: "{{ glusterfs_mount_options }}"
-    state: mounted
-  when: shared_storage_type == "glusterfs"
+- name: Build team-based GlusterFS mount list
+  set_fact:
+    glusterfs_team_mounts: "{{ glusterfs_team_mounts | default([]) + [item] }}"
+  loop: "{{ jenkins_teams | default([]) | map('combine', {'volume_name': glusterfs_team_volume_prefix + '-' + item.team_name + '-' + glusterfs_team_volume_suffix, 'mount_path': '/var/jenkins/' + item.team_name + '/data'}) | list }}"
+  when:
+    - shared_storage_type == "glusterfs"
+    - glusterfs_create_team_volumes | default(true)
+    - jenkins_teams is defined
+    - jenkins_teams | length > 0
+  tags: ['shared-storage', 'glusterfs', 'mount']
+
+- name: Create mount point directories for each team
+  file:
+    path: "{{ item.mount_path }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+  loop: "{{ glusterfs_team_mounts | default([]) }}"
+  when:
+    - shared_storage_type == "glusterfs"
+    - glusterfs_team_mounts is defined
+    - glusterfs_team_mounts | length > 0
   become: yes
   tags: ['shared-storage', 'glusterfs', 'mount']
 
-- name: Create shared storage subdirectories
+- name: Mount team-specific GlusterFS volumes
+  mount:
+    path: "{{ item.mount_path }}"
+    src: "localhost:/{{ item.volume_name }}"
+    fstype: glusterfs
+    opts: "defaults,_netdev,backup-volfile-servers={{ glusterfs_backup_servers | default('') }}"
+    state: mounted
+  loop: "{{ glusterfs_team_mounts | default([]) }}"
+  when:
+    - shared_storage_type == "glusterfs"
+    - glusterfs_team_mounts is defined
+    - glusterfs_team_mounts | length > 0
+  become: yes
+  tags: ['shared-storage', 'glusterfs', 'mount']
+
+- name: Set ownership for GlusterFS mounts
+  file:
+    path: "{{ item.mount_path }}"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    recurse: no
+  loop: "{{ glusterfs_team_mounts | default([]) }}"
+  when:
+    - shared_storage_type == "glusterfs"
+    - glusterfs_team_mounts is defined
+    - glusterfs_team_mounts | length > 0
+  become: yes
+  tags: ['shared-storage', 'glusterfs', 'permissions']
+
+- name: Create team-specific shared directories (selective sharing)
+  file:
+    path: "{{ shared_storage_path }}/{{ item[0].team_name }}/{{ item[1] }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+  loop: "{{ jenkins_teams | default([]) | product(shared_data_dirs) | list }}"
+  vars:
+    shared_data_dirs:
+      - "jobs"          # ✅ Job configurations (shared between blue/green)
+      - "workspace"     # ✅ Build workspaces (shared)
+      - "builds"        # ✅ Build artifacts and history (shared)
+      - "userContent"   # ✅ User-uploaded content (shared)
+      - "secrets"       # ✅ Encrypted credentials (shared)
+      # NOTE: plugins, logs, config are EXCLUDED (environment-specific for safe upgrades)
+  when: jenkins_teams is defined and jenkins_teams | length > 0
+  tags: ['shared-storage', 'directories', 'team-specific']
+
+- name: Create common shared directories for infrastructure
   file:
     path: "{{ shared_storage_path }}/{{ item }}"
     state: directory
@@ -141,16 +222,10 @@
     group: "{{ jenkins_group }}"
     mode: '0755'
   loop:
-    - "home"
-    - "workspace"
-    - "builds"
-    - "jobs"
-    - "plugins"
-    - "logs"
-    - "backup"
-    - "secrets"
-    - "casc_configs"
-  tags: ['shared-storage', 'directories']
+    - "backup"        # ✅ Backup storage (shared)
+    - "casc_configs"  # ✅ Configuration as Code templates (shared)
+    - "scripts"       # ✅ Management scripts (shared)
+  tags: ['shared-storage', 'directories', 'common']
 
 - name: Set up storage permissions
   file:
@@ -177,11 +252,20 @@
   failed_when: storage_test.rc != 0
   tags: ['shared-storage', 'test']
 
+- name: Validate team-specific directory creation
+  stat:
+    path: "{{ shared_storage_path }}/{{ item[0].team_name }}/{{ item[1] }}"
+  loop: "{{ jenkins_teams | default([]) | product(['jobs', 'workspace', 'builds', 'userContent', 'secrets']) | list }}"
+  register: team_dir_validation
+  when: jenkins_teams is defined and jenkins_teams | length > 0
+  tags: ['shared-storage', 'validation']
+
 - name: Display shared storage configuration
   debug:
     msg: |
-      Shared Storage Configuration:
-      
+      ====================================================
+      Smart Shared Storage Configuration (Blue-Green Ready)
+      ====================================================
       Type: {{ shared_storage_type }}
       Mount Path: {{ shared_storage_path }}
       {% if shared_storage_type == "nfs" %}
@@ -195,6 +279,22 @@
       Mount Options: {{ glusterfs_mount_options }}
       {% endif %}
       
+      ✅ SHARED DATA (consistent across blue/green):
+      {% for team in jenkins_teams | default([]) %}
+      • {{ team.team_name }}/jobs (job configurations)
+      • {{ team.team_name }}/workspace (build workspaces)
+      • {{ team.team_name }}/builds (build artifacts)
+      • {{ team.team_name }}/userContent (user content)
+      • {{ team.team_name }}/secrets (credentials)
+      {% endfor %}
+      
+      ❌ ISOLATED DATA (environment-specific volumes):
+      • plugins (safe upgrades per environment)
+      • logs (environment-specific logging)
+      • war (Jenkins runtime isolation)
+      
       Storage Test: {{ 'Passed' if storage_test.rc == 0 else 'Failed' }}
       Jenkins User: {{ jenkins_user }}:{{ jenkins_group }}
+      Team Directories: {{ (team_dir_validation.results | default([]) | selectattr('stat.exists', 'equalto', true) | list | length) if jenkins_teams is defined else 'N/A' }} created
+      ====================================================
   tags: ['shared-storage', 'info']

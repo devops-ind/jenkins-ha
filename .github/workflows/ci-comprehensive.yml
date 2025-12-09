@@ -1,0 +1,611 @@
+name: Comprehensive CI Pipeline
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**', 'hotfix/**' ]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - 'examples/**'
+  pull_request:
+    branches: [ main, develop ]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - 'examples/**'
+  schedule:
+    # Run nightly at 3 AM UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      test_level:
+        description: 'Test level to run'
+        required: false
+        default: 'full'
+        type: choice
+        options:
+          - fast
+          - full
+          - security
+      skip_security:
+        description: 'Skip security scans'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  PYTHON_VERSION: '3.11'
+  ANSIBLE_VERSION: '8.5.0'
+  DOCKER_BUILDKIT: 1
+  FORCE_COLOR: 1
+
+# Cancel in-progress runs for same PR/branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Pre-flight checks
+  preflight:
+    name: Pre-flight Checks
+    runs-on: ubuntu-latest
+    outputs:
+      should-run-security: ${{ steps.check-conditions.outputs.should-run-security }}
+      should-run-integration: ${{ steps.check-conditions.outputs.should-run-integration }}
+      test-matrix: ${{ steps.set-matrix.outputs.matrix }}
+      changed-files: ${{ steps.changes.outputs.changed-files }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed files
+        id: changes
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.sha }} | tr '\n' ' ')
+          else
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | tr '\n' ' ')
+          fi
+          echo "changed-files=${CHANGED_FILES}" >> $GITHUB_OUTPUT
+          echo "Changed files: ${CHANGED_FILES}"
+
+      - name: Check conditions and set test matrix
+        id: check-conditions
+        run: |
+          # Determine if security scans should run
+          SHOULD_RUN_SECURITY="true"
+          if [[ "${{ github.event.inputs.skip_security }}" == "true" ]]; then
+            SHOULD_RUN_SECURITY="false"
+          fi
+          
+          # Determine if integration tests should run
+          SHOULD_RUN_INTEGRATION="true"
+          if [[ "${{ github.event.inputs.test_level }}" == "fast" ]]; then
+            SHOULD_RUN_INTEGRATION="false"
+          fi
+          
+          echo "should-run-security=${SHOULD_RUN_SECURITY}" >> $GITHUB_OUTPUT
+          echo "should-run-integration=${SHOULD_RUN_INTEGRATION}" >> $GITHUB_OUTPUT
+          
+      - name: Set test matrix
+        id: set-matrix
+        run: |
+          if [[ "${{ github.event.inputs.test_level }}" == "fast" ]]; then
+            echo 'matrix={"python-version": ["3.11"], "ansible-version": ["8.5.0"]}' >> $GITHUB_OUTPUT
+          else
+            echo 'matrix={"python-version": ["3.10", "3.11"], "ansible-version": ["7.7.0", "8.5.0"]}' >> $GITHUB_OUTPUT
+          fi
+
+  # Code quality and linting
+  lint-and-format:
+    name: Code Quality & Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache Python dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pre-commit
+          pip install -r requirements.txt
+          if [ -f tests/blue-green/requirements.txt ]; then
+            pip install -r tests/blue-green/requirements.txt
+          fi
+
+      - name: Install additional linting tools
+        run: |
+          pip install black isort flake8 mypy bandit safety
+          pip install ansible-lint yamllint
+
+      - name: Run pre-commit hooks
+        run: |
+          pre-commit run --all-files --show-diff-on-failure
+
+      - name: Python type checking
+        run: |
+          if [ -d tests ]; then
+            mypy tests/ --ignore-missing-imports --no-error-summary
+          fi
+
+      - name: Check for common issues
+        run: |
+          # Check for merge conflict markers
+          if grep -r "<<<<<<< HEAD\|>>>>>>> \|=======" --include="*.py" --include="*.yml" --include="*.yaml" .; then
+            echo "❌ Merge conflict markers found"
+            exit 1
+          fi
+          
+          # Check for debug statements
+          if grep -r "pdb.set_trace()\|import pdb\|debugger;" --include="*.py" .; then
+            echo "❌ Debug statements found in Python code"
+            exit 1
+          fi
+          
+          # Check for TODO/FIXME without issue references
+          if grep -r "TODO\|FIXME" --include="*.py" --include="*.yml" --include="*.yaml" . | grep -v "#.*\(TODO\|FIXME\).*#[0-9]"; then
+            echo "⚠️ TODO/FIXME found without issue reference"
+          fi
+
+  # Ansible validation
+  ansible-validation:
+    name: Ansible Validation
+    runs-on: ubuntu-latest
+    needs: [preflight]
+    if: contains(needs.preflight.outputs.changed-files, 'ansible/') || github.event_name == 'schedule'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Ansible and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible==${{ env.ANSIBLE_VERSION }} ansible-lint
+          pip install docker jmespath
+
+      - name: Install Ansible collections
+        run: |
+          ansible-galaxy collection install -r collections/requirements.yml
+
+      - name: Validate playbook syntax
+        run: |
+          cd ansible
+          ansible-playbook site.yml --syntax-check
+          ansible-playbook test-*.yml --syntax-check || echo "No test playbooks found"
+
+      - name: Validate inventory files
+        run: |
+          cd ansible
+          ansible-inventory -i inventories/local/hosts.yml --list > /dev/null
+          ansible-inventory -i inventories/production/hosts.yml --list > /dev/null
+
+      - name: Run ansible-lint
+        run: |
+          cd ansible
+          ansible-lint .
+
+      - name: Validate role structure
+        run: |
+          cd ansible/roles
+          for role in */; do
+            echo "Validating role: $role"
+            if [[ ! -f "${role}tasks/main.yml" ]]; then
+              echo "❌ Missing tasks/main.yml in role $role"
+              exit 1
+            fi
+            if [[ ! -f "${role}defaults/main.yml" ]]; then
+              echo "⚠️ Missing defaults/main.yml in role $role"
+            fi
+          done
+
+  # Security scanning
+  security-scan:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    needs: [preflight]
+    if: needs.preflight.outputs.should-run-security == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install security tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit safety semgrep
+
+      - name: Run Bandit security scan
+        run: |
+          bandit -r tests/ scripts/ -f json -o bandit-results.json || true
+          bandit -r tests/ scripts/ || echo "Bandit found issues (non-blocking)"
+
+      - name: Run Safety dependency scan
+        run: |
+          safety check -r requirements.txt --json --output safety-results.json || true
+          safety check -r requirements.txt || echo "Safety found issues (non-blocking)"
+
+      - name: Run Semgrep SAST scan
+        run: |
+          semgrep --config=auto --json --output=semgrep-results.json . || true
+          semgrep --config=auto . || echo "Semgrep found issues (non-blocking)"
+
+      - name: Ansible security check
+        run: |
+          python3 << 'EOF'
+          import os
+          import re
+          import glob
+          
+          security_issues = []
+          
+          # Check for hardcoded secrets in Ansible files
+          for ansible_file in glob.glob("ansible/**/*.yml", recursive=True) + glob.glob("ansible/**/*.yaml", recursive=True):
+              with open(ansible_file, 'r') as f:
+                  content = f.read()
+                  
+              # Check for potential secrets
+              patterns = [
+                  (r'password:\s*["\']?[a-zA-Z0-9]{8,}["\']?', 'Potential hardcoded password'),
+                  (r'secret:\s*["\']?[a-zA-Z0-9]{16,}["\']?', 'Potential hardcoded secret'),
+                  (r'key:\s*["\']?[a-zA-Z0-9]{16,}["\']?', 'Potential hardcoded key'),
+              ]
+              
+              for pattern, message in patterns:
+                  if re.search(pattern, content, re.IGNORECASE):
+                      if 'vault' not in ansible_file and 'example' not in ansible_file:
+                          security_issues.append(f"{ansible_file}: {message}")
+          
+          if security_issues:
+              print("🔒 Security Issues Found:")
+              for issue in security_issues:
+                  print(f"  ⚠️ {issue}")
+              print("\n💡 Consider using Ansible Vault for sensitive data")
+          else:
+              print("✅ No obvious security issues found in Ansible files")
+          EOF
+
+      - name: Upload security scan results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: security-scan-results
+          path: |
+            bandit-results.json
+            safety-results.json
+            semgrep-results.json
+          retention-days: 30
+
+  # Unit tests
+  unit-tests:
+    name: Unit Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    needs: [preflight, lint-and-format]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.preflight.outputs.test-matrix) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache Python dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov pytest-xdist
+          pip install -r requirements.txt
+          if [ -f tests/blue-green/requirements.txt ]; then
+            pip install -r tests/blue-green/requirements.txt
+          fi
+
+      - name: Run unit tests
+        run: |
+          if [ -d tests ]; then
+            pytest tests/ -v -x --tb=short \
+              --cov=. --cov-report=xml --cov-report=html \
+              --cov-fail-under=70 \
+              --junitxml=test-results-unit-py${{ matrix.python-version }}.xml
+          else
+            echo "No tests directory found, skipping unit tests"
+          fi
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: unit-test-results-py${{ matrix.python-version }}
+          path: |
+            test-results-unit-py${{ matrix.python-version }}.xml
+            htmlcov/
+            coverage.xml
+          retention-days: 30
+
+  # Integration tests
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [preflight, unit-tests]
+    if: needs.preflight.outputs.should-run-integration == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        test-suite: [basic_switching, multi_team, haproxy_routing]
+    services:
+      docker:
+        image: docker:24-dind
+        options: --privileged
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible==${{ env.ANSIBLE_VERSION }}
+          pip install -r requirements.txt
+          if [ -f tests/blue-green/requirements.txt ]; then
+            pip install -r tests/blue-green/requirements.txt
+          fi
+
+      - name: Install Ansible collections
+        run: |
+          ansible-galaxy collection install -r collections/requirements.yml
+
+      - name: Set up test environment
+        run: |
+          sudo mkdir -p /tmp/jenkins-ha-test/{ssl,data,logs}
+          sudo chmod 777 /tmp/jenkins-ha-test/{ssl,data,logs}
+          docker network create jenkins-ha-test || true
+
+      - name: Run integration tests
+        run: |
+          if [ -d tests/blue-green ]; then
+            cd tests/blue-green
+            pytest -v test_${{ matrix.test-suite }}.py \
+              --junitxml=../../test-results-integration-${{ matrix.test-suite }}.xml \
+              --timeout=300
+          else
+            echo "Blue-green tests not found, skipping"
+          fi
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          echo "=== Container Logs ==="
+          docker ps -a
+          docker logs jenkins-test-blue 2>&1 || echo "No jenkins-test-blue container"
+          docker logs jenkins-test-green 2>&1 || echo "No jenkins-test-green container"
+          docker logs haproxy-test 2>&1 || echo "No haproxy-test container"
+
+      - name: Cleanup test environment
+        if: always()
+        run: |
+          docker rm -f jenkins-test-blue jenkins-test-green haproxy-test 2>/dev/null || true
+          docker network rm jenkins-ha-test 2>/dev/null || true
+          sudo rm -rf /tmp/jenkins-ha-test
+
+      - name: Upload integration test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: integration-test-results-${{ matrix.test-suite }}
+          path: test-results-integration-${{ matrix.test-suite }}.xml
+          retention-days: 30
+
+  # Build validation
+  build-validation:
+    name: Build Validation
+    runs-on: ubuntu-latest
+    needs: [ansible-validation]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate Docker builds
+        run: |
+          # Check if Dockerfiles can be built (dry run)
+          find ansible/roles -name "Dockerfile*.j2" | while read dockerfile; do
+            echo "Validating Dockerfile template: $dockerfile"
+            # Basic syntax validation for Dockerfile templates
+            if ! grep -q "FROM" "$dockerfile"; then
+              echo "❌ No FROM instruction found in $dockerfile"
+              exit 1
+            fi
+          done
+
+      - name: Validate Ansible playbook execution (dry run)
+        run: |
+          cd ansible
+          ansible-playbook site.yml --check --diff -i inventories/local/hosts.yml
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: false
+
+  # Test summary and reporting
+  test-summary:
+    name: Test Summary & Reporting
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests, security-scan, build-validation]
+    if: always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all test results
+        uses: actions/download-artifact@v3
+
+      - name: Publish test results
+        uses: dorny/test-reporter@v1
+        if: success() || failure()
+        with:
+          name: CI Test Results
+          path: '**/*test-results*.xml'
+          reporter: java-junit
+          fail-on-error: false
+          max-annotations: 50
+
+      - name: Generate comprehensive test report
+        run: |
+          echo "# 📊 CI Pipeline Results" > test-summary.md
+          echo "" >> test-summary.md
+          echo "**Commit:** \`${{ github.sha }}\`" >> test-summary.md
+          echo "**Branch:** \`${{ github.ref_name }}\`" >> test-summary.md
+          echo "**Triggered by:** ${{ github.event_name }}" >> test-summary.md
+          echo "" >> test-summary.md
+          
+          # Job status summary
+          echo "## 🎯 Job Status Summary" >> test-summary.md
+          echo "" >> test-summary.md
+          
+          jobs=(
+            "lint-and-format:${{ needs.lint-and-format.result || 'skipped' }}"
+            "ansible-validation:${{ needs.ansible-validation.result || 'skipped' }}"
+            "security-scan:${{ needs.security-scan.result || 'skipped' }}"
+            "unit-tests:${{ needs.unit-tests.result || 'skipped' }}"
+            "integration-tests:${{ needs.integration-tests.result || 'skipped' }}"
+            "build-validation:${{ needs.build-validation.result || 'skipped' }}"
+          )
+          
+          for job in "${jobs[@]}"; do
+            name=$(echo $job | cut -d: -f1)
+            status=$(echo $job | cut -d: -f2)
+            
+            case $status in
+              "success") echo "- ✅ **$name**: Passed" >> test-summary.md ;;
+              "failure") echo "- ❌ **$name**: Failed" >> test-summary.md ;;
+              "cancelled") echo "- ⏹️ **$name**: Cancelled" >> test-summary.md ;;
+              "skipped") echo "- ⏭️ **$name**: Skipped" >> test-summary.md ;;
+              *) echo "- ⚪ **$name**: $status" >> test-summary.md ;;
+            esac
+          done
+          
+          echo "" >> test-summary.md
+          
+          # Test results summary
+          echo "## 📈 Test Results Summary" >> test-summary.md
+          echo "" >> test-summary.md
+          
+          unit_files=$(find . -name "*test-results-unit*.xml" 2>/dev/null | wc -l)
+          integration_files=$(find . -name "*test-results-integration*.xml" 2>/dev/null | wc -l)
+          
+          echo "- 🧪 **Unit Tests**: $unit_files result files" >> test-summary.md
+          echo "- 🔗 **Integration Tests**: $integration_files result files" >> test-summary.md
+          
+          # Security scan results
+          if [ -d "security-scan-results" ]; then
+            echo "- 🔒 **Security Scans**: Results available in artifacts" >> test-summary.md
+          fi
+          
+          # Coverage information
+          if [ -f "unit-test-results-py*/coverage.xml" ]; then
+            echo "- 📊 **Code Coverage**: Reports available in artifacts" >> test-summary.md
+          fi
+          
+          echo "" >> test-summary.md
+          echo "## 🔗 Artifacts" >> test-summary.md
+          echo "" >> test-summary.md
+          echo "The following artifacts are available for download:" >> test-summary.md
+          echo "" >> test-summary.md
+          
+          for artifact_dir in */; do
+            if [ -d "$artifact_dir" ] && [ "$artifact_dir" != ".github/" ]; then
+              echo "- 📦 \`${artifact_dir%/}\`" >> test-summary.md
+            fi
+          done
+          
+          cat test-summary.md
+
+      - name: Comment PR with test results
+        uses: actions/github-script@v6
+        if: github.event_name == 'pull_request'
+        with:
+          script: |
+            const fs = require('fs');
+            if (fs.existsSync('test-summary.md')) {
+              const summary = fs.readFileSync('test-summary.md', 'utf8');
+              
+              // Get existing comments
+              const comments = await github.rest.issues.listComments({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+              });
+              
+              // Look for existing CI comment
+              const botComment = comments.data.find(comment => 
+                comment.user.type === 'Bot' && comment.body.includes('📊 CI Pipeline Results')
+              );
+              
+              if (botComment) {
+                // Update existing comment
+                await github.rest.issues.updateComment({
+                  comment_id: botComment.id,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: summary
+                });
+              } else {
+                // Create new comment
+                await github.rest.issues.createComment({
+                  issue_number: context.issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: summary
+                });
+              }
+            }
+
+      - name: Upload comprehensive test summary
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: test-summary-report
+          path: test-summary.md
+          retention-days: 90

@@ -1,0 +1,148 @@
+#!/bin/bash
+# Jenkins Recovery from GlusterFS Script (Hybrid Architecture)
+# Restores Jenkins data from GlusterFS sync layer to Docker volume
+# Used for failover or disaster recovery
+
+set -euo pipefail
+
+TEAM="${1:-}"
+ENV="${2:-}"
+
+if [[ -z "$TEAM" ]] || [[ -z "$ENV" ]]; then
+    echo "Usage: $0 <team> <env>"
+    echo "Example: $0 devops blue"
+    echo ""
+    echo "Available teams: {{ jenkins_teams_config | map(attribute='team_name') | join(', ') }}"
+    echo "Environments: blue, green"
+    exit 1
+fi
+
+DOCKER_VOLUME="jenkins-${TEAM}-${ENV}-home"
+GLUSTER_SYNC_PATH="/var/jenkins/${TEAM}/sync/${ENV}"
+LOG_FILE="/var/log/jenkins-gluster-recovery-${TEAM}.log"
+BACKUP_VOLUME="${DOCKER_VOLUME}-backup-$(date +%Y%m%d-%H%M%S)"
+
+# Logging function
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+log "=========================================="
+log "Jenkins Recovery from GlusterFS"
+log "Team: ${TEAM}"
+log "Environment: ${ENV}"
+log "Source: ${GLUSTER_SYNC_PATH}"
+log "Target: ${DOCKER_VOLUME}"
+log "=========================================="
+
+# Step 1: Verify GlusterFS sync path exists
+if [[ ! -d "$GLUSTER_SYNC_PATH" ]]; then
+    log "ERROR: GlusterFS sync path not found: $GLUSTER_SYNC_PATH"
+    log "Available paths:"
+    ls -la /var/jenkins/${TEAM}/sync/ 2>/dev/null || log "  (none found)"
+    exit 1
+fi
+
+# Step 2: Check data exists in GlusterFS
+FILE_COUNT=$(find "$GLUSTER_SYNC_PATH" -type f 2>/dev/null | wc -l)
+if [[ $FILE_COUNT -eq 0 ]]; then
+    log "WARNING: No files found in GlusterFS sync path"
+    log "This may be a fresh deployment or sync hasn't run yet"
+    read -p "Continue anyway? (y/n) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        log "Recovery cancelled by user"
+        exit 1
+    fi
+else
+    log "Files found in GlusterFS: $FILE_COUNT"
+fi
+
+# Step 3: Stop container if running
+CONTAINER_NAME="jenkins-${TEAM}-${ENV}"
+if docker ps -q -f name="$CONTAINER_NAME" | grep -q .; then
+    log "Stopping container: $CONTAINER_NAME"
+    docker stop "$CONTAINER_NAME" 2>&1 | tee -a "$LOG_FILE" || true
+else
+    log "Container not running: $CONTAINER_NAME"
+fi
+
+# Step 4: Backup current Docker volume (optional but recommended)
+if docker volume inspect "$DOCKER_VOLUME" &>/dev/null; then
+    log "Backing up current Docker volume to: $BACKUP_VOLUME"
+    docker run --rm \
+        -v "${DOCKER_VOLUME}:/source:ro" \
+        -v "${BACKUP_VOLUME}:/target" \
+        alpine:latest sh -c "cp -a /source/. /target/" 2>&1 | tee -a "$LOG_FILE"
+
+    if [[ ${PIPESTATUS[0]} -eq 0 ]]; then
+        log "Backup created successfully"
+    else
+        log "WARNING: Backup failed, but continuing with recovery"
+    fi
+else
+    log "Docker volume doesn't exist, will create new one"
+fi
+
+# Step 5: Remove existing volume and create fresh one
+log "Recreating Docker volume..."
+docker volume rm "$DOCKER_VOLUME" 2>/dev/null || true
+docker volume create "$DOCKER_VOLUME" 2>&1 | tee -a "$LOG_FILE"
+
+# Step 6: Restore from GlusterFS
+log "Restoring data from GlusterFS..."
+docker run --rm \
+    -v "${GLUSTER_SYNC_PATH}:/source:ro" \
+    -v "${DOCKER_VOLUME}:/target" \
+    alpine:latest sh -c "cp -a /source/. /target/" 2>&1 | tee -a "$LOG_FILE"
+
+RESTORE_EXIT=$?
+
+if [[ $RESTORE_EXIT -eq 0 ]]; then
+    log "SUCCESS: Data restored successfully"
+else
+    log "ERROR: Restore failed with exit code $RESTORE_EXIT"
+
+    # Attempt to restore from backup
+    if docker volume inspect "$BACKUP_VOLUME" &>/dev/null; then
+        log "Attempting to restore from backup..."
+        docker volume rm "$DOCKER_VOLUME" 2>/dev/null || true
+        docker volume create "$DOCKER_VOLUME"
+        docker run --rm \
+            -v "${BACKUP_VOLUME}:/source:ro" \
+            -v "${DOCKER_VOLUME}:/target" \
+            alpine:latest sh -c "cp -a /source/. /target/"
+        log "Restored from backup"
+    fi
+
+    exit $RESTORE_EXIT
+fi
+
+# Step 7: Set correct ownership
+log "Setting ownership..."
+docker run --rm \
+    -v "${DOCKER_VOLUME}:/data" \
+    alpine:latest sh -c "chown -R 1000:1000 /data" 2>&1 | tee -a "$LOG_FILE"
+
+# Step 8: Verify recovery
+RESTORED_FILES=$(docker run --rm -v "${DOCKER_VOLUME}:/data:ro" alpine:latest find /data -type f | wc -l)
+log "Files restored: $RESTORED_FILES"
+
+# Step 9: Report
+log "=========================================="
+log "Recovery Summary:"
+log "  Source: $GLUSTER_SYNC_PATH ($FILE_COUNT files)"
+log "  Target: $DOCKER_VOLUME ($RESTORED_FILES files)"
+log "  Backup: $BACKUP_VOLUME (kept for rollback)"
+log ""
+log "Next steps:"
+log "  1. Start Jenkins container: docker start $CONTAINER_NAME"
+log "  2. Verify Jenkins UI is accessible"
+log "  3. Check logs: docker logs $CONTAINER_NAME"
+log ""
+log "If recovery failed, rollback with:"
+log "  docker volume rm $DOCKER_VOLUME"
+log "  docker run --rm -v ${BACKUP_VOLUME}:/source:ro -v ${DOCKER_VOLUME}:/target alpine cp -a /source/. /target/"
+log "=========================================="
+
+exit 0

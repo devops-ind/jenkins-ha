@@ -1,4 +1,149 @@
 ---
-# Default variables for jenkins-images role
-jenkins-images_enabled: true
-jenkins-images_version: "latest"
+# Production-Ready Jenkins Docker Build Configuration
+# Enterprise-grade Jenkins image building with resilience and caching
+
+# Build Configuration
+jenkins_images_enabled: true
+jenkins_images_build_dir: "/tmp/jenkins-images-build"
+jenkins_images_force_rebuild: false
+jenkins_images_push: false
+jenkins_images_cleanup: true
+
+# Version Management
+jenkins_version: "2.516.2-lts-jdk21"
+jenkins_master_image_tag: "{{ jenkins_version }}"
+jenkins_agent_image_tag: "{{ jenkins_version }}"
+jenkins_agent_version: "{{ jenkins_version }}"
+
+# Plugin Version Management Strategy
+jenkins_plugin_version_strategy: "pinned"  # Options: pinned, latest, mixed
+jenkins_plugin_cache_enabled: true
+jenkins_plugin_cache_dir: "/var/cache/jenkins-plugins"
+jenkins_plugin_cache_ttl: 86400  # 24 hours
+
+# Build Resilience Configuration
+jenkins_build_retry_count: 3
+jenkins_build_retry_delay: 30
+jenkins_build_timeout: 1800  # 30 minutes
+jenkins_network_retry_count: 5
+jenkins_network_retry_delay: 10
+
+# Offline Build Support
+jenkins_offline_build_enabled: false
+jenkins_offline_plugins_dir: "/var/cache/jenkins-plugins/offline"
+jenkins_offline_base_images_dir: "/var/cache/docker-images"
+
+# Multi-stage Build Configuration
+jenkins_multistage_build: true
+jenkins_build_cache_from: []
+jenkins_build_target: ""  # Empty for full build, or stage name (base, plugin-resolver, plugin-installer, configurator)
+
+# Security Configuration
+jenkins_build_scan_vulnerabilities: true
+jenkins_build_security_scanner: "trivy"  # Options: trivy, clair, snyk
+jenkins_build_fail_on_critical: true
+jenkins_build_fail_on_high: false
+jenkins_build_security_timeout: 300  # seconds
+jenkins_build_skip_db_update: false
+jenkins_build_security_formats: ["json", "sarif"]
+jenkins_build_ignore_unfixed: false
+
+# Performance Optimization
+jenkins_build_parallel_downloads: 4
+jenkins_build_compress_layers: true
+jenkins_build_use_buildkit: true
+jenkins_build_cache_mount: true
+
+# Monitoring and Logging
+jenkins_build_metrics_enabled: true
+jenkins_build_log_level: "INFO"  # Options: DEBUG, INFO, WARN, ERROR
+jenkins_build_progress_reporting: true
+
+# Image Optimization
+jenkins_image_minimize: true
+jenkins_image_remove_temp_files: true
+jenkins_image_optimize_layers: true
+
+# Plugin Dependencies
+jenkins_resolve_plugin_dependencies: true
+jenkins_plugin_dependency_depth: 3
+jenkins_plugin_conflict_resolution: "latest"  # Options: latest, oldest, fail
+
+# Base Images Configuration
+jenkins_base_images:
+  jenkins_master: "jenkins/jenkins:{{ jenkins_version }}"
+  jenkins_agent_base: "jenkins/inbound-agent:{{ jenkins_version }}-jdk21"
+  alpine_base: "alpine:3.19"
+  ubuntu_base: "ubuntu:22.04"
+
+# Docker Build Configuration
+docker_buildkit_enabled: true
+docker_build_isolation: "default"
+docker_build_memory_limit: "4g"
+docker_build_cpu_limit: "2"
+
+# BuildKit Integration
+jenkins_build_progress: "plain"  # Options: auto, plain, tty
+jenkins_build_cache_inline: "1"
+jenkins_build_network: "default"
+
+# Fallback Configuration
+jenkins_build_fallback_enabled: true
+jenkins_build_fallback_legacy: false
+
+# Advanced BuildKit Configuration
+jenkins_build_buildx_driver: "docker-container"  # Options: docker, docker-container, kubernetes
+jenkins_build_builder_name: "jenkins-builder"
+jenkins_build_platform: "linux/amd64"  # Options: linux/amd64, linux/arm64, linux/amd64,linux/arm64
+jenkins_build_builder_bootstrap: true
+
+# Build Resource Management
+jenkins_build_memory_limit: "4g"
+jenkins_build_cpu_limit: "2"
+jenkins_build_shm_size: "128m"
+jenkins_build_ulimit_nofile: "65536"
+
+# Advanced Caching Configuration
+jenkins_build_cache_registry: ""  # Registry for cache storage (e.g., "registry:5000")
+jenkins_build_cache_mode: "max"   # Options: min, max
+jenkins_build_cache_compression: "gzip"  # Options: uncompressed, gzip, estargz, zstd
+
+# Image Validation and Testing
+jenkins_build_validate_images: true
+jenkins_build_functional_tests: true
+jenkins_build_startup_timeout: 120  # seconds
+jenkins_build_health_check_retries: 3
+
+# Build Reporting and Metrics
+jenkins_build_export_report: true
+jenkins_build_report_format: "yaml"  # Options: yaml, json
+jenkins_build_metrics_endpoint: ""  # Prometheus metrics endpoint
+jenkins_build_webhook_url: ""  # Webhook for build notifications
+
+# Multi-Architecture Support
+jenkins_build_multiarch_enabled: false
+jenkins_build_target_platforms:
+  - "linux/amd64"
+  - "linux/arm64"
+
+# BuildKit Features
+jenkins_build_mount_cache: true
+jenkins_build_mount_secret: false
+jenkins_build_mount_ssh: false
+jenkins_build_buildkit_syntax: "docker/dockerfile:1.7"
+
+# Build Optimization
+jenkins_build_layer_caching: true
+jenkins_build_squash_layers: false
+jenkins_build_compress_context: true
+jenkins_build_exclude_context: [".git", "*.tmp", "*.log"]
+
+# Container Runtime Configuration
+jenkins_container_runtime: "docker"  # Options: docker, podman, containerd
+jenkins_container_engine_socket: "/var/run/docker.sock"
+
+# Security Enhancement
+jenkins_build_sign_images: false
+jenkins_build_sbom_generation: true
+jenkins_build_provenance: true
+jenkins_build_attestation: false

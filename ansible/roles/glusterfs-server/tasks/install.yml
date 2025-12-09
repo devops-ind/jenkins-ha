@@ -1,0 +1,85 @@
+---
+# GlusterFS Server Installation Tasks
+
+- name: Install GlusterFS repository (RHEL/CentOS)
+  package:
+    name: "centos-release-gluster{{ glusterfs_version }}"
+    state: present
+  when:
+    - ansible_os_family == "RedHat"
+    - ansible_distribution != "Fedora"
+  become: yes
+  tags: ['glusterfs', 'install', 'repo']
+
+- name: Add GlusterFS PPA (Ubuntu)
+  apt_repository:
+    repo: "ppa:gluster/glusterfs-{{ glusterfs_version }}"
+    state: present
+    update_cache: yes
+  when:
+    - ansible_os_family == "Debian"
+    - glusterfs_ppa_enabled
+  become: yes
+  tags: ['glusterfs', 'install', 'repo']
+
+- name: Install GlusterFS server packages (RHEL/CentOS)
+  package:
+    name:
+      - glusterfs-server
+      - glusterfs-client
+      - attr
+      - xfsprogs  # For XFS filesystem support
+    state: present
+  when: ansible_os_family == "RedHat"
+  become: yes
+  tags: ['glusterfs', 'install', 'packages']
+
+- name: Install GlusterFS server packages (Ubuntu)
+  package:
+    name:
+      - glusterfs-server
+      - glusterfs-client
+      - attr
+      - xfsprogs
+    state: present
+  when: ansible_os_family == "Debian"
+  become: yes
+  tags: ['glusterfs', 'install', 'packages']
+
+- name: Ensure GlusterFS log directory exists
+  file:
+    path: "{{ glusterfs_log_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  become: yes
+  tags: ['glusterfs', 'install', 'logging']
+
+- name: Start and enable GlusterFS daemon
+  systemd:
+    name: "{{ glusterfs_service_name }}"
+    state: "{{ glusterfs_service_state }}"
+    enabled: "{{ glusterfs_service_enabled }}"
+  become: yes
+  tags: ['glusterfs', 'install', 'service']
+
+- name: Wait for GlusterFS daemon to be ready
+  wait_for:
+    port: 24007
+    host: localhost
+    timeout: 30
+    state: started
+  tags: ['glusterfs', 'install', 'validation']
+
+- name: Verify GlusterFS installation
+  command: gluster --version
+  register: gluster_version_output
+  changed_when: false
+  failed_when: gluster_version_output.rc != 0
+  tags: ['glusterfs', 'install', 'validation']
+
+- name: Display GlusterFS version
+  debug:
+    msg: "GlusterFS installed: {{ gluster_version_output.stdout_lines[0] }}"
+  tags: ['glusterfs', 'install', 'info']

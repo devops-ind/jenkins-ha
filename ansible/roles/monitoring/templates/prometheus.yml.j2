@@ -1,10 +1,18 @@
 # Prometheus configuration for Jenkins Infrastructure
+# Production-ready multi-team configuration with file-based service discovery
+# Phase 1 Modernization: Uses file_sd_configs for zero-downtime target updates
+#
+# Target files are auto-generated in targets.d/ directory and dynamically
+# discovered by Prometheus with 30-second refresh interval.
+# Updates trigger Prometheus configuration reload (no restart needed).
+
 global:
   scrape_interval: {{ prometheus_scrape_interval }}
   evaluation_interval: {{ prometheus_evaluation_interval }}
   external_labels:
     monitor: 'jenkins-infrastructure'
-    environment: '{{ deployment_environment | default("local") }}'
+    environment: '{{ deployment_mode | default("local") }}'
+    cluster: '{{ jenkins_domain | default("localhost") }}'
 
 rule_files:
   - "rules/*.yml"
@@ -14,21 +22,122 @@ alerting:
   alertmanagers:
     - static_configs:
         - targets:
-          - localhost:{{ alertmanager_port }}
+          - {{ alertmanager_host }}:{{ alertmanager_port }}
+{% else %}
+  alertmanagers: []
 {% endif %}
 
 scrape_configs:
-{% for target in prometheus_targets %}
-  - job_name: '{{ target.job }}'
-    static_configs:
-      - targets: {{ target.targets | to_json }}
-{% if target.job == 'jenkins' %}
+# ======================================================
+# JENKINS MASTERS - File-Based Service Discovery
+# ======================================================
+  - job_name: 'jenkins'
+    file_sd_configs:
+      - files:
+          - targets.d/jenkins-*.json
+        refresh_interval: 30s
+    # Jenkins Prometheus plugin metrics endpoint
     metrics_path: /prometheus
-{% endif %}
-{% endfor %}
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    honor_labels: true
+    # Extract labels from file_sd targets and add default labels
+    relabel_configs:
+      # Keep labels from file_sd targets
+      - source_labels: [__meta_jenkins_team]
+        target_label: jenkins_team
+      - source_labels: [__meta_jenkins_environment]
+        target_label: jenkins_environment
+      - source_labels: [__meta_jenkins_blue_green_enabled]
+        target_label: blue_green_enabled
+    # Add additional metric labels
+    metric_relabel_configs:
+      # Ensure deployment_mode label on metrics
+      - source_labels: [__name__]
+        target_label: deployment_mode
+        replacement: '{{ deployment_mode | default("local") }}'
 
+# ======================================================
+# NODE EXPORTER - File-Based Service Discovery
+# ======================================================
+  - job_name: 'node-exporter'
+    file_sd_configs:
+      - files:
+          - targets.d/node-exporter.json
+        refresh_interval: 30s
+    metrics_path: /metrics
+    scrape_interval: 30s
+    relabel_configs:
+      - source_labels: [__meta_node_exporter_role]
+        target_label: role
+
+# ======================================================
+# CONTAINER MONITORING (cAdvisor) - File-Based Service Discovery
+# ======================================================
 {% if cadvisor_enabled | default(true) %}
   - job_name: 'cadvisor'
-    static_configs:
-      - targets: ['localhost:{{ cadvisor_port }}']
+    file_sd_configs:
+      - files:
+          - targets.d/cadvisor.json
+        refresh_interval: 30s
+    metrics_path: /metrics
+    scrape_interval: 30s
+    relabel_configs:
+      - source_labels: [__meta_cadvisor_role]
+        target_label: role
+      - source_labels: [__meta_cadvisor_deployment_type]
+        target_label: deployment_type
+    metric_relabel_configs:
+      # Add deployment mode to container metrics
+      - source_labels: [__name__]
+        target_label: deployment_mode
+        replacement: '{{ deployment_mode | default("local") }}'
+{% endif %}
+
+# ======================================================
+# LOG AGGREGATION (Loki) - File-Based Service Discovery
+# ======================================================
+{% if loki_enabled | default(true) %}
+  - job_name: 'loki'
+    file_sd_configs:
+      - files:
+          - targets.d/loki.json
+        refresh_interval: 30s
+    metrics_path: /metrics
+    scrape_interval: 60s
+    relabel_configs:
+      - source_labels: [__meta_loki_role]
+        target_label: role
+{% endif %}
+
+# ======================================================
+# LOG PROCESSOR (Promtail) - File-Based Service Discovery
+# ======================================================
+{% if promtail_enabled | default(true) %}
+  - job_name: 'promtail'
+    file_sd_configs:
+      - files:
+          - targets.d/promtail.json
+        refresh_interval: 30s
+    metrics_path: /metrics
+    scrape_interval: 60s
+    relabel_configs:
+      - source_labels: [__meta_promtail_role]
+        target_label: role
+{% endif %}
+
+# ======================================================
+# VISUALIZATION (Grafana) - File-Based Service Discovery
+# ======================================================
+{% if grafana_enabled | default(true) %}
+  - job_name: 'grafana'
+    file_sd_configs:
+      - files:
+          - targets.d/grafana.json
+        refresh_interval: 30s
+    metrics_path: /metrics
+    scrape_interval: 60s
+    relabel_configs:
+      - source_labels: [__meta_grafana_role]
+        target_label: role
 {% endif %}

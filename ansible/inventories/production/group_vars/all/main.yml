@@ -24,11 +24,17 @@ haproxy_image_tag: "2.8"  # Use stable Debian-based image
 haproxy_stats_user: "admin"
 haproxy_stats_password: "{{ vault_haproxy_stats_password | default('admin123') }}"
 
-# Monitoring configuration
+# Monitoring configuration with domain routing (corrected domains)
 monitoring_enabled: true
 prometheus_retention: "15d"  # Production retention
+prometheus_port: 9090
+prometheus_domain: "prometheus.{{ monitoring_domain }}"  # prometheus.devops.example.com
 grafana_admin_user: "admin"
 grafana_admin_password: "{{ vault_grafana_admin_password | default('admin123') }}"
+grafana_port: 9300  # Production port
+grafana_domain: "grafana.{{ monitoring_domain }}"  # grafana.devops.example.com
+node_exporter_port: 9100
+node_exporter_domain: "node-exporter.{{ monitoring_domain }}"  # node-exporter.devops.example.com
 
 # Backup configuration
 backup_enabled: true
@@ -66,10 +72,13 @@ monitoring_network_name: "monitoring-net"
 
 # Shared storage settings
 shared_storage_enabled: true
-shared_storage_type: "local"
+shared_storage_type: "local"  # Options: local, nfs, glusterfs
 shared_storage_path: "/opt/jenkins-shared"
 shared_storage_owner: "jenkins"
 shared_storage_group: "jenkins"
+
+# GlusterFS backup servers (for client failover when using GlusterFS)
+glusterfs_backup_servers: ""  # Will be auto-populated in multi-node setup
 
 # Production-specific user/group mappings to avoid conflicts
 jenkins_uid: 1001
@@ -81,6 +90,22 @@ haproxy_uid: 1004
 # HAProxy should bind to port 8090 (HTTP), avoiding privileged port 80 in host networking
 jenkins_port: 8090
 haproxy_gid: 1004
+
+# Domain configuration for production (corrected structure)
+jenkins_domain: "dev.net"
+jenkins_wildcard_domain: "*.dev.net"
+monitoring_domain: "dev.net"  # Monitoring services use same base domain
+monitoring_wildcard_domain: "*.dev.net"
+
+# Multi-team configuration for production HAProxy load balancing
+# Single source of truth: ansible/inventories/production/group_vars/all/jenkins_teams.yml
+# This is automatically loaded and used by monitoring, jenkins-master, and high-availability roles
+# to generate team-specific configurations
+jenkins_teams: "{{ lookup('file', inventory_dir + '/group_vars/all/jenkins_teams.yml') | from_yaml | json_query('jenkins_teams') }}"
+
+# Backward compatibility: keep jenkins_teams_config as alias to jenkins_teams
+# (some roles may still reference this, will be deprecated in future versions)
+jenkins_teams_config: "{{ jenkins_teams }}"
 
 # Timezone
 common_timezone: "UTC"

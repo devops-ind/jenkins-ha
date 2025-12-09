@@ -1,0 +1,31 @@
+apiVersion: 1
+
+# Plugin provisioning configuration for Grafana
+# Enables and configures installed plugins
+# Reference: https://grafana.com/docs/grafana/latest/setup-grafana/configure-grafana/provision-grafana/
+
+apps:
+  # GitHub Datasource Plugin
+  - type: grafana-github-datasource
+    # id: grafana-github-datasource
+    org_id: 1
+    disabled: false
+    settings:
+      # GitHub Enterprise configuration
+      githubUrl: "{{ github_enterprise_url | default('https://github.com') }}"
+      # Token is stored in Vault and passed via environment variable
+      # This allows the plugin to authenticate with GitHub Enterprise
+      tokenConfigured: "true"
+
+  # Jira Datasource Plugin
+  - type: grafana-jira-datasource
+    # id: grafana-jira-datasource
+    org_id: 1
+    disabled: false
+    settings:
+      # Jira Cloud configuration
+      # URL will be set via Jira datasource provisioning
+      jiraUrl: "{{ jira_cloud_url | default('https://company.atlassian.net') }}"
+      # Token is stored in Vault and passed via datasource configuration
+      # This allows the plugin to authenticate with Jira Cloud
+      tokenConfigured: "true"

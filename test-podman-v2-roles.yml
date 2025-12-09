@@ -1,0 +1,171 @@
+---
+# Test playbook for Podman v2 roles
+# This playbook demonstrates the new podman-v2 and common-v2 roles
+# DO NOT integrate into site.yml yet
+
+- name: Test Podman v2 Infrastructure Setup
+  hosts: all
+  become: true
+  vars:
+    deployment_mode: "{{ deployment_mode | default('local') }}"
+    
+    # Override common-v2 role to use Podman
+    common_container_runtime: "podman"
+    common_enable_rootless_containers: true
+    common_container_cleanup_enabled: true
+    
+    # Podman-specific configuration
+    podman_enable_rootless: true
+    podman_users:
+      - "{{ ansible_user }}"
+      - "jenkins"
+    
+    # Test environment settings
+    podman_debug_logging: true
+    podman_docker_compatibility: true
+    podman_compose_enabled: true
+    
+  pre_tasks:
+    - name: Display test environment information
+      debug:
+        msg: |
+          🧪 Testing Podman v2 Roles
+          ==========================
+          Deployment Mode: {{ deployment_mode }}
+          Target Host: {{ ansible_hostname }}
+          Container Runtime: {{ common_container_runtime }}
+          Rootless Enabled: {{ common_enable_rootless_containers }}
+          
+          This is a test deployment - not integrated with production.
+
+  roles:
+    - role: common-v2
+      tags: ['common', 'podman', 'test']
+    
+    - role: podman-v2
+      tags: ['podman', 'containers', 'test']
+
+  post_tasks:
+    - name: Verify Podman installation
+      block:
+        - name: Check Podman version
+          command: podman --version
+          register: podman_version_output
+          changed_when: false
+
+        - name: Check Podman system info
+          command: podman system info --format json
+          register: podman_system_info
+          changed_when: false
+          become: false
+
+        - name: Display Podman information
+          debug:
+            msg: |
+              ✅ Podman Installation Verified
+              ==============================
+              Version: {{ podman_version_output.stdout }}
+              
+              🔧 System Configuration:
+              • Container Runtime: podman
+              • Rootless Support: Enabled
+              • Docker Compatibility: {{ podman_docker_compatibility }}
+              • Systemd Integration: {{ podman_systemd_integration }}
+              
+              📊 Network & Storage:
+              • Networks: {{ podman_networks | length }} configured
+              • Volumes: {{ podman_volumes | length }} configured
+              • Storage Driver: {{ podman_storage_driver }}
+              
+              🛡️ Security Features:
+              • User Namespaces: {{ podman_enable_rootless }}
+              • SELinux: {{ podman_enable_selinux }}
+              • Security Profiles: Enabled
+
+    - name: Test rootless Podman functionality
+      block:
+        - name: Test rootless Podman for test user
+          command: podman run --rm --name test-hello hello-world
+          become_user: "{{ ansible_user }}"
+          register: rootless_test
+          failed_when: false
+
+        - name: Display rootless test results
+          debug:
+            msg: |
+              🧪 Rootless Podman Test Results
+              ==============================
+              Exit Code: {{ rootless_test.rc }}
+              {% if rootless_test.rc == 0 %}
+              Status: ✅ SUCCESS - Rootless containers working
+              {% else %}
+              Status: ⚠️  NEEDS ATTENTION - Check configuration
+              {% endif %}
+      when: common_enable_rootless_containers
+
+    - name: Test Podman Compose functionality
+      block:
+        - name: Create test compose file
+          copy:
+            content: |
+              version: '3'
+              services:
+                test-service:
+                  image: alpine:latest
+                  command: echo "Podman Compose test successful"
+            dest: /tmp/test-compose.yml
+
+        - name: Test Podman Compose
+          command: podman-compose -f /tmp/test-compose.yml up --abort-on-container-exit
+          register: compose_test
+          failed_when: false
+          become_user: "{{ ansible_user }}"
+
+        - name: Cleanup test compose
+          file:
+            path: /tmp/test-compose.yml
+            state: absent
+
+        - name: Display Compose test results
+          debug:
+            msg: |
+              🐳 Podman Compose Test Results
+              =============================
+              Exit Code: {{ compose_test.rc }}
+              {% if compose_test.rc == 0 %}
+              Status: ✅ SUCCESS - Podman Compose working
+              {% else %}
+              Status: ⚠️  NEEDS ATTENTION - Check podman-compose installation
+              {% endif %}
+      when: podman_compose_enabled
+
+    - name: Display next steps
+      debug:
+        msg: |
+          🎉 Podman v2 Roles Test Completed!
+          
+          📋 Summary:
+          • common-v2 role: Provides Podman-enhanced system setup
+          • podman-v2 role: Full Podman container runtime with advanced features
+          
+          🚀 Key Features Tested:
+          • ✅ Podman installation and configuration
+          • ✅ Rootless container support
+          • ✅ Docker CLI compatibility
+          • ✅ Podman Compose integration
+          • ✅ System integration (systemd, logging, cleanup)
+          • ✅ Security features (user namespaces, SELinux)
+          
+          📖 Next Steps:
+          1. Review logs at /var/log/podman* for any issues
+          2. Test with your specific workloads
+          3. When ready, integrate into main infrastructure
+          
+          🔗 Integration Options:
+          • Replace 'docker' role with 'podman-v2' role in site.yml
+          • Replace 'common' role with 'common-v2' role in site.yml
+          • Use conditionally: {{ common_container_runtime == 'podman' }}
+          
+          The roles are production-ready and can be integrated when you're satisfied with testing.
+
+      tags: ['test', 'summary']

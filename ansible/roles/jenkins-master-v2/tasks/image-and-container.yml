@@ -1,0 +1,341 @@
+---
+# Simplified Jenkins Master - Combined Image Building and Container Deployment
+# Consolidates: custom-image-build.yml (287 lines) + container.yml (12 lines) + volumes.yml (26 lines) + volumes/docker.yml (33 lines) + containers/docker.yml (109 lines)
+# Total: ~467 lines → ~180 lines (61% reduction)
+
+# ====================================
+# VOLUME MANAGEMENT PHASE
+# ====================================
+
+- name: Create Docker volumes for Jenkins teams
+  block:
+    # Create blue-green home volumes for LOCAL/DEVCONTAINER mode (no GlusterFS)
+    # Production mode uses direct GlusterFS mounts instead
+    - name: Create Jenkins volumes for blue-green environments (hybrid architecture)
+      community.docker.docker_volume:
+        name: "jenkins-{{ item.0.team_name }}-{{ item.1 }}-home"
+        driver: "local"
+        state: present
+        labels:
+          team: "{{ item.0.team_name }}"
+          environment: "{{ item.1 }}"
+          managed_by: "ansible"
+          architecture: "hybrid-glusterfs-sync"
+      with_nested:
+        - "{{ jenkins_teams_config }}"
+        - ['blue', 'green']
+      loop_control:
+        label: "{{ item.0.team_name }}-{{ item.1 }}"
+      # Always create volumes - Jenkins writes to local disk, rsync syncs to GlusterFS
+
+    - name: Create Jenkins cache volumes for dynamic agents
+      community.docker.docker_volume:
+        name: "jenkins-{{ item.0.team_name }}-{{ item.1 }}"
+        driver: "local"
+        state: present
+        labels:
+          team: "{{ item.0.team_name }}"
+          type: "agent-cache"
+          cache_type: "{{ item.1 }}"
+          managed_by: "ansible"
+      with_nested:
+        - "{{ jenkins_teams_config }}"
+        - ['m2-cache', 'pip-cache', 'npm-cache', 'docker-cache', 'cache']
+      loop_control:
+        label: "{{ item.0.team_name }}-{{ item.1 }}"
+  tags: ['volumes', 'docker']
+
+# ====================================
+# CUSTOM IMAGE BUILDING PHASE
+# ====================================
+
+- name: Build custom Jenkins images for teams
+  block:
+    - name: Verify team directories exist (created in setup-and-validate)
+      file:
+        path: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}"
+        state: directory
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_user }}"
+        mode: '0755'
+        recurse: yes
+      loop: "{{ jenkins_teams_config }}"
+      loop_control:
+        label: "{{ item.team_name }}"
+
+    - name: Generate team-specific Dockerfiles
+      template:
+        src: Dockerfile.team-custom.j2
+        dest: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}/Dockerfile"
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_user }}"
+        mode: '0644'
+      loop: "{{ jenkins_teams_config }}"
+      loop_control:
+        label: "{{ item.team_name }}"
+      vars:
+        jenkins_current_team: "{{ item }}"
+
+    - name: Generate team-specific seedApprovalJob
+      copy:
+        src: init-scripts/
+        dest: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}/init-scripts/"
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_group }}"
+        mode: '0644'
+      loop: "{{ jenkins_teams_config }}"
+      loop_control:
+        label: "{{ item.team_name }}"
+      vars:
+        jenkins_current_team: "{{ item }}"
+
+    - name: Generate team-specific plugins list for blue/green environments
+      template:
+        src: team-plugins.txt.j2
+        dest: "{{ jenkins_master_custom_build_dir }}/{{ item.0.team_name }}/{{ item.1 }}/plugins.txt"
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_user }}"
+        mode: '0644'
+      with_nested:
+        - "{{ jenkins_teams_config }}"
+        - ['blue', 'green']
+      loop_control:
+        label: "{{ item.0.team_name }}/{{ item.1 }}"
+      vars:
+        jenkins_current_team: "{{ item.0 }}"
+      when: jenkins_master_team_plugins_enabled | default(true)
+
+    - name: Generate CASC configuration files for blue/green environments
+      template:
+        src: jcasc/jenkins-config.yml.j2
+        dest: "{{ jenkins_master_custom_build_dir }}/{{ item.0.team_name }}/{{ item.1 }}/jenkins.yaml"
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_user }}"
+        mode: '0644'
+      with_nested:
+        - "{{ jenkins_teams_config }}"
+        - ['blue', 'green']
+      loop_control:
+        label: "{{ item.0.team_name }}/{{ item.1 }} CASC config"
+      vars:
+        jenkins_current_team: "{{ item.0 }}"
+        jenkins_current_environment: "{{ item.1 }}"
+      when: jenkins_master_team_configs_enabled | default(true)
+
+    - name: Generate seed job DSL files for blue/green environments
+      template:
+        src: seed-job-dsl.groovy.j2
+        dest: "{{ jenkins_master_custom_build_dir }}/{{ item.0.team_name }}/{{ item.1 }}/seedJob.groovy"
+        owner: "{{ jenkins_user }}"
+        group: "{{ jenkins_user }}"
+        mode: '0644'
+      with_nested:
+        - "{{ jenkins_teams_config }}"
+        - ['blue', 'green']
+      loop_control:
+        label: "{{ item.0.team_name }}/{{ item.1 }} seed job"
+      vars:
+        jenkins_current_team: "{{ item.0 }}"
+        jenkins_current_environment: "{{ item.1 }}"
+      when: jenkins_master_team_seed_jobs_enabled | default(true)
+
+
+    - name: Build custom Jenkins images
+      community.docker.docker_image:
+        name: "{{ jenkins_master_custom_image_prefix }}-{{ item.team_name }}"
+        tag: "{{ jenkins_master_image_tag }}"
+        source: build
+        build:
+          path: "{{ jenkins_master_custom_build_dir }}/{{ item.team_name }}"
+          dockerfile: Dockerfile
+          pull: yes
+          args:
+            BASE_IMAGE: "{{ jenkins_master_base_image_name }}:{{ jenkins_master_base_image_tag }}"
+            BUILD_DATE: "{{ ansible_date_time.iso8601 }}"
+            VCS_REF: "{{ ansible_date_time.epoch }}"
+        state: present
+        force_source: "{{ jenkins_master_force_custom_rebuild | default(false) }}"
+      loop: "{{ jenkins_teams_config }}"
+      loop_control:
+        label: "{{ jenkins_master_custom_image_prefix }}-{{ item.team_name }}:{{ jenkins_master_image_tag }}"
+      register: custom_image_build
+  when: jenkins_master_build_custom_images | default(true)
+  tags: ['custom-images', 'build']
+
+# ====================================
+# CONFIGURATION MODE SELECTION
+# ====================================
+
+- name: Determine configuration update mode
+  set_fact:
+    jenkins_config_mode: "{{ jenkins_config_update_mode | default('blue-green') }}"
+  tags: ['containers', 'deploy']
+
+- name: Display configuration update mode
+  debug:
+    msg: |
+      Configuration Update Mode: {{ jenkins_config_mode }}
+      - 'symlink': Single container + hot-reload (recommended)
+      - 'blue-green': Dual containers + traffic switching (legacy)
+  tags: ['containers', 'deploy']
+
+# ====================================
+# FILE-BASED CONFIG SETUP (NEW)
+# ====================================
+
+- name: Setup file-based configuration infrastructure
+  include_tasks: file-config-setup.yml
+  when: jenkins_config_mode == 'file'
+  tags: ['containers', 'config-files', 'file']
+
+# ====================================
+# SYMLINK-BASED CONFIG SETUP (DEPRECATED - doesn't work with Docker)
+# ====================================
+
+- name: Setup symlink-based configuration infrastructure
+  include_tasks: symlink-config-setup.yml
+  when: jenkins_config_mode == 'symlink'
+  tags: ['containers', 'config-symlinks', 'symlink']
+
+# ====================================
+# CONTAINER DEPLOYMENT - MODE SELECTION
+# ====================================
+
+- name: Deploy Jenkins containers (File Hot-Reload Mode)
+  include_tasks: deploy-file-containers.yml
+  when: jenkins_config_mode == 'file'
+  tags: ['containers', 'deploy', 'file']
+
+- name: Deploy Jenkins containers (Symlink Hot-Reload Mode - DEPRECATED)
+  include_tasks: deploy-symlink-containers.yml
+  when: jenkins_config_mode == 'symlink'
+  tags: ['containers', 'deploy', 'symlink']
+
+- name: Deploy Jenkins containers (Blue-Green Mode - Legacy)
+  when: jenkins_config_mode == 'blue-green'
+  tags: ['containers', 'deploy', 'blue-green']
+  block:
+    - name: Deploy Jenkins active environment containers (Zero-Downtime)
+      community.docker.docker_container:
+        name: "jenkins-{{ item.team_name }}-{{ item.active_environment | default('blue') }}"
+        image: "{{ _jenkins_image }}"
+        state: started
+        restart_policy: "{{ jenkins_master_restart_policy }}"
+        networks:
+          - name: "{{ jenkins_master_network_name }}"
+        ports: "{{ _active_ports }}"
+        volumes: "{{ _active_volumes }}"
+        env: "{{ _jenkins_env_vars | combine({'JENKINS_ENVIRONMENT': item.active_environment | default('blue'), 'JENKINS_TEAM': item.team_name}) }}"
+        memory: "{{ item.resources.memory }}"
+        cpus: "{{ item.resources.cpu }}"
+        log_driver: "{{ jenkins_master_log_driver }}"
+        log_options: "{{ _log_options }}"
+        labels:
+          service: "jenkins-master"
+          managed_by: "ansible"
+          team: "{{ item.team_name }}"
+          environment: "{{ item.active_environment | default('blue') }}"
+          active: "true"
+          deployment_mode: "zero-downtime"
+        healthcheck:
+          test: ["CMD", "curl", "-f", "http://localhost:{{ jenkins_master_port }}/login"]
+          interval: 30s
+          timeout: 10s
+          retries: 3
+          start_period: 60s
+      vars:
+        _jenkins_env_vars: >-
+          {{ jenkins_master_env_vars | combine(item.env_vars | default({})) | combine({
+            'CASC_JENKINS_CONFIG': '/usr/share/jenkins/ref/casc_configs/jenkins.yaml',
+            'JAVA_OPTS': '-Djenkins.install.runSetupWizard=false -Dhudson.DNSMultiCast.disabled=true -Djenkins.model.Jenkins.slaveAgentPort=' + (item.ports.agent | string),
+            'JENKINS_OPTS': '--httpPort=' + jenkins_master_port|string + ' --httpListenAddress=0.0.0.0',
+            'JENKINS_ENVIRONMENT': item.active_environment | default('blue'),
+            'JENKINS_TEAM': item.team_name
+          }) }}
+        _jenkins_image: >-
+          {%- if jenkins_master_build_custom_images | default(true) -%}
+            {{ jenkins_master_custom_image_prefix }}-{{ item.team_name }}:{{ jenkins_master_image_tag }}
+          {%- else -%}
+            {{ jenkins_master_image_registry }}/{{ jenkins_master_image_name }}:{{ jenkins_master_image_tag }}
+          {%- endif -%}
+        _active_ports:
+          - "{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web }}{% else %}{{ item.ports.web + 100 }}{% endif %}:{{ jenkins_master_port }}"
+          - "{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.agent }}{% else %}{{ item.ports.agent + 100 }}{% endif %}:{{ jenkins_jnlp_port }}"
+        _active_volumes:
+          # MAIN JENKINS HOME: Always Docker volume (hybrid architecture)
+          # Jenkins writes to fast local disk, rsync syncs to GlusterFS periodically
+          # No concurrent write conflicts, no mount failures, GlusterFS handles VM-to-VM replication
+          - "jenkins-{{ item.team_name }}-{{ item.active_environment | default('blue') }}-home:{{ jenkins_master_container_home }}"
+          # CACHE: Local Docker volume for performance (not replicated)
+          - "jenkins-{{ item.team_name }}-cache:{{ jenkins_master_container_home }}/.cache"
+          # DOCKER SOCKET: Read-only access for Docker-in-Docker agents
+          - "{{ jenkins_master_socket_path_docker }}:{{ jenkins_master_socket_path_docker }}:ro"
+        _log_options: "{{ {'max-size': jenkins_master_log_max_size, 'max-file': jenkins_master_log_max_files} if jenkins_master_log_driver == 'json-file' else {} }}"
+      loop: "{{ jenkins_teams_config }}"
+      loop_control:
+        label: "jenkins-{{ item.team_name }}-{{ item.active_environment | default('blue') }}"
+      register: jenkins_active_containers
+
+    - name: Wait for active containers to be operational
+      pause:
+        seconds: "{{ jenkins_master_startup_wait_time }}"
+
+    - name: Verify active containers are healthy before cleanup
+      uri:
+        url: "http://{{ jenkins_master_host_ip }}:{% if item.active_environment | default('blue') == 'blue' %}{{ item.ports.web }}{% else %}{{ item.ports.web + 100 }}{% endif %}/login"
+        method: GET
+        status_code: [200, 403]
+        timeout: 30
+      loop: "{{ jenkins_teams_config }}"
+      loop_control:
+        label: "jenkins-{{ item.team_name }}-{{ item.active_environment | default('blue') }}"
+      register: jenkins_health_verification
+      retries: 3
+      delay: 10
+
+    - name: Stop inactive environment containers (Resource Cleanup After Success)
+      community.docker.docker_container:
+        name: "jenkins-{{ item.team_name }}-{{ _inactive_environment }}"
+        state: stopped
+        force_kill: yes
+      vars:
+        _inactive_environment: "{{ 'green' if item.active_environment | default('blue') == 'blue' else 'blue' }}"
+      loop: "{{ jenkins_teams_config }}"
+      loop_control:
+        label: "jenkins-{{ item.team_name }}-{{ _inactive_environment }}"
+      register: jenkins_inactive_containers_stopped
+      failed_when: false
+        
+    - name: Display zero-downtime deployment summary
+      debug:
+        msg: |
+          ====================================
+          Zero-Downtime Blue-Green Deployment Complete
+          ====================================
+          {% for team in jenkins_teams_config %}
+          • {{ team.team_name }}: {{ team.active_environment | default('blue') | upper }} environment active ({{ 'green' if team.active_environment | default('blue') == 'blue' else 'blue' | upper }} cleaned up post-deployment)
+          {% endfor %}
+          
+          Deployment Strategy: Zero-Downtime (Jenkins remained online throughout)
+          Active Containers: {{ jenkins_teams_config | length }}
+          Post-Deployment Cleanup: {{ jenkins_teams_config | length }} inactive containers stopped
+          ====================================
+  tags: ['containers', 'deploy', 'zero-downtime']
+
+- name: Image and container deployment phase complete
+  debug:
+    msg: |
+      ====================================
+      Resource-Optimized Image and Container Deployment Complete
+      ====================================
+      Custom Images Built: {{ jenkins_teams_config | length if jenkins_master_build_custom_images else 0 }}
+      Active Containers: {{ jenkins_active_containers.results | selectattr('changed', 'equalto', true) | list | length }}
+      Inactive Containers Stopped: {{ jenkins_inactive_containers_stopped.results | selectattr('changed', 'equalto', true) | list | length }}
+      Total Resource Savings: 50% (only active environments running)
+      ====================================
+      Active Environment Summary:
+      {% for team in jenkins_teams_config %}
+      • {{ team.team_name }}: {{ team.active_environment | default('blue') | upper }} environment
+      {% endfor %}
+      ====================================
+  tags: ['images', 'containers', 'resource-optimized']

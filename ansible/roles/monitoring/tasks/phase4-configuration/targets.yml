@@ -1,0 +1,142 @@
+---
+# Prometheus Target Generation
+# Generates scrape targets for Jenkins instances and monitoring agents
+# This must run AFTER agent deployment to collect agent target variables
+
+- name: Initialize Prometheus target configuration
+  set_fact:
+    prometheus_jenkins_targets: []
+    prometheus_deployment_mode: "{{ deployment_mode | default('local') }}"
+    prometheus_jenkins_hosts: "{{ groups['jenkins_masters'] | default(['localhost']) }}"
+  tags: ['monitoring', 'targets']
+
+- name: Validate team configuration for monitoring
+  set_fact:
+    prometheus_teams_validated: "{{ jenkins_teams if (jenkins_teams is defined and jenkins_teams is iterable and jenkins_teams is not string and jenkins_teams | length > 0) else [] }}"
+  tags: ['monitoring', 'targets']
+
+# Split the complex logic into safer, more explicit tasks
+- name: Calculate effective ports for each team (separate task for clarity)
+  set_fact:
+    team_port_calculations: "{{ team_port_calculations | default({}) | combine({item.team_name: calculated_port}) }}"
+  vars:
+    team_web_port: "{{ item.ports.web | default(8080) | int }}"
+    team_active_env: "{{ item.active_environment | default('blue') }}"
+    team_bg_enabled: "{{ item.blue_green_enabled | default(true) }}"
+    calculated_port: "{{ team_web_port | int + (100 if (team_bg_enabled and team_active_env == 'green') else 0) }}"
+  loop: "{{ prometheus_teams_validated }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  when: prometheus_teams_validated | length > 0
+  tags: ['monitoring', 'targets']
+
+- name: Generate team-specific Jenkins Prometheus targets (safe approach)
+  set_fact:
+    prometheus_jenkins_targets: "{{ prometheus_jenkins_targets + [team_target_config] }}"
+  vars:
+    team_effective_port: "{{ team_port_calculations[item.team_name] }}"
+    team_target_list: >
+      {%- if prometheus_deployment_mode == 'local' -%}
+      ["localhost:{{ team_effective_port }}"]
+      {%- else -%}
+      [{% for host in prometheus_jenkins_hosts %}
+        "{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{{ hostvars[host]['host_fqdn'] }}{% else %}{{ hostvars[host]['ansible_default_ipv4']['address'] }}{% endif %}:{{ team_effective_port }}"
+        {%- if not loop.last %}, {% endif %}
+      {% endfor %}]
+      {%- endif -%}
+    team_target_config:
+      job: "jenkins-{{ item.team_name }}"
+      targets: "{{ team_target_list | from_yaml }}"
+      team_name: "{{ item.team_name }}"
+      active_environment: "{{ item.active_environment | default('blue') }}"
+      port: "{{ team_effective_port | int }}"
+      blue_green_enabled: "{{ item.blue_green_enabled | default(true) }}"
+  loop: "{{ prometheus_teams_validated }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  when: prometheus_teams_validated | length > 0
+  tags: ['monitoring', 'targets']
+
+- name: Generate default Jenkins Prometheus target (fallback - safe approach)
+  set_fact:
+    prometheus_jenkins_targets: "{{ prometheus_jenkins_targets + [default_target_config] }}"
+  vars:
+    default_target_list: >
+      {%- if prometheus_deployment_mode == 'local' -%}
+      ["localhost:8080"]
+      {%- else -%}
+      [{% for host in prometheus_jenkins_hosts %}
+        "{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{{ hostvars[host]['host_fqdn'] }}{% else %}{{ hostvars[host]['ansible_default_ipv4']['address'] }}{% endif %}:8080"
+        {%- if not loop.last %}, {% endif %}
+      {% endfor %}]
+      {%- endif -%}
+    default_target_config:
+      job: "jenkins-default"
+      targets: "{{ default_target_list | from_yaml }}"
+      team_name: "default"
+      active_environment: "blue"
+      port: 8080
+      blue_green_enabled: false
+  when: prometheus_teams_validated | length == 0
+  tags: ['monitoring', 'targets']
+
+- name: Merge Jenkins targets with base Prometheus targets
+  set_fact:
+    prometheus_targets: "{{ prometheus_base_targets | default([]) + prometheus_jenkins_targets }}"
+  tags: ['monitoring', 'targets']
+
+- name: Validate final Prometheus configuration
+  assert:
+    that:
+      - prometheus_jenkins_targets is defined
+      - prometheus_jenkins_targets | length > 0
+      - prometheus_targets is defined
+      - prometheus_targets | length > 0
+    fail_msg: |
+      ERROR: Prometheus target generation failed!
+
+      Teams validated: {{ prometheus_teams_validated | length }}
+      Jenkins targets generated: {{ prometheus_jenkins_targets | length }}
+      Total targets: {{ prometheus_targets | length }}
+
+      This indicates a configuration or template processing error.
+    success_msg: |
+      ✅ Prometheus target generation successful!
+
+      Teams configured: {{ prometheus_teams_validated | length }}
+      Jenkins targets: {{ prometheus_jenkins_targets | length }}
+      Total targets: {{ prometheus_targets | length }}
+  tags: ['monitoring', 'targets']
+
+- name: Display monitoring target configuration
+  debug:
+    msg: |
+      ====================================================
+      🎯 Monitoring Target Configuration Summary
+      ====================================================
+      Deployment Mode: {{ prometheus_deployment_mode }}
+      Teams Validated: {{ prometheus_teams_validated | length }}
+      Jenkins Jobs Generated: {{ prometheus_jenkins_targets | map(attribute='job') | join(', ') if prometheus_jenkins_targets else 'none' }}
+      Total Prometheus Targets: {{ prometheus_targets | length }}
+
+      📊 Jenkins Monitoring Details:
+      {% for target in prometheus_jenkins_targets %}
+      • {{ target.job }} ({{ target.team_name }} - {{ target.active_environment }})
+        Port: {{ target.port }} | Blue-Green: {{ target.blue_green_enabled }}
+        Targets: {{ target.targets | join(', ') }}
+      {% endfor %}
+
+      🌐 All Prometheus Targets:
+      {% for target in prometheus_targets %}
+      • {{ target.job }}: {{ target.targets | join(', ') }}
+      {% endfor %}
+
+      🔍 Agent Targets (from Phase 2 deployment):
+      {% if prometheus_node_exporter_targets is defined %}
+      • Node Exporter: {{ prometheus_node_exporter_targets | join(', ') }}
+      {% endif %}
+      {% if prometheus_cadvisor_targets is defined %}
+      • cAdvisor: {{ prometheus_cadvisor_targets | join(', ') }}
+      {% endif %}
+      ====================================================
+  tags: ['monitoring', 'targets']

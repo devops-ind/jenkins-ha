@@ -1,0 +1,103 @@
+---
+# Unified cAdvisor Deployment
+# Deploys to ALL monitoring target hosts (monitoring VM + Jenkins VMs)
+# Consolidates local and cross-VM cAdvisor deployment
+
+- name: Display cAdvisor deployment info
+  debug:
+    msg: |
+      ==========================================================
+      cAdvisor Deployment
+      ==========================================================
+      Deployment type: {{ monitoring_deployment_type }}
+      Target hosts: {{ monitoring_target_hosts | join(', ') }}
+      cAdvisor version: {{ cadvisor_version }}
+      Port: {{ cadvisor_port }}
+      Enabled: {{ cadvisor_enabled | default(true) }}
+      ==========================================================
+  tags: ['monitoring', 'agents', 'cadvisor']
+
+- name: Check for existing cAdvisor containers on all target hosts
+  community.docker.docker_container_info:
+    name: cadvisor-{{ deployment_environment | default('local') }}
+  register: cadvisor_container_info
+  delegate_to: "{{ item }}"
+  loop: "{{ monitoring_target_hosts }}"
+  failed_when: false
+  when: cadvisor_enabled | default(true)
+  tags: ['monitoring', 'agents', 'cadvisor', 'check']
+
+- name: Deploy cAdvisor containers to all target hosts
+  community.docker.docker_container:
+    name: cadvisor-{{ deployment_environment | default('local') }}
+    image: "gcr.io/cadvisor/cadvisor:{{ cadvisor_version }}"
+    state: started
+    restart_policy: "{{ monitoring_restart_policy }}"
+    privileged: yes  # Required for cAdvisor to access system resources
+    network_mode: host  # Required for cross-VM metrics scraping
+    volumes:
+      - "/:/rootfs:ro"
+      - "/var/run:/var/run:ro"
+      - "/sys:/sys:ro"
+      - "/var/lib/docker/:/var/lib/docker:ro"
+      - "/dev/disk/:/dev/disk:ro"
+    command:
+      - '--docker_only=true'
+      - '--housekeeping_interval=30s'
+      - '--disable_metrics=percpu,sched,tcp,udp,disk,diskIO,accelerator,hugetlb,referenced_memory,cpu_topology,resctrl'
+      - '--port={{ cadvisor_port }}'  # Explicit port for host network mode
+    labels:
+      monitoring.role: "agent"
+      monitoring.type: "cadvisor"
+      monitoring.environment: "{{ deployment_environment | default('local') }}"
+  delegate_to: "{{ item }}"
+  loop: "{{ monitoring_target_hosts }}"
+  when: cadvisor_enabled | default(true)
+  tags: ['monitoring', 'agents', 'cadvisor', 'deploy']
+
+- name: Wait for cAdvisor to be ready on all hosts
+  uri:
+    url: "http://{% if monitoring_use_fqdn and hostvars[item]['host_fqdn'] is defined %}{{ hostvars[item]['host_fqdn'] }}{% else %}{{ hostvars[item]['ansible_default_ipv4']['address'] }}{% endif %}:{{ cadvisor_port }}/metrics"
+    method: GET
+    status_code: 200
+    timeout: 10
+  register: cadvisor_ready
+  until: cadvisor_ready.status == 200
+  retries: 10
+  delay: 3
+  loop: "{{ monitoring_target_hosts }}"
+  when: cadvisor_enabled | default(true)
+  tags: ['monitoring', 'agents', 'cadvisor', 'verify']
+
+- name: Generate cAdvisor Prometheus scrape targets
+  set_fact:
+    prometheus_cadvisor_targets: "{% set targets = [] %}{% for host in monitoring_target_hosts %}{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{% set _ = targets.append(hostvars[host]['host_fqdn'] + ':' + (cadvisor_port | string)) %}{% else %}{% set _ = targets.append(hostvars[host]['ansible_default_ipv4']['address'] + ':' + (cadvisor_port | string)) %}{% endif %}{% endfor %}{{ targets }}"
+  when: cadvisor_enabled | default(true)
+  tags: ['monitoring', 'agents', 'cadvisor', 'targets']
+
+- name: Display cAdvisor deployment summary
+  debug:
+    msg: |
+      ==========================================================
+      cAdvisor Deployment Complete
+      ==========================================================
+      Deployed to hosts: {{ monitoring_target_hosts | length }}
+      Prometheus scrape targets: {{ prometheus_cadvisor_targets | default([]) | length }}
+
+      Verification URLs:
+      {% for host in monitoring_target_hosts %}
+      - http://{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{{ hostvars[host]['host_fqdn'] }}{% else %}{{ hostvars[host]['ansible_default_ipv4']['address'] }}{% endif %}:{{ cadvisor_port }}/metrics
+      {% endfor %}
+
+      Prometheus Query Examples:
+      - Container CPU: container_cpu_usage_seconds_total{job="cadvisor"}
+      - Container Memory: container_memory_usage_bytes{job="cadvisor"}
+      - Container Network RX: container_network_receive_bytes_total{job="cadvisor"}
+      - Container Network TX: container_network_transmit_bytes_total{job="cadvisor"}
+
+      cAdvisor Web UI:
+      {% for host in monitoring_target_hosts %}
+      - http://{% if monitoring_use_fqdn and hostvars[host]['host_fqdn'] is defined %}{{ hostvars[host]['host_fqdn'] }}{% else %}{{ hostvars[host]['ansible_default_ipv4']['address'] }}{% endif %}:{{ cadvisor_port }}/containers/
+      {% endfor %}
+      ==========================================================
+  tags: ['monitoring', 'agents', 'cadvisor', 'summary']

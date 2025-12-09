@@ -1,0 +1,178 @@
+---
+# Simplified HAProxy High Availability Role v2 - Default Variables
+# Streamlined configuration maintaining all enterprise HA features
+
+# ====================================
+# CORE HAPROXY CONFIGURATION
+# ====================================
+haproxy_container_runtime: "docker"
+haproxy_restart_policy: "unless-stopped"
+haproxy_startup_wait_time: 15
+
+# ====================================
+# IMAGE CONFIGURATION
+# ====================================
+haproxy_image_registry: "docker.io"
+haproxy_image_name: "haproxy"
+haproxy_image_tag: "2.8-alpine"
+
+# Environment-specific image alternatives
+haproxy_image_alternatives:
+  devcontainer: "2.8"  # Use Debian-based for devcontainer compatibility
+  local: "2.8-alpine"
+  production: "2.8-alpine"
+
+# ====================================
+# NETWORK CONFIGURATION
+# ====================================
+haproxy_network_mode: "bridge"
+haproxy_frontend_port: 8000  # Frontend port that doesn't conflict with Jenkins containers
+haproxy_stats_port: 8404
+haproxy_stats_uri: "/stats"
+haproxy_stats_user: "admin"
+haproxy_stats_password: "admin123"
+
+# ====================================
+# USER AND SECURITY CONFIGURATION
+# ====================================
+haproxy_user: "haproxy"
+haproxy_uid: 1003
+haproxy_gid: 1003
+
+# ====================================
+# RESOURCE LIMITS
+# ====================================
+haproxy_memory_limit: "512m"
+haproxy_cpu_limit: "1.0"
+
+# ====================================
+# LOGGING CONFIGURATION
+# ====================================
+haproxy_log_driver: "json-file"
+haproxy_log_max_size: "10m"
+haproxy_log_max_files: "3"
+
+# ====================================
+# SSL/TLS CONFIGURATION
+# ====================================
+ssl_enabled: false
+ssl_certificate_path: "/usr/local/etc/haproxy/ssl/combined.pem"
+
+# Dynamic SSL certificate generation (used when ssl_enabled is true)
+ssl_certificate_dir: "/etc/ssl/certs"
+ssl_private_key_dir: "/etc/ssl/private"
+ssl_ca_dir: "/etc/ssl/ca"
+ssl_csr_dir: "/etc/ssl/csr"
+ssl_validity_days: 365
+
+# SSL certificate details
+ssl_country: "US"
+ssl_state: "California"
+ssl_city: "San Francisco"
+ssl_organization: "Jenkins HA Infrastructure"
+ssl_organizational_unit: "DevOps Team"
+ssl_email: "devops@{{ jenkins_domain | default('devops.local') }}"
+vault_ca_key_password: ""
+# Legacy SSL certificate paths (for existing certificates)
+# ssl_cert_path: "/path/to/certificate.pem"
+# ssl_key_path: "/path/to/private.key"  # Optional if key is in cert file
+
+# ====================================
+# HEALTH CHECK CONFIGURATION
+# ====================================
+haproxy_check_interval: "5s"
+haproxy_check_fall: 3
+haproxy_check_rise: 2
+haproxy_check_timeout: "10s"
+
+# ====================================
+# VIP AND KEEPALIVED CONFIGURATION
+# ====================================
+keepalived_enabled: false
+# jenkins_vip: "192.168.1.100"  # Define to enable VIP
+vip_address: "*"  # Virtual IP address or '*' for any interface
+keepalived_priority: 100  # Higher value = master (100-255)
+keepalived_advert_int: 1
+keepalived_auth_pass: "{{ vault_keepalived_auth_pass | default('changeme123') }}"
+
+# Intelligent failover thresholds (prevents cascading failures)
+# These settings prevent a single team's Jenkins failure from triggering full VIP failover
+keepalived_backend_health_threshold: 50  # Percentage of backends that must be UP (50% = majority)
+keepalived_team_quorum: 2  # Minimum number of healthy teams to avoid failover (out of 4 teams)
+keepalived_failover_grace_period: 30  # Seconds to wait before triggering failover (prevents flapping)
+
+# ====================================
+# TEAM ROUTING CONFIGURATION
+# ====================================
+team_routing_enabled: true
+jenkins_domain: "devops.example.com"  # Default domain for multi-team routing
+# jenkins_wildcard_domain: "*.devops.example.com"
+backend_balance_method: "roundrobin"  # Load balancing algorithm
+
+# Cross-VM Backend Failover Strategy
+# Options: 'active-passive' (recommended), 'active-active', 'local-only'
+haproxy_backend_failover_strategy: "active-passive"
+# active-passive: Primary VM handles all traffic, backup VM only used on failure (backup flag)
+# active-active: Both VMs handle traffic simultaneously (load balanced)
+# local-only: Each HAProxy only routes to local Jenkins (current behavior)
+
+# ====================================
+# MONITORING CONFIGURATION
+# ====================================
+monitoring_enabled: true
+monitoring_interval_minutes: 2
+monitoring_log_retention_days: 7
+
+# ====================================
+# ENVIRONMENT VARIABLES
+# ====================================
+haproxy_env_vars:
+  TZ: "{{ common_timezone | default('UTC') }}"
+  HAPROXY_USER: "{{ haproxy_user }}"
+
+# ====================================
+# DEFAULT LABELS
+# ====================================
+haproxy_default_labels:
+  service: "haproxy"
+  role: "load-balancer"
+  managed_by: "ansible"
+  version: "simplified-v2"
+
+# ====================================
+# COMPATIBILITY SETTINGS
+# ====================================
+# These settings ensure compatibility with existing configurations
+haproxy_deployment_mode: "{{ 'multi-team' if jenkins_teams is defined and jenkins_teams | length > 0 else 'single-team' }}"
+haproxy_effective_teams: "{{ jenkins_teams if jenkins_teams is defined and jenkins_teams | length > 0 else [] }}"
+
+# ====================================
+# DEFAULT TEAM CONFIGURATION STRUCTURE
+# ====================================
+# Default values for team configuration to ensure template compatibility
+jenkins_teams_defaults:
+  blue_green_enabled: true
+  active_environment: "blue"
+  ports:
+    web: 8080
+    agent: 50000
+  resources:
+    memory: "2g"
+    cpu: "1.0"
+  env_vars: {}
+  labels:
+    tier: "production"
+
+# ====================================
+# OPERATIONAL SETTINGS
+# ====================================
+haproxy_config_backup_enabled: true
+haproxy_auto_restart_on_config_change: true
+haproxy_graceful_shutdown_timeout: 30
+
+# ====================================
+# DEVELOPMENT/TESTING OVERRIDES
+# ====================================
+# Set these in inventory for development environments
+# deployment_mode: "local"  # Enables devcontainer compatibility mode
+# _is_devcontainer: false   # Auto-detected based on environment

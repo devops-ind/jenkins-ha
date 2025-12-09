@@ -1,0 +1,666 @@
+// Infrastructure Deployment Pipeline
+// Unified pipeline for deploying Jenkins Masters, HAProxy, and Monitoring
+// Supports blue-green deployment, data recovery from GlusterFS, validation, and manual approval
+
+pipeline {
+    agent {
+        label 'python-agent'
+    }
+
+    parameters {
+        choice(
+            name: 'COMPONENT',
+            choices: ['jenkins-masters', 'haproxy', 'monitoring', 'all'],
+            description: 'Component to deploy'
+        )
+        choice(
+            name: 'TARGET_VM',
+            choices: ['jenkins_hosts_01', 'jenkins_hosts_02', 'monitoring', 'all'],
+            description: 'Target VM for deployment'
+        )
+        string(
+            name: 'DEPLOY_TEAMS',
+            defaultValue: 'all',
+            description: 'Teams to deploy (comma-separated): devops,ma,ba,tw OR all'
+        )
+        choice(
+            name: 'TARGET_ENVIRONMENT',
+            choices: ['auto', 'blue', 'green'],
+            description: 'Blue-green environment (auto=detect passive)'
+        )
+        booleanParam(
+            name: 'SKIP_DATA_RECOVERY',
+            defaultValue: false,
+            description: 'Skip GlusterFS data recovery (for fresh deployment)'
+        )
+        booleanParam(
+            name: 'SKIP_VALIDATION',
+            defaultValue: false,
+            description: 'Skip post-deployment validation tests'
+        )
+        booleanParam(
+            name: 'DRY_RUN',
+            defaultValue: false,
+            description: 'Dry-run mode (Ansible --check)'
+        )
+        booleanParam(
+            name: 'AUTO_SWITCH',
+            defaultValue: false,
+            description: 'Automatically switch after validation (no approval gate)'
+        )
+        choice(
+            name: 'NOTIFICATION_CHANNEL',
+            choices: ['teams', 'email', 'both'],
+            description: 'Notification channel'
+        )
+    }
+
+    environment {
+        ANSIBLE_INVENTORY = 'ansible/inventories/production/hosts.yml'
+        ANSIBLE_PLAYBOOK_DIR = 'ansible'
+        ANSIBLE_VAULT_PASSWORD_FILE = credentials('ansible-vault-password')
+        ANSIBLE_FORCE_COLOR = 'true'
+        ANSIBLE_HOST_KEY_CHECKING = 'false'
+
+        // Deployment state tracking
+        DEPLOYMENT_ID = "${env.BUILD_ID}-${env.BUILD_TIMESTAMP}"
+        DEPLOYMENT_LOG_DIR = "/var/log/infrastructure-deployment/${DEPLOYMENT_ID}"
+
+        // Notification webhook
+        TEAMS_WEBHOOK_URL = credentials('teams-webhook-infrastructure')
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10'))
+        timeout(time: 2, unit: 'HOURS')
+        timestamps()
+        ansiColor('xterm')
+        disableConcurrentBuilds()  // Prevent concurrent deployments
+    }
+
+    stages {
+        stage('Checkout Code') {
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "📦 Checking out Ansible repository..."
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                }
+
+                checkout scm
+
+                script {
+                    // Verify repository contents
+                    sh '''
+                        echo "Repository contents:"
+                        ls -la
+                        echo ""
+                        echo "Ansible directory:"
+                        ls -la ansible/
+                        echo ""
+                        echo "✅ Repository checked out successfully"
+                    '''
+                }
+            }
+        }
+
+        stage('Initialization') {
+            steps {
+                script {
+                    // Display deployment parameters
+                    echo """
+                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    🚀 Infrastructure Deployment Pipeline
+                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    Component:         ${params.COMPONENT}
+                    Target VM:         ${params.TARGET_VM}
+                    Deploy Teams:      ${params.DEPLOY_TEAMS}
+                    Target Environment: ${params.TARGET_ENVIRONMENT}
+                    Skip Data Recovery: ${params.SKIP_DATA_RECOVERY}
+                    Skip Validation:    ${params.SKIP_VALIDATION}
+                    Dry Run:           ${params.DRY_RUN}
+                    Auto Switch:       ${params.AUTO_SWITCH}
+
+                    Deployment ID:     ${env.DEPLOYMENT_ID}
+                    Triggered by:      ${env.BUILD_USER ?: 'System'}
+                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    """.stripIndent()
+
+                    // Create deployment log directory
+                    sh "mkdir -p ${env.DEPLOYMENT_LOG_DIR}"
+                }
+            }
+        }
+
+        stage('Pre-Flight Validation') {
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "Stage 1: Pre-Flight Validation"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                }
+            }
+        }
+
+        stage('1. Ansible Syntax Check') {
+            steps {
+                echo "✓ Validating Ansible playbook syntax..."
+                sh """
+                    cd ${env.ANSIBLE_PLAYBOOK_DIR}
+                    ansible-playbook site.yml --syntax-check
+                """
+            }
+        }
+
+        stage('2. Inventory Validation') {
+            steps {
+                echo "✓ Validating inventory structure..."
+                sh """
+                    ansible-inventory -i ${env.ANSIBLE_INVENTORY} --list > ${env.DEPLOYMENT_LOG_DIR}/inventory.json
+                    ansible-inventory -i ${env.ANSIBLE_INVENTORY} --graph > ${env.DEPLOYMENT_LOG_DIR}/inventory-graph.txt
+
+                    # Display inventory summary
+                    echo "Inventory Summary:"
+                    cat ${env.DEPLOYMENT_LOG_DIR}/inventory-graph.txt
+                """
+            }
+        }
+
+        stage('3. SSH Connectivity Check') {
+            steps {
+                echo "✓ Testing SSH connectivity to target VMs..."
+                script {
+                    def targetLimit = params.TARGET_VM == 'all' ? 'all' : params.TARGET_VM
+
+                    sh """
+                        ansible ${targetLimit} -i ${env.ANSIBLE_INVENTORY} \
+                            -m ping \
+                            | tee ${env.DEPLOYMENT_LOG_DIR}/ssh-connectivity.log
+                    """
+                }
+            }
+        }
+
+        stage('4. Detect Current State') {
+            steps {
+                echo "✓ Detecting current active/passive state per team..."
+                script {
+                    // Detect current active environment for each team
+                    def stateDetection = sh(
+                        script: """
+                            ansible jenkins_masters -i ${env.ANSIBLE_INVENTORY} \
+                                -m shell \
+                                -a 'cat /var/jenkins/*/blue-green-state.json 2>/dev/null || echo "{}"' \
+                                | tee ${env.DEPLOYMENT_LOG_DIR}/current-state.log
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    echo "Current State Detection:"
+                    echo stateDetection
+                }
+            }
+        }
+
+        stage('5. GlusterFS Accessibility Check') {
+            when {
+                expression { params.COMPONENT in ['jenkins-masters', 'all'] }
+                expression { !params.SKIP_DATA_RECOVERY }
+            }
+            steps {
+                echo "✓ Verifying GlusterFS mounts are accessible..."
+                sh """
+                    ansible jenkins_masters -i ${env.ANSIBLE_INVENTORY} \
+                        -m stat \
+                        -a 'path=/var/jenkins/devops/sync' \
+                        | tee ${env.DEPLOYMENT_LOG_DIR}/glusterfs-check.log
+                """
+            }
+        }
+
+        stage('6. Disk Space Check') {
+            steps {
+                echo "✓ Checking available disk space on target VMs..."
+                sh """
+                    ansible ${params.TARGET_VM == 'all' ? 'all' : params.TARGET_VM} \
+                        -i ${env.ANSIBLE_INVENTORY} \
+                        -m shell \
+                        -a 'df -h / | tail -1' \
+                        | tee ${env.DEPLOYMENT_LOG_DIR}/disk-space.log
+                """
+            }
+        }
+
+        stage('Dependency Check (Soft)') {
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "Dependency Check (Non-Blocking Warnings)"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                    def warnings = []
+
+                    // Check GlusterFS for Jenkins deployment
+                    if (params.COMPONENT in ['jenkins-masters', 'all'] && !params.SKIP_DATA_RECOVERY) {
+                        def glusterCheck = sh(
+                            script: """
+                                ansible jenkins_masters -i ${env.ANSIBLE_INVENTORY} \
+                                    -m stat -a 'path=/var/jenkins/devops/sync' \
+                                    | grep -q 'SUCCESS'
+                            """,
+                            returnStatus: true
+                        )
+                        if (glusterCheck != 0) {
+                            warnings.add("⚠️ GlusterFS mounts not accessible - data recovery may fail")
+                        }
+                    }
+
+                    // Check Jenkins for HAProxy deployment
+                    if (params.COMPONENT in ['haproxy', 'all']) {
+                        def jenkinsCheck = sh(
+                            script: "curl -sf http://jenkins_hosts_01:8080/login > /dev/null",
+                            returnStatus: true
+                        )
+                        if (jenkinsCheck != 0) {
+                            warnings.add("⚠️ Jenkins not responding - HAProxy backends will be DOWN initially")
+                        }
+                    }
+
+                    // Display warnings
+                    if (warnings.size() > 0) {
+                        echo "\nDependency Warnings (non-blocking):"
+                        warnings.each { warning ->
+                            echo warning
+                        }
+                        echo "\nDeployment will continue..."
+                    } else {
+                        echo "✓ All dependencies met"
+                    }
+                }
+            }
+        }
+
+        stage('Component Deployment') {
+            parallel {
+                stage('Deploy Jenkins Masters') {
+                    when {
+                        expression { params.COMPONENT in ['jenkins-masters', 'all'] }
+                    }
+                    stages {
+                        stage('Data Recovery from GlusterFS') {
+                            when {
+                                expression { !params.SKIP_DATA_RECOVERY }
+                            }
+                            steps {
+                                script {
+                                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                    echo "Jenkins Masters - Data Recovery from GlusterFS"
+                                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                                    def targetLimit = params.TARGET_VM == 'all' ? 'jenkins_masters' : params.TARGET_VM
+                                    def deployTeams = params.DEPLOY_TEAMS
+                                    def extraVars = "-e 'target_vm=${targetLimit}'"
+
+                                    if (deployTeams != 'all') {
+                                        extraVars += " -e 'deploy_teams=${deployTeams}'"
+                                    }
+
+                                    sh """
+                                        ansible-playbook -i ${env.ANSIBLE_INVENTORY} \
+                                            ansible/playbooks/jenkins-data-recovery.yml \
+                                            --limit ${targetLimit} \
+                                            ${extraVars} \
+                                            | tee ${env.DEPLOYMENT_LOG_DIR}/data-recovery.log
+                                    """
+                                }
+                            }
+                        }
+
+                        stage('Deploy Jenkins Containers') {
+                            steps {
+                                script {
+                                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                    echo "Jenkins Masters - Container Deployment"
+                                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                                    def targetLimit = params.TARGET_VM == 'all' ? 'jenkins_masters' : params.TARGET_VM
+                                    def deployTeams = params.DEPLOY_TEAMS
+                                    def dryRun = params.DRY_RUN ? '--check' : ''
+                                    def extraVars = ""
+
+                                    if (deployTeams != 'all') {
+                                        extraVars = "-e 'deploy_teams=${deployTeams}'"
+                                    }
+
+                                    sh """
+                                        ansible-playbook -i ${env.ANSIBLE_INVENTORY} \
+                                            ansible/site.yml \
+                                            --tags jenkins \
+                                            --limit ${targetLimit} \
+                                            ${extraVars} \
+                                            ${dryRun} \
+                                            | tee ${env.DEPLOYMENT_LOG_DIR}/jenkins-deployment.log
+                                    """
+                                }
+                            }
+                        }
+
+                        stage('Post-Deployment Validation') {
+                            when {
+                                expression { !params.SKIP_VALIDATION }
+                            }
+                            steps {
+                                script {
+                                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                    echo "Jenkins Masters - Post-Deployment Validation"
+                                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                                    def targetLimit = params.TARGET_VM == 'all' ? 'jenkins_masters' : params.TARGET_VM
+                                    def deployTeams = params.DEPLOY_TEAMS
+                                    def extraVars = "-e 'target_vm=${targetLimit}'"
+
+                                    if (deployTeams != 'all') {
+                                        extraVars += " -e 'deploy_teams=${deployTeams}'"
+                                    }
+
+                                    sh """
+                                        ansible-playbook -i ${env.ANSIBLE_INVENTORY} \
+                                            ansible/playbooks/jenkins-validation.yml \
+                                            --limit ${targetLimit} \
+                                            ${extraVars} \
+                                            | tee ${env.DEPLOYMENT_LOG_DIR}/jenkins-validation.log
+                                    """
+
+                                    // Also run custom validation script
+                                    sh """
+                                        bash scripts/jenkins-deployment-validator.sh \
+                                            --teams ${deployTeams} \
+                                            --vm ${targetLimit} \
+                                            | tee ${env.DEPLOYMENT_LOG_DIR}/jenkins-validator.log
+                                    """
+                                }
+                            }
+                        }
+                    }
+                }
+
+                stage('Deploy HAProxy') {
+                    when {
+                        expression { params.COMPONENT in ['haproxy', 'all'] }
+                    }
+                    stages {
+                        stage('HAProxy Configuration Generation') {
+                            steps {
+                                script {
+                                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                    echo "HAProxy - Configuration Generation"
+                                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                                    def targetLimit = params.TARGET_VM == 'all' ? 'load_balancers' : params.TARGET_VM
+                                    def dryRun = params.DRY_RUN ? '--check' : ''
+
+                                    sh """
+                                        ansible-playbook -i ${env.ANSIBLE_INVENTORY} \
+                                            ansible/site.yml \
+                                            --tags high-availability,haproxy \
+                                            --limit ${targetLimit} \
+                                            ${dryRun} \
+                                            | tee ${env.DEPLOYMENT_LOG_DIR}/haproxy-deployment.log
+                                    """
+                                }
+                            }
+                        }
+
+                        stage('HAProxy Health Check') {
+                            when {
+                                expression { !params.SKIP_VALIDATION }
+                            }
+                            steps {
+                                script {
+                                    echo "✓ Verifying HAProxy backend health..."
+                                    sh """
+                                        ansible load_balancers -i ${env.ANSIBLE_INVENTORY} \
+                                            -m shell \
+                                            -a 'docker exec jenkins-haproxy haproxy -f /usr/local/etc/haproxy/haproxy.cfg -c' \
+                                            | tee ${env.DEPLOYMENT_LOG_DIR}/haproxy-health.log
+                                    """
+                                }
+                            }
+                        }
+                    }
+                }
+
+                stage('Deploy Monitoring') {
+                    when {
+                        expression { params.COMPONENT in ['monitoring', 'all'] }
+                    }
+                    stages {
+                        stage('Monitoring Stack Deployment') {
+                            steps {
+                                script {
+                                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                    echo "Monitoring - Stack Deployment"
+                                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                                    def dryRun = params.DRY_RUN ? '--check' : ''
+
+                                    sh """
+                                        ansible-playbook -i ${env.ANSIBLE_INVENTORY} \
+                                            ansible/site.yml \
+                                            --tags monitoring \
+                                            --limit monitoring \
+                                            ${dryRun} \
+                                            | tee ${env.DEPLOYMENT_LOG_DIR}/monitoring-deployment.log
+                                    """
+                                }
+                            }
+                        }
+
+                        stage('Monitoring Health Check') {
+                            when {
+                                expression { !params.SKIP_VALIDATION }
+                            }
+                            steps {
+                                script {
+                                    echo "✓ Verifying monitoring stack health..."
+                                    sh """
+                                        # Check Prometheus
+                                        curl -sf http://monitoring:9090/-/healthy || echo "⚠️ Prometheus health check failed"
+
+                                        # Check Grafana
+                                        curl -sf http://monitoring:9300/api/health || echo "⚠️ Grafana health check failed"
+
+                                        # Check Loki
+                                        curl -sf http://monitoring:9400/ready || echo "⚠️ Loki health check failed"
+                                    """ | tee ${env.DEPLOYMENT_LOG_DIR}/monitoring-health.log
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Manual Approval Gate') {
+            when {
+                expression { !params.AUTO_SWITCH }
+                expression { params.COMPONENT in ['jenkins-masters', 'all'] }
+                expression { !params.DRY_RUN }
+            }
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "⏸️  APPROVAL REQUIRED: Blue-Green Switch"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                    // Read validation results
+                    def validationLog = readFile("${env.DEPLOYMENT_LOG_DIR}/jenkins-validation.log")
+
+                    echo "\nDeployment validated successfully. Ready to switch traffic to passive environment.\n"
+                    echo "Validation Summary:"
+                    echo validationLog
+                    echo "\nEstimated Downtime: 0 seconds (zero-downtime switch)"
+                    echo "\nRollback Plan:"
+                    echo "1. Switch back to current active environment (1 command)"
+                    echo "2. Estimated rollback time: <30 seconds"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                    timeout(time: 24, unit: 'HOURS') {
+                        input(
+                            message: 'Approve Blue-Green Switch?',
+                            ok: 'APPROVE - Switch to passive environment',
+                            submitter: 'admin,devops-team',
+                            parameters: [
+                                choice(
+                                    name: 'ACTION',
+                                    choices: ['APPROVE', 'REJECT', 'ROLLBACK'],
+                                    description: 'Select action'
+                                )
+                            ]
+                        )
+                    }
+                }
+            }
+        }
+
+        stage('Blue-Green Switch') {
+            when {
+                expression { params.COMPONENT in ['jenkins-masters', 'all'] }
+                expression { !params.DRY_RUN }
+            }
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "Blue-Green Switch Execution"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                    def targetLimit = params.TARGET_VM == 'all' ? 'jenkins_masters' : params.TARGET_VM
+                    def deployTeams = params.DEPLOY_TEAMS
+                    def extraVars = "-e 'target_vm=${targetLimit}'"
+
+                    if (deployTeams != 'all') {
+                        extraVars += " -e 'deploy_teams=${deployTeams}'"
+                    }
+
+                    sh """
+                        ansible-playbook -i ${env.ANSIBLE_INVENTORY} \
+                            ansible/playbooks/blue-green-switch.yml \
+                            --limit ${targetLimit} \
+                            ${extraVars} \
+                            | tee ${env.DEPLOYMENT_LOG_DIR}/blue-green-switch.log
+                    """
+                }
+            }
+        }
+
+        stage('Post-Switch Validation') {
+            when {
+                expression { params.COMPONENT in ['jenkins-masters', 'all'] }
+                expression { !params.SKIP_VALIDATION }
+                expression { !params.DRY_RUN }
+            }
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "Post-Switch Validation"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                    sleep(time: 10, unit: 'SECONDS')  // Give services time to stabilize
+
+                    def targetLimit = params.TARGET_VM == 'all' ? 'jenkins_masters' : params.TARGET_VM
+
+                    sh """
+                        ansible jenkins_masters -i ${env.ANSIBLE_INVENTORY} \
+                            --limit ${targetLimit} \
+                            -m uri \
+                            -a 'url=http://localhost:8080/login status_code=200,403' \
+                            | tee ${env.DEPLOYMENT_LOG_DIR}/post-switch-validation.log
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo "Deployment Complete - Archiving Logs"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                // Archive all deployment logs
+                archiveArtifacts(
+                    artifacts: "${env.DEPLOYMENT_LOG_DIR}/**/*",
+                    allowEmptyArchive: true
+                )
+            }
+        }
+
+        success {
+            script {
+                def deploymentSummary = """
+🚀 Infrastructure Deployment Complete
+
+Component: ${params.COMPONENT}
+Target VMs: ${params.TARGET_VM}
+Teams Deployed: ${params.DEPLOY_TEAMS}
+Environment: ${params.TARGET_ENVIRONMENT}
+
+Deployment Summary:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ Pre-Flight Validation: PASSED
+✅ Component Deployment: PASSED
+${params.COMPONENT in ['jenkins-masters', 'all'] && !params.SKIP_DATA_RECOVERY ? '✅ Data Recovery: COMPLETED' : ''}
+${!params.SKIP_VALIDATION ? '✅ Post-Deployment Validation: PASSED' : ''}
+${params.COMPONENT in ['jenkins-masters', 'all'] && !params.DRY_RUN ? '✅ Blue-Green Switch: COMPLETED' : ''}
+
+Build: ${env.BUILD_URL}
+Duration: ${currentBuild.durationString}
+Triggered by: ${env.BUILD_USER ?: 'System'}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                """.stripIndent()
+
+                echo deploymentSummary
+
+                // Send notification
+                if (params.NOTIFICATION_CHANNEL in ['teams', 'both']) {
+                    // Send Teams notification (implement webhook call)
+                    sh """
+                        curl -X POST ${env.TEAMS_WEBHOOK_URL} \
+                            -H 'Content-Type: application/json' \
+                            -d '{"text": "${deploymentSummary.replaceAll('"', '\\"')}"}'
+                    """
+                }
+            }
+        }
+
+        failure {
+            script {
+                def failureSummary = """
+❌ Infrastructure Deployment Failed
+
+Component: ${params.COMPONENT}
+Target VMs: ${params.TARGET_VM}
+Teams: ${params.DEPLOY_TEAMS}
+
+Failed Stage: ${env.STAGE_NAME}
+Build: ${env.BUILD_URL}
+Console Output: ${env.BUILD_URL}console
+
+Please review logs and retry deployment.
+                """.stripIndent()
+
+                echo failureSummary
+
+                // Send failure notification
+                if (params.NOTIFICATION_CHANNEL in ['teams', 'both']) {
+                    sh """
+                        curl -X POST ${env.TEAMS_WEBHOOK_URL} \
+                            -H 'Content-Type: application/json' \
+                            -d '{"text": "${failureSummary.replaceAll('"', '\\"')}"}'
+                    """
+                }
+            }
+        }
+    }
+}

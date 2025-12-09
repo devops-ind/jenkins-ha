@@ -1,8 +1,40 @@
 ---
 # Handlers for shared-storage role
+
+- name: restart nfs-server
+  systemd:
+    name: nfs-server
+    state: restarted
+    enabled: yes
+  become: yes
+  listen: "restart nfs-server"
+
+- name: reload nfs exports
+  command: exportfs -ra
+  become: yes
+  listen: "exportfs"
+
+- name: restart rpcbind
+  systemd:
+    name: rpcbind
+    state: restarted
+    enabled: yes
+  become: yes
+  listen: "restart rpcbind"
+
+- name: restart glusterfs daemon
+  systemd:
+    name: glusterd
+    state: restarted
+    enabled: yes
+  become: yes
+  listen: "restart glusterfs"
+  when: shared_storage_type == "glusterfs"
+
 - name: restart shared-storage service
   systemd:
     name: shared-storage
     state: restarted
     enabled: yes
+  become: yes
   listen: "restart shared-storage"
