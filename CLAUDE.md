@@ -37,7 +37,7 @@ This is a production-grade Jenkins infrastructure with **Blue-Green Deployment**
 - **♻️ Monitoring Role Refactoring v2.0**: **NEW** - Complete architectural refactoring with phase-based organization. **67% reduction in main.yml** (489→161 lines), **40% elimination of code duplication** (unified agent deployment), clear server/agent separation across 4 phases. Multi-host deployment capability (`monitoring:jenkins_masters`), single deployment path per agent, improved maintainability and testability. Follows HAProxy/Jenkins role patterns with import_tasks orchestration. Production-ready with comprehensive refactoring guide
 - **🔌 GitHub & Jira Integration**: GitHub Enterprise datasource for repository metrics, PR tracking, and workflow status; Jira Cloud datasource for sprint management and issue tracking; Auto-provisioned with secure vault credential management; Pre-built 10-panel dashboard correlating code and project management data; Full JQL query support for custom Jira metrics
 - **🔄 File-Based JCasC Hot-Reload**: **NEW** - Docker-compatible hot-reload for Jenkins Configuration as Code. File-copy approach (blue.yaml → current.yaml) avoids Docker symlink resolution issues. Zero-downtime config updates via JCasC API, automatic backups with retention (keep last 10), state tracking JSON for audit trail. Single container per team (50% resource reduction). Symlink approach deprecated due to Docker mount limitations
-- **🏗️ Option 2 Multi-VM Architecture**: **NEW** - Production-ready 3-VM hybrid architecture with Jenkins isolation and shared services. Jenkins Blue VM (devops, ma teams) + Jenkins Green VM (ba, tw teams) + Shared Services VM (HAProxy, Monitoring). Inventory-driven team distribution, cross-VM routing in HAProxy, GlusterFS replication between Jenkins VMs, dedicated monitoring VM with auto-detection. 4-phase gradual migration playbook with validation and rollback. Total migration time: 60-90 minutes. Cost-effective (3 VMs vs 6-8 VMs), ~$800/month cloud cost for medium teams
+- **🏗️ Option 2 Multi-VM Architecture**: **NEW** - Production-ready 3-VM hybrid architecture with Jenkins isolation and dedicated monitoring. Jenkins Blue VM (devops, ma teams + HAProxy) + Jenkins Green VM (ba, tw teams + HAProxy) + Monitoring VM (Prometheus, Grafana, Loki). Inventory-driven team distribution, HAProxy colocated with Jenkins for local routing, GlusterFS replication between Jenkins VMs, dedicated monitoring VM with auto-detection. 4-phase gradual migration playbook with validation and rollback. Total migration time: 60-90 minutes. Cost-effective (3 VMs vs 6-8 VMs), ~$800/month cloud cost for medium teams
 
 ## Key Commands
 
@@ -270,10 +270,10 @@ docker inspect jenkins-devops | grep -A 10 "Mounts"
 # ============================================================================
 # OPTION 2 (HYBRID) MULTI-VM ARCHITECTURE
 # ============================================================================
-# Architecture: 3 VMs - Jenkins Blue + Jenkins Green + Shared Services
-# - VM1 (192.168.188.142): Jenkins Blue - devops, ma teams
-# - VM2 (192.168.188.143): Jenkins Green - ba, tw teams
-# - VM3 (192.168.188.144): Shared Services - HAProxy, Monitoring
+# Architecture: 3 VMs - Jenkins Blue + Jenkins Green + Monitoring
+# - VM1 (192.168.188.142): Jenkins Blue + HAProxy (devops, ma teams)
+# - VM2 (192.168.188.143): Jenkins Green + HAProxy (ba, tw teams)
+# - VM3 (192.168.188.144): Monitoring (Prometheus, Grafana, Loki)
 
 # GRADUAL MIGRATION PLAYBOOK
 # ============================================================================
@@ -320,9 +320,9 @@ ansible-playbook ... --tags phase1
 # - Creates replicated volumes (replica=2)
 ansible-playbook ... --tags phase2
 
-# Phase 3: Deploy HAProxy with Cross-VM Backends (5-10 min)
-# - Deploys HAProxy on VM3
-# - Configures team-specific backends routing to correct VMs
+# Phase 3: Deploy HAProxy Colocated with Jenkins (5-10 min per VM)
+# - Deploys HAProxy on Jenkins VMs (VM1, VM2) - colocated
+# - Configures local backends for Jenkins teams on same VM
 # - Sets up health checks and wildcard routing
 ansible-playbook ... --tags phase3
 
@@ -355,7 +355,7 @@ ansible-playbook -i ansible/inventories/production/hosts.yml \
 ansible-playbook -i ansible/inventories/production/hosts.yml \
   ansible/site.yml --tags glusterfs --limit glusterfs_servers
 
-# Deploy HAProxy (to VM3)
+# Deploy HAProxy (colocated on Jenkins VMs)
 ansible-playbook -i ansible/inventories/production/hosts.yml \
   ansible/site.yml --tags high-availability --limit load_balancers
 
@@ -370,8 +370,9 @@ ansible-playbook -i ansible/inventories/production/hosts.yml \
 # VERIFICATION AND HEALTH CHECKS
 # ============================================================================
 
-# Check HAProxy backend status (shows team distribution)
-curl -u admin:admin123 http://192.168.188.144:8404/stats
+# Check HAProxy backend status on Jenkins VMs (shows team distribution)
+curl -u admin:admin123 http://192.168.188.142:8404/stats  # VM1 (Blue)
+curl -u admin:admin123 http://192.168.188.143:8404/stats  # VM2 (Green)
 
 # Verify GlusterFS cluster status
 ansible glusterfs_servers -m command -a "gluster peer status"
@@ -394,8 +395,9 @@ curl http://192.168.188.144:9090/api/v1/targets | jq '.data.activeTargets[] | {j
 http://192.168.188.144:9300
 # User: admin / Password: admin123
 
-# HAProxy Stats (Monitoring VM)
-http://192.168.188.144:8404/stats
+# HAProxy Stats (Jenkins VMs - colocated)
+http://192.168.188.142:8404/stats  # Jenkins Blue VM
+http://192.168.188.143:8404/stats  # Jenkins Green VM
 # User: admin / Password: admin123
 
 # Jenkins Teams (via HAProxy)
@@ -408,10 +410,11 @@ http://twjenkins.dev.net       # tw team (on jenkins-green)
 # ============================================================================
 # ✓ Jenkins Isolation: Separate VMs for blue/green teams
 # ✓ Cost Effective: 3 VMs vs 6-8 VMs (~$800/month vs $1600+)
-# ✓ Shared Services: Monitoring and HAProxy on single VM
-# ✓ GlusterFS Replication: RPO < 5s, RTO < 30s
+# ✓ HAProxy Colocated: HAProxy with Jenkins on same VM (local routing, no cross-VM latency)
+# ✓ Dedicated Monitoring: Monitoring on separate VM (resource isolation, independent scaling)
+# ✓ GlusterFS Replication: RPO < 5s, RTO < 30s between Jenkins VMs
 # ✓ Team Distribution: Load balanced across VMs
-# ✓ Cross-VM Routing: HAProxy routes to correct VM per team
+# ✓ Local Routing: HAProxy routes to Jenkins on same VM (no network latency)
 # ✓ Auto-Detection: Monitoring detects separate/colocated deployment
 # ✓ Gradual Migration: 4-phase approach with validation
 # ✓ Rollback Support: State tracking and rollback capabilities
