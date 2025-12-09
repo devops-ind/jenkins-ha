@@ -119,7 +119,7 @@ jenkins_teams:
             default: true
             description: "Push built images to registry"
 
-  - team_name: developer
+  - team_name: ma
     active_environment: blue
     blue_green_enabled: true
     ports:
@@ -129,10 +129,10 @@ jenkins_teams:
       memory: "2g"
       cpu: "1.5"
     env_vars:
-      JENKINS_TEAM: "developer"
+      JENKINS_TEAM: "ma"
       JENKINS_ADMIN_PASSWORD: "{{ vault_jenkins_admin_password | default('admin123') }}"
     labels:
-      team: "developer"
+      team: "ma"
       tier: "production"
       environment: "{{ deployment_mode | default('local') }}"
     security_policies:
@@ -145,36 +145,28 @@ jenkins_teams:
       network_policies:
         ingress_allowed: ["devops", "monitoring"]
         egress_allowed: ["harbor", "git_repos"]
-      code_scanning:
-        enabled: true
-        tools: ["sonarqube", "trivy", "bandit"]
-    
     credentials:
       - type: "usernamePassword"
-        id: "developer-git-credentials"
+        id: "ma-git-credentials"
         username: "admin"
         password: "{{ vault_git_password | default('git123') }}"
-        description: "Developer Team Git Credentials"
+        description: "MA Team Git Credentials"
         scope: "GLOBAL"
       - type: "usernamePassword"
         id: "harbor-registry-credentials"
         username: "{{ vault_harbor_username | default('admin') }}"
         password: "{{ vault_harbor_password | default('Harbor12345') }}"
         description: "Harbor Registry Credentials"
-      - type: "secretText"
-        id: "sonar-token"
-        secret: "{{ vault_sonar_token | default('sonar123') }}"
-        description: "SonarQube Analysis Token"
     seed_jobs:
       - name: "maven-app-pipeline"
         type: "pipeline"
         display_name: "Maven Application Pipeline"
-        description: "Enterprise Maven CI/CD with security scanning"
+        description: "Enterprise Maven CI/CD for MA team"
         folder: "Applications"
-        pipeline_source: "embedded"  # Use embedded DSL for application pipelines
+        pipeline_source: "embedded"
         agent_label: "maven"
         deploy_enabled: true
-        blue_green_enabled: true  # NEW: Blue-green deployment support
+        blue_green_enabled: true
         parameters:
           - name: "GIT_BRANCH"
             type: "string"
@@ -186,35 +178,55 @@ jenkins_teams:
             description: "Execute unit tests"
           - name: "BUILD_DOCKER_IMAGE"
             type: "boolean"
-            default: true  # Changed to true for container deployment
-            description: "Build Docker image after packaging"
-          - name: "SECURITY_SCAN"
-            type: "boolean"
             default: true
-            description: "Run Trivy security scanning"
+            description: "Build Docker image after packaging"
           - name: "DEPLOY_ENVIRONMENT"
             type: "choice"
             choices: ["staging", "production", "blue", "green"]
             description: "Target deployment environment"
-        quality_gates:  # NEW: Quality gates for deployment engineering
-          code_coverage_min: "80%"
-          security_scan_threshold: "HIGH"
-          performance_regression_threshold: "5%"
-        deployment_strategy:  # NEW: Deployment strategy configuration
-          type: "blue_green"
-          rollback_triggers:
-            - "error_rate_threshold: 1%"
-            - "response_time_threshold: 500ms"
-            - "cpu_usage_threshold: 80%"
+
+  - team_name: ba
+    active_environment: blue
+    blue_green_enabled: true
+    ports:
+      web: 8082
+      agent: 50002
+    resources:
+      memory: "2g"
+      cpu: "1.0"
+    env_vars:
+      JENKINS_TEAM: "ba"
+      JENKINS_ADMIN_PASSWORD: "{{ vault_jenkins_admin_password | default('admin123') }}"
+    labels:
+      team: "ba"
+      tier: "production"
+      environment: "{{ deployment_mode | default('local') }}"
+    security_policies:
+      rbac_enabled: true
+      namespace_isolation: true
+      resource_quotas:
+        cpu_limit: "2"
+        memory_limit: "4Gi"
+        storage_limit: "50Gi"
+      network_policies:
+        ingress_allowed: ["monitoring"]
+        egress_allowed: ["harbor", "git_repos"]
+    credentials:
+      - type: "usernamePassword"
+        id: "ba-git-credentials"
+        username: "admin"
+        password: "{{ vault_git_password | default('git123') }}"
+        description: "BA Team Git Credentials"
+        scope: "GLOBAL"
+    seed_jobs:
       - name: "python-app-pipeline"
         type: "pipeline"
         display_name: "Python Application Pipeline"
-        description: "Enterprise Python CI/CD with comprehensive testing"
+        description: "Python CI/CD for BA team"
         folder: "Applications"
         pipeline_source: "embedded"
         agent_label: "python"
         deploy_enabled: true
-        canary_enabled: true  # NEW: Canary deployment support
         parameters:
           - name: "PYTHON_VERSION"
             type: "choice"
@@ -224,28 +236,45 @@ jenkins_teams:
             type: "boolean"
             default: true
             description: "Run code linting checks"
-          - name: "RUN_INTEGRATION_TESTS"
-            type: "boolean"
-            default: true
-            description: "Execute integration tests"
-          - name: "CANARY_PERCENTAGE"
-            type: "string"
-            default: "10"
-            description: "Canary deployment traffic percentage"
-        test_strategy:  # NEW: Comprehensive testing strategy
-          unit_tests: true
-          integration_tests: true
-          security_tests: true
-          performance_tests: true
-          chaos_engineering: false
-        monitoring_config:  # NEW: Application monitoring
-          metrics_enabled: true
-          tracing_enabled: true
-          alerting_enabled: true
+
+  - team_name: tw
+    active_environment: blue
+    blue_green_enabled: true
+    ports:
+      web: 8083
+      agent: 50003
+    resources:
+      memory: "2g"
+      cpu: "1.0"
+    env_vars:
+      JENKINS_TEAM: "tw"
+      JENKINS_ADMIN_PASSWORD: "{{ vault_jenkins_admin_password | default('admin123') }}"
+    labels:
+      team: "tw"
+      tier: "production"
+      environment: "{{ deployment_mode | default('local') }}"
+    security_policies:
+      rbac_enabled: true
+      namespace_isolation: true
+      resource_quotas:
+        cpu_limit: "2"
+        memory_limit: "4Gi"
+        storage_limit: "50Gi"
+      network_policies:
+        ingress_allowed: ["monitoring"]
+        egress_allowed: ["harbor", "git_repos"]
+    credentials:
+      - type: "usernamePassword"
+        id: "tw-git-credentials"
+        username: "admin"
+        password: "{{ vault_git_password | default('git123') }}"
+        description: "TW Team Git Credentials"
+        scope: "GLOBAL"
+    seed_jobs:
       - name: "nodejs-app-pipeline"
         type: "pipeline"
         display_name: "Node.js Application Pipeline"
-        description: "Build and test Node.js applications"
+        description: "Node.js CI/CD for TW team"
         folder: "Applications"
         agent_label: "nodejs"
         parameters:
