@@ -3,9 +3,9 @@
 # Migrates from single-VM to 3-VM setup with validation and rollback capabilities
 #
 # Architecture:
-#   VM1 (192.168.188.142) - Jenkins Blue (devops, ma teams)
-#   VM2 (192.168.188.143) - Jenkins Green (ba, tw teams)
-#   VM3 (192.168.188.144) - Shared Services (HAProxy, Monitoring)
+#   VM1 (192.168.188.142) - Jenkins Blue + HAProxy (devops, ma teams)
+#   VM2 (192.168.188.143) - Jenkins Green + HAProxy (ba, tw teams)
+#   VM3 (192.168.188.144) - Monitoring (Prometheus, Grafana, Loki)
 #
 # Usage:
 #   # Full migration (all phases)
@@ -34,13 +34,13 @@
           ============================================================
           Option 2 (Hybrid) Multi-VM Migration
           ============================================================
-          Architecture: Jenkins Blue + Jenkins Green + Shared Services
+          Architecture: Jenkins Blue + Jenkins Green + Monitoring VM
           Target VMs: 3 ({{ groups['jenkins_masters'] | length }} Jenkins + {{ groups['monitoring'] | length }} Monitoring)
 
           Migration Phases:
           Phase 1: Deploy monitoring to VM3 ({{ groups['monitoring'][0] }})
           Phase 2: Setup GlusterFS between VM1 and VM2
-          Phase 3: Deploy HAProxy to VM3 with cross-VM backends
+          Phase 3: Deploy HAProxy colocated on Jenkins VMs (VM1, VM2)
           Phase 4: Migrate Jenkins teams to distributed VMs
 
           Team Distribution:
@@ -254,16 +254,16 @@
           Peer Status: {{ peer_status.stdout_lines | join(', ') }}
           Volumes: {{ volume_list.stdout_lines | join(', ') }}
 
-          Next: Phase 3 - Deploy HAProxy with cross-VM backends
+          Next: Phase 3 - Deploy HAProxy on Jenkins VMs (colocated)
           Command: ansible-playbook ... --tags phase3
           ============================================================
       run_once: true
 
 # ==============================================================================
-# PHASE 3: Deploy HAProxy to Shared Services VM
+# PHASE 3: Deploy HAProxy Colocated with Jenkins
 # ==============================================================================
 
-- name: Phase 3 - Deploy HAProxy with Cross-VM Backends
+- name: Phase 3 - Deploy HAProxy Colocated with Jenkins
   hosts: load_balancers
   become: yes
   tags: ['phase3', 'haproxy']
@@ -275,9 +275,9 @@
           Phase 3: Deploy HAProxy Load Balancer
           ============================================================
           Target VM: {{ inventory_hostname }} ({{ ansible_default_ipv4.address }})
-          Backend Mode: {{ haproxy_backend_mode | default('cross-vm') }}
-          Jenkins VMs: {{ groups['jenkins_masters'] | join(', ') }}
-          Duration: ~5-10 minutes
+          Backend Mode: {{ haproxy_backend_mode | default('local') }}
+          Jenkins Teams: {{ jenkins_teams_on_vm | join(', ') if jenkins_teams_on_vm is defined else 'all' }}
+          Duration: ~5-10 minutes per VM
           ============================================================
 
     - name: Pause for confirmation (Phase 3)
@@ -287,8 +287,8 @@
           Ready to deploy HAProxy to {{ inventory_hostname }}?
 
           This will:
-          - Deploy HAProxy on VM3 (Shared Services)
-          - Configure backends for Jenkins VMs (cross-VM routing)
+          - Deploy HAProxy colocated with Jenkins
+          - Configure local backends for Jenkins teams on this VM
           - Setup health checks for team-specific Jenkins instances
           - Configure wildcard subdomain routing
 
@@ -312,14 +312,21 @@
       debug:
         msg: |
           ============================================================
-          Phase 3: COMPLETED
+          Phase 3: COMPLETED ({{ inventory_hostname }})
           ============================================================
-          HAProxy: DEPLOYED
+          HAProxy: DEPLOYED (colocated with Jenkins)
           Stats URL: http://{{ ansible_default_ipv4.address }}:{{ haproxy_stats_port | default(8404) }}/stats
-          Backend Mode: {{ haproxy_backend_mode | default('cross-vm') }}
+          Backend Mode: {{ haproxy_backend_mode | default('local') }}
+          Teams: {{ jenkins_teams_on_vm | join(', ') if jenkins_teams_on_vm is defined else 'all' }}
+
+          {% if inventory_hostname == groups['load_balancers'][-1] %}
+          All HAProxy instances deployed!
 
           Next: Phase 4 - Migrate Jenkins teams to distributed VMs
           Command: ansible-playbook ... --tags phase4
+          {% else %}
+          Next: Deploy HAProxy to remaining Jenkins VMs
+          {% endif %}
           ============================================================
 
 # ==============================================================================
@@ -423,18 +430,19 @@
           ============================================================
           ✓ Phase 1: Monitoring deployed to VM3
           ✓ Phase 2: GlusterFS cluster configured
-          ✓ Phase 3: HAProxy deployed with cross-VM backends
+          ✓ Phase 3: HAProxy colocated on Jenkins VMs (VM1, VM2)
           ✓ Phase 4: Jenkins teams distributed across VMs
 
           Architecture Summary:
           {% for host in groups['jenkins_masters'] %}
-          - {{ host }}: {{ hostvars[host]['jenkins_teams_on_vm'] | join(', ') }}
+          - {{ host }}: Jenkins ({{ hostvars[host]['jenkins_teams_on_vm'] | join(', ') }}) + HAProxy
           {% endfor %}
-          - {{ groups['monitoring'][0] }}: HAProxy, Monitoring
+          - {{ groups['monitoring'][0] }}: Monitoring (Prometheus, Grafana, Loki)
 
           Access URLs:
           - Grafana: http://{{ hostvars[groups['monitoring'][0]]['ansible_default_ipv4']['address'] }}:9300
-          - HAProxy Stats: http://{{ hostvars[groups['monitoring'][0]]['ansible_default_ipv4']['address'] }}:8404/stats
+          - HAProxy Stats (VM1): http://{{ hostvars[groups['jenkins_masters'][0]]['ansible_default_ipv4']['address'] }}:8404/stats
+          - HAProxy Stats (VM2): http://{{ hostvars[groups['jenkins_masters'][1]]['ansible_default_ipv4']['address'] }}:8404/stats
           - Jenkins Teams: http://<team>jenkins.{{ jenkins_domain }}
 
           Migration completed successfully!
