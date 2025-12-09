@@ -2,84 +2,104 @@
 # Symlink-Based Configuration Management for Dynamic JCasC Updates (jenkins-master-v2)
 # This task creates the symlink infrastructure for hot-reloadable configs
 
-- name: Create symlink-based configuration directory structure
-  block:
-    - name: Create main config directories for symlink management
-      file:
-        path: "{{ item }}"
-        state: directory
-        owner: "{{ jenkins_user_id | default(1000) }}"
-        group: "{{ jenkins_group_id | default(1000) }}"
-        mode: '0755'
-      loop:
-        - "/var/jenkins/{{ team.team_name }}/configs"
-        - "/var/jenkins/{{ team.team_name }}/configs/blue"
-        - "/var/jenkins/{{ team.team_name }}/configs/green"
-        - "/var/jenkins/{{ team.team_name }}/backups"
-      loop_control:
-        label: "/var/jenkins/{{ team.team_name }}/configs"
+- name: Create main config directories for symlink management
+  file:
+    path: "{{ item.1 }}"
+    state: directory
+    owner: "{{ jenkins_user_id | default(1000) }}"
+    group: "{{ jenkins_group_id | default(1000) }}"
+    mode: '0755'
+  loop: "{{ jenkins_teams_config | product(config_dirs) | list }}"
+  vars:
+    config_dirs:
+      - "/var/jenkins/{{ item.0.team_name }}/configs"
+      - "/var/jenkins/{{ item.0.team_name }}/configs/blue"
+      - "/var/jenkins/{{ item.0.team_name }}/configs/green"
+      - "/var/jenkins/{{ item.0.team_name }}/backups"
+  loop_control:
+    label: "{{ item.0.team_name }}: {{ item.1 }}"
+  tags: ['config-symlinks', 'symlink-setup']
 
-    - name: Check if active symlink exists
-      stat:
-        path: "/var/jenkins/{{ team.team_name }}/configs/active"
-      register: active_symlink_stat
-
-    - name: Copy CASC config to blue directory (initial setup)
-      copy:
-        src: "{{ jenkins_master_custom_build_dir }}/{{ team.team_name }}/blue/jenkins.yaml"
-        dest: "/var/jenkins/{{ team.team_name }}/configs/blue/jenkins.yaml"
-        remote_src: yes
-        owner: "{{ jenkins_user_id | default(1000) }}"
-        group: "{{ jenkins_group_id | default(1000) }}"
-        mode: '0644'
-      when: not active_symlink_stat.stat.exists
-
-    - name: Copy CASC config to green directory (initial setup)
-      copy:
-        src: "{{ jenkins_master_custom_build_dir }}/{{ team.team_name }}/green/jenkins.yaml"
-        dest: "/var/jenkins/{{ team.team_name }}/configs/green/jenkins.yaml"
-        remote_src: yes
-        owner: "{{ jenkins_user_id | default(1000) }}"
-        group: "{{ jenkins_group_id | default(1000) }}"
-        mode: '0644'
-      when: not active_symlink_stat.stat.exists
-
-    - name: Create initial active symlink pointing to blue
-      file:
-        src: "blue"
-        dest: "/var/jenkins/{{ team.team_name }}/configs/active"
-        state: link
-        owner: "{{ jenkins_user_id | default(1000) }}"
-        group: "{{ jenkins_group_id | default(1000) }}"
-      when: not active_symlink_stat.stat.exists
-
-    - name: Create state tracking file for symlink-based config
-      copy:
-        content: |
-          {
-            "config_mode": "symlink",
-            "active_config": "blue",
-            "last_update": "{{ ansible_date_time.iso8601 }}",
-            "team_name": "{{ team.team_name }}",
-            "container_name": "jenkins-{{ team.team_name }}",
-            "casc_mount_path": "/var/jenkins/{{ team.team_name }}/configs/active"
-          }
-        dest: "/var/jenkins/{{ team.team_name }}/config-state.json"
-        owner: "{{ jenkins_user_id | default(1000) }}"
-        group: "{{ jenkins_group_id | default(1000) }}"
-        mode: '0644'
-
-    - name: Display symlink configuration summary
-      debug:
-        msg: |
-          Symlink Configuration for {{ team.team_name }}:
-          - Blue config: /var/jenkins/{{ team.team_name }}/configs/blue/jenkins.yaml
-          - Green config: /var/jenkins/{{ team.team_name }}/configs/green/jenkins.yaml
-          - Active symlink: /var/jenkins/{{ team.team_name }}/configs/active -> blue
-          - Backups: /var/jenkins/{{ team.team_name }}/backups/
-          - Container mount: /var/jenkins/{{ team.team_name }}/configs/active:/var/jenkins_home/casc_configs:ro
+- name: Check if active symlink exists for each team
+  stat:
+    path: "/var/jenkins/{{ item.team_name }}/configs/active"
+  register: active_symlink_stats
   loop: "{{ jenkins_teams_config }}"
   loop_control:
-    loop_var: team
-    label: "{{ team.team_name }}"
+    label: "{{ item.team_name }}"
+  tags: ['config-symlinks', 'symlink-setup']
+
+- name: Copy CASC config to blue directory (initial setup)
+  copy:
+    src: "{{ jenkins_master_custom_build_dir }}/{{ item.item.team_name }}/blue/jenkins.yaml"
+    dest: "/var/jenkins/{{ item.item.team_name }}/configs/blue/jenkins.yaml"
+    remote_src: yes
+    owner: "{{ jenkins_user_id | default(1000) }}"
+    group: "{{ jenkins_group_id | default(1000) }}"
+    mode: '0644'
+  loop: "{{ active_symlink_stats.results }}"
+  loop_control:
+    label: "{{ item.item.team_name }}/blue"
+  when: not item.stat.exists
+  tags: ['config-symlinks', 'symlink-setup']
+
+- name: Copy CASC config to green directory (initial setup)
+  copy:
+    src: "{{ jenkins_master_custom_build_dir }}/{{ item.item.team_name }}/green/jenkins.yaml"
+    dest: "/var/jenkins/{{ item.item.team_name }}/configs/green/jenkins.yaml"
+    remote_src: yes
+    owner: "{{ jenkins_user_id | default(1000) }}"
+    group: "{{ jenkins_group_id | default(1000) }}"
+    mode: '0644'
+  loop: "{{ active_symlink_stats.results }}"
+  loop_control:
+    label: "{{ item.item.team_name }}/green"
+  when: not item.stat.exists
+  tags: ['config-symlinks', 'symlink-setup']
+
+- name: Create initial active symlink pointing to blue
+  file:
+    src: "blue"
+    dest: "/var/jenkins/{{ item.item.team_name }}/configs/active"
+    state: link
+    owner: "{{ jenkins_user_id | default(1000) }}"
+    group: "{{ jenkins_group_id | default(1000) }}"
+  loop: "{{ active_symlink_stats.results }}"
+  loop_control:
+    label: "{{ item.item.team_name }}/active"
+  when: not item.stat.exists
+  tags: ['config-symlinks', 'symlink-setup']
+
+- name: Create state tracking file for symlink-based config
+  copy:
+    content: |
+      {
+        "config_mode": "symlink",
+        "active_config": "blue",
+        "last_update": "{{ ansible_date_time.iso8601 }}",
+        "team_name": "{{ item.team_name }}",
+        "container_name": "jenkins-{{ item.team_name }}",
+        "casc_mount_path": "/var/jenkins/{{ item.team_name }}/configs/active"
+      }
+    dest: "/var/jenkins/{{ item.team_name }}/config-state.json"
+    owner: "{{ jenkins_user_id | default(1000) }}"
+    group: "{{ jenkins_group_id | default(1000) }}"
+    mode: '0644'
+  loop: "{{ jenkins_teams_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
+  tags: ['config-symlinks', 'symlink-setup']
+
+- name: Display symlink configuration summary
+  debug:
+    msg: |
+      Symlink Configuration for {{ item.team_name }}:
+      - Blue config: /var/jenkins/{{ item.team_name }}/configs/blue/jenkins.yaml
+      - Green config: /var/jenkins/{{ item.team_name }}/configs/green/jenkins.yaml
+      - Active symlink: /var/jenkins/{{ item.team_name }}/configs/active -> blue
+      - Backups: /var/jenkins/{{ item.team_name }}/backups/
+      - Container mount: /var/jenkins/{{ item.team_name }}/configs/active:/var/jenkins_home/casc_configs:ro
+  loop: "{{ jenkins_teams_config }}"
+  loop_control:
+    label: "{{ item.team_name }}"
   tags: ['config-symlinks', 'symlink-setup']
