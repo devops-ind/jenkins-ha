@@ -180,7 +180,16 @@
   tags: ['containers', 'deploy']
 
 # ====================================
-# SYMLINK-BASED CONFIG SETUP (NEW)
+# FILE-BASED CONFIG SETUP (NEW)
+# ====================================
+
+- name: Setup file-based configuration infrastructure
+  include_tasks: file-config-setup.yml
+  when: jenkins_config_mode == 'file'
+  tags: ['containers', 'config-files', 'file']
+
+# ====================================
+# SYMLINK-BASED CONFIG SETUP (DEPRECATED - doesn't work with Docker)
 # ====================================
 
 - name: Setup symlink-based configuration infrastructure
@@ -192,7 +201,12 @@
 # CONTAINER DEPLOYMENT - MODE SELECTION
 # ====================================
 
-- name: Deploy Jenkins containers (Symlink Hot-Reload Mode)
+- name: Deploy Jenkins containers (File Hot-Reload Mode)
+  include_tasks: deploy-file-containers.yml
+  when: jenkins_config_mode == 'file'
+  tags: ['containers', 'deploy', 'file']
+
+- name: Deploy Jenkins containers (Symlink Hot-Reload Mode - DEPRECATED)
   include_tasks: deploy-symlink-containers.yml
   when: jenkins_config_mode == 'symlink'
   tags: ['containers', 'deploy', 'symlink']

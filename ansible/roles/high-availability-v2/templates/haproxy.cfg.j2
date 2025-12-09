@@ -120,11 +120,18 @@ backend jenkins_backend_{{ team_name }}
     {% set failover_strategy = haproxy_backend_failover_strategy | default('active-passive') %}
     {% set primary_host = groups['jenkins_masters'][0] %}
     {% set is_current_primary = (inventory_hostname == primary_host) %}
+    {% set multi_vm_enabled = multi_vm_enabled | default(false) %}
 
     {% for host in groups['jenkins_masters'] %}
     {% set is_primary = (host == primary_host) %}
     {% set host_ip = hostvars[host]['ansible_default_ipv4']['address'] %}
     {% set host_name = hostvars[host]['inventory_hostname'] %}
+    {% set teams_on_vm = hostvars[host].get('jenkins_teams_on_vm', []) %}
+
+    {# Multi-VM Mode: Only add backend if team is deployed on this VM #}
+    {% set team_on_this_vm = (not multi_vm_enabled) or (team_name in teams_on_vm) %}
+
+    {% if team_on_this_vm %}
 
     {% if team_bg_enabled %}
     {% if team_active_env == 'blue' %}
@@ -137,16 +144,20 @@ backend jenkins_backend_{{ team_name }}
     {% endif %}
 
     {% if failover_strategy == 'active-passive' %}
-    # Active-Passive: {{ host_name }} is {{ 'PRIMARY' if is_primary else 'BACKUP' }}
+    # Active-Passive: {{ host_name }} is {{ 'PRIMARY' if is_primary else 'BACKUP' }} (Multi-VM: {{ 'Team distributed' if multi_vm_enabled else 'All teams on all VMs' }})
     server {{ team_name }}-{{ host_name }} {{ host_ip }}:{{ port }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}{{ ' backup' if not is_primary else '' }}
     {% elif failover_strategy == 'active-active' %}
-    # Active-Active: Both VMs load balanced
+    # Active-Active: Both VMs load balanced (Multi-VM: {{ 'Team distributed' if multi_vm_enabled else 'All teams on all VMs' }})
     server {{ team_name }}-{{ host_name }} {{ host_ip }}:{{ port }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }} weight 100
     {% elif failover_strategy == 'local-only' %}
     {% if host == inventory_hostname %}
     # Local-Only: Only route to Jenkins on same VM
     server {{ team_name }}-{{ host_name }} {{ host_ip }}:{{ port }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}
     {% endif %}
+    {% endif %}
+
+    {% else %}
+    # Team {{ team_name }} not deployed on {{ host_name }} (Multi-VM team distribution)
     {% endif %}
     {% endfor %}
     {% else %}
