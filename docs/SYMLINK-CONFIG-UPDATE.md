@@ -64,13 +64,19 @@ Container: jenkins-devops
 Volumes:
   - jenkins-devops-home:/var/jenkins_home
   - jenkins-devops-shared:/var/jenkins_shared
-  - /var/jenkins/devops/configs/active:/var/jenkins_home/casc_configs:ro  # READ-ONLY!
+  # Mount parent directory to preserve symlink behavior inside container
+  - /var/jenkins/devops/configs:/var/jenkins_home/casc_configs_root:ro  # READ-ONLY!
 
 Environment:
-  CASC_JENKINS_CONFIG: /var/jenkins_home/casc_configs
+  # Point to the symlink path inside container
+  CASC_JENKINS_CONFIG: /var/jenkins_home/casc_configs_root/active
 ```
 
-**Critical**: The config mount is **read-only (`:ro`)** for security. Jenkins cannot modify its own configuration.
+**Critical Notes**:
+1. **The config mount is read-only (`:ro`)** for security. Jenkins cannot modify its own configuration.
+2. **We mount the parent `configs/` directory**, not the symlink directly. This is because Docker resolves symlinks at mount time, which breaks hot-reload.
+3. **Inside the container**, the symlink is preserved: `/var/jenkins_home/casc_configs_root/active -> blue/` or `green/`
+4. **When we switch the symlink** on the host from `blue` to `green`, the container sees the change immediately.
 
 ---
 
@@ -91,9 +97,9 @@ Environment:
 3. Ansible creates symlink: active -> blue
 
 4. Ansible deploys single container per team
-   └── Mounts: /var/jenkins/{team}/configs/active -> /var/jenkins_home/casc_configs:ro
+   └── Mounts: /var/jenkins/{team}/configs -> /var/jenkins_home/casc_configs_root:ro
 
-5. Jenkins starts and loads config from /var/jenkins_home/casc_configs/jenkins.yaml
+5. Jenkins starts and loads config from /var/jenkins_home/casc_configs_root/active/jenkins.yaml
 ```
 
 ### Configuration Update Flow
@@ -446,18 +452,82 @@ ln -sfn green /var/jenkins/devops/configs/active
 
 **Diagnosis**:
 ```bash
-# Check what container sees
-docker exec jenkins-devops ls -l /var/jenkins_home/casc_configs/
-docker exec jenkins-devops cat /var/jenkins_home/casc_configs/jenkins.yaml
+# Check what container sees (note the updated path)
+docker exec jenkins-devops ls -l /var/jenkins_home/casc_configs_root/
+docker exec jenkins-devops ls -l /var/jenkins_home/casc_configs_root/active
+docker exec jenkins-devops cat /var/jenkins_home/casc_configs_root/active/jenkins.yaml
+
+# Verify the symlink is preserved inside container
+docker exec jenkins-devops readlink /var/jenkins_home/casc_configs_root/active
+# Should output: blue or green (NOT a full path)
 ```
 
 **Solution**:
-1. Verify symlink points to correct target
-2. Verify container mount is correct
-3. Restart container if mount is wrong:
+1. Verify symlink points to correct target on host:
    ```bash
-   docker restart jenkins-devops
+   readlink /var/jenkins/devops/configs/active
    ```
+2. Verify symlink is preserved inside container (should be relative symlink):
+   ```bash
+   docker exec jenkins-devops readlink /var/jenkins_home/casc_configs_root/active
+   ```
+3. If symlink is resolved to absolute path inside container, redeploy with correct mount
+
+### Problem: Docker Resolves Symlink (Mount Issue)
+
+**Symptoms**:
+- Symlink appears as a directory inside container
+- Config updates don't take effect even after symlink switch
+- `ls -l` inside container shows directory instead of symlink
+
+**Example**:
+```bash
+# On host
+ls -l /var/jenkins/devops/configs/
+# active -> blue (correct symlink)
+
+# Inside container (WRONG - if mounted incorrectly)
+docker exec jenkins-devops ls -lad /var/jenkins_home/casc_configs
+# drwxr-xr-x 2 root root 4096 Dec 9 12:14 /var/jenkins_home/casc_configs
+# ^^^ This is a DIRECTORY, not a symlink! WRONG!
+
+# Inside container (CORRECT - with parent directory mount)
+docker exec jenkins-devops ls -lad /var/jenkins_home/casc_configs_root/active
+# lrwxrwxrwx 1 root root 4 Dec 9 12:14 /var/jenkins_home/casc_configs_root/active -> blue
+# ^^^ This is a SYMLINK! CORRECT!
+```
+
+**Root Cause**:
+Docker resolves symlinks at mount time. When you mount `/var/jenkins/devops/configs/active` directly, Docker resolves the symlink to its target (`blue/` or `green/`) and mounts that target as a directory.
+
+**Solution**:
+Mount the **parent directory** containing the symlink, not the symlink itself:
+
+```yaml
+# WRONG - Docker resolves the symlink
+volumes:
+  - "/var/jenkins/devops/configs/active:/var/jenkins_home/casc_configs:ro"
+
+# CORRECT - Mount parent directory to preserve symlink
+volumes:
+  - "/var/jenkins/devops/configs:/var/jenkins_home/casc_configs_root:ro"
+
+# Update environment variable to point to symlink path inside container
+environment:
+  CASC_JENKINS_CONFIG: "/var/jenkins_home/casc_configs_root/active"
+```
+
+**Verification**:
+```bash
+# Test with a simple alpine container
+docker run --rm -it \
+  -v /var/jenkins/devops/configs:/test:ro \
+  alpine sh -c "ls -l /test/active && readlink /test/active"
+
+# Should show:
+# lrwxrwxrwx 1 root root 4 Dec 9 12:14 /test/active -> blue
+# blue
+```
 
 ### Problem: Concurrent Update Conflict
 
