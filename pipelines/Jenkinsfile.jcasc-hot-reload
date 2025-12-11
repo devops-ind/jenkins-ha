@@ -1,60 +1,110 @@
 #!/usr/bin/env groovy
 /*
- * Jenkins Configuration as Code (JCasC) Hot-Reload Pipeline
+ * Jenkins Configuration as Code (JCasC) Safe Update Workflow
  *
- * Self-service pipeline for updating team Jenkins configurations with zero downtime.
- * Uses file-based config switching with automatic hot-reload and rollback on failure.
+ * Production-grade 4-phase validation pipeline for zero-downtime JCasC updates.
+ * Implements blue-green staging, plugin compatibility testing, and automated rollback.
  *
- * Workflow:
- * 1. Validate parameters
- * 2. Call Ansible playbook: jcasc-hot-reload.yml
- * 3. Playbook executes for each team:
- *    - Switches config file (backup + atomic copy)
- *    - Triggers JCasC reload API
- *    - Validates Jenkins health
- *    - Automatic rollback on failure
- * 4. Notify on completion
+ * Pipeline Workflow:
+ * ==================
+ * Phase 1: Pre-Validation (5-10 min)
+ *   - Render templates from jenkins-master-v2 role
+ *   - YAML syntax validation
+ *   - JCasC schema validation
+ *   - Security checks (hardcoded credentials, dangerous patterns)
+ *   - Config versioning and diff generation
+ *
+ * Phase 2: Plugin Compatibility Testing (10-15 min, parallel)
+ *   - Spin up disposable containers with production images
+ *   - Test rendered configs against actual installed plugins
+ *   - Validate Jenkins startup and plugin loading
+ *   - Auto-cleanup containers
+ *   - Runs in parallel for all teams
+ *
+ * Phase 3: Staged Rollout (30-45 min per team)
+ *   Step 3.1: Apply to INACTIVE environment
+ *     - Deploy config to inactive blue/green environment
+ *     - Trigger JCasC reload
+ *     - Multi-layer health checks and smoke tests
+ *     - Auto-rollback on failure
+ *   Step 3.2: Manual Approval Gate (optional)
+ *     - Display validation summary
+ *     - Wait for operator approval
+ *   Step 3.3: Blue-Green Traffic Switch
+ *     - Switch HAProxy to validated environment
+ *     - Monitor SLI metrics
+ *   Step 3.4: Update Former Active
+ *     - Apply config to now-inactive environment
+ *     - Both environments synchronized
+ *
+ * Phase 4: Verification & Monitoring (2-5 min)
+ *   - Export Prometheus metrics
+ *   - Create Grafana annotations
+ *   - Send Teams notifications
+ *   - Generate summary reports
+ *
+ * Config Source: jenkins-master-v2 Ansible role
+ *   - Templates: ansible/roles/jenkins-master-v2/templates/jcasc/jenkins-config.yml.j2
+ *   - Plugins: ansible/roles/jenkins-master-v2/templates/team-plugins.txt.j2
+ *   - Variables: ansible/inventories/production/group_vars/all/jenkins_teams.yml
  *
  * Features:
- * - Per-team or batch updates
- * - Dry-run mode (Ansible --check)
- * - Automatic rollback on failure
- * - Audit logging
- * - State tracking
+ *   - Zero-downtime deployments
+ *   - Plugin compatibility validation before production
+ *   - Blue-green staging for safe testing
+ *   - Manual approval gates (configurable)
+ *   - Automated rollback with health validation
+ *   - Per-team or batch updates
+ *   - Comprehensive audit trail
+ *   - Prometheus metrics and Grafana dashboards
+ *
+ * Pain Points Solved:
+ *   ✅ No more configs breaking production
+ *   ✅ No more plugin incompatibilities
+ *   ✅ Easy rollbacks (<5 minutes)
+ *   ✅ Weekly plugin updates with confidence
  */
 
 pipeline {
-    agent {
-        label 'master'
-    }
+    agent { label 'master' }
 
     parameters {
         choice(
             name: 'TEAMS',
             choices: ['all', 'devops', 'ma', 'ba', 'tw'],
-            description: 'Teams to update'
+            description: 'Teams to update (all teams or specific team)'
         )
         choice(
-            name: 'ENVIRONMENTS',
-            choices: ['both', 'blue', 'green'],
-            description: 'Environments (blue/green/both)'
+            name: 'VALIDATION_MODE',
+            choices: ['full', 'quick', 'skip'],
+            description: '''Validation mode:
+• full = All phases including plugin compatibility testing (recommended)
+• quick = Skip plugin testing (faster, but less safe)
+• skip = Skip all validation (DANGEROUS - emergency use only)'''
+        )
+        booleanParam(
+            name: 'REQUIRE_APPROVAL',
+            defaultValue: true,
+            description: 'Require manual approval before switching traffic to validated environment'
         )
         booleanParam(
             name: 'DRY_RUN',
             defaultValue: false,
-            description: 'Dry-run mode (no changes - Ansible --check)'
+            description: 'Dry-run mode: validation only, no deployment (Ansible --check)'
         )
     }
 
     environment {
         ANSIBLE_INV = 'ansible/inventories/production/hosts.yml'
         ANSIBLE_PLAYBOOK = 'ansible/playbooks/jcasc-hot-reload.yml'
+        SLI_ERROR_THRESHOLD = '0.01'  // 1% error rate threshold
+        GRAFANA_DASHBOARD = 'http://monitoring:9300/d/jcasc-updates'
     }
 
     options {
         buildDiscarder(logRotator(numToKeepStr: '30', daysToKeepStr: '90'))
         timestamps()
-        timeout(time: 30, unit: 'MINUTES')
+        timeout(time: 90, unit: 'MINUTES')  // Increased for 4-phase workflow
         disableConcurrentBuilds()
     }
 
@@ -62,42 +112,286 @@ pipeline {
         stage('Pre-flight Checks') {
             steps {
                 script {
-                    echo "=========================================="
-                    echo "JCasC Hot-Reload Update"
-                    echo "=========================================="
-                    echo "Teams: ${params.TEAMS}"
-                    echo "Environments: ${params.ENVIRONMENTS}"
-                    echo "Dry-run: ${params.DRY_RUN}"
-                    echo "=========================================="
+                    echo """
+========================================
+JCasC Safe Update Workflow
+========================================
+Pipeline: 4-Phase Validation
+Teams: ${params.TEAMS}
+Validation Mode: ${params.VALIDATION_MODE}
+Manual Approval: ${params.REQUIRE_APPROVAL}
+Dry-run: ${params.DRY_RUN}
+========================================
+
+Config Source: jenkins-master-v2 role
+  Template: ansible/roles/jenkins-master-v2/templates/jcasc/jenkins-config.yml.j2
+  Plugins: ansible/roles/jenkins-master-v2/templates/team-plugins.txt.j2
+  Variables: jenkins_teams.yml
+
+Workflow:
+  1. Jenkins pipeline clones jenkins-ha repository
+  2. Ansible renders Jinja2 templates → YAML files (per team)
+  3. Run 4-phase validation pipeline
+  4. Deploy to inactive environment and validate
+  5. ${params.REQUIRE_APPROVAL ? 'Manual approval gate' : 'Auto-proceed'}
+  6. Switch HAProxy traffic
+  7. Update former active environment
+
+========================================
+"""
 
                     // Validate parameters
-                    def validTeams = ['all', 'devops', 'ma', 'ba', 'tw']
-                    def validEnvs = ['both', 'blue', 'green']
+                    validateParameters()
 
-                    if (!validTeams.contains(params.TEAMS)) {
-                        error("Invalid TEAMS parameter: ${params.TEAMS}")
+                    // Check Docker availability (for Phase 2)
+                    if (params.VALIDATION_MODE == 'full') {
+                        sh 'docker info || { echo "ERROR: Docker required for plugin testing"; exit 1; }'
                     }
 
-                    if (!validEnvs.contains(params.ENVIRONMENTS)) {
-                        error("Invalid ENVIRONMENTS parameter: ${params.ENVIRONMENTS}")
+                    // Verify jenkins-master-v2 role templates exist
+                    sh '''
+                        test -f ansible/roles/jenkins-master-v2/templates/jcasc/jenkins-config.yml.j2 || {
+                            echo "ERROR: JCasC template not found"
+                            exit 1
+                        }
+                        test -f ansible/roles/jenkins-master-v2/templates/team-plugins.txt.j2 || {
+                            echo "ERROR: Plugins template not found"
+                            exit 1
+                        }
+                        echo "✓ jenkins-master-v2 role templates verified"
+                    '''
+
+                    // Display workflow plan
+                    displayWorkflowPlan()
+                }
+            }
+        }
+
+        stage('Phase 1: Pre-Validation') {
+            steps {
+                script {
+                    echo """
+========================================
+Phase 1: Pre-Validation
+========================================
+• Rendering templates from jenkins-master-v2 role
+• YAML syntax validation
+• JCasC schema validation
+• Security checks
+• Config versioning
+========================================
+"""
+
+                    def dryRunFlag = params.DRY_RUN ? '--check' : ''
+
+                    sh """
+                        ansible-playbook -i \${ANSIBLE_INV} \${ANSIBLE_PLAYBOOK} \\
+                          -e "jcasc_teams_input=${params.TEAMS}" \\
+                          -e "validation_mode=${params.VALIDATION_MODE}" \\
+                          -e "require_manual_approval=${params.REQUIRE_APPROVAL}" \\
+                          -e "jcasc_phase=phase1" \\
+                          -v ${dryRunFlag}
+                    """
+
+                    // Display validation summary
+                    sh 'cat /tmp/jcasc-validation-summary.txt || echo "Validation summary not found"'
+                }
+            }
+        }
+
+        stage('Phase 2: Plugin Compatibility') {
+            when {
+                expression { params.VALIDATION_MODE == 'full' && !params.DRY_RUN }
+            }
+            steps {
+                script {
+                    echo """
+========================================
+Phase 2: Plugin Compatibility Testing
+========================================
+• Testing with production images
+• Disposable containers per team
+• Parallel execution
+• Plugin loading verification
+• Auto-cleanup
+========================================
+"""
+
+                    sh """
+                        ansible-playbook -i \${ANSIBLE_INV} \${ANSIBLE_PLAYBOOK} \\
+                          -e "jcasc_teams_input=${params.TEAMS}" \\
+                          -e "jcasc_phase=phase2" \\
+                          -e "plugin_test_timeout=300" \\
+                          -v
+                    """
+
+                    // Display plugin test report
+                    sh 'cat /tmp/jcasc-plugin-compatibility-report.txt || echo "Plugin report not found"'
+
+                    // Archive plugin test logs
+                    archiveArtifacts artifacts: '/tmp/jcasc-plugin-compatibility-report.txt', allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Phase 3: Staged Rollout') {
+            when {
+                expression { !params.DRY_RUN }
+            }
+            stages {
+                stage('3.1: Apply to Inactive Environment') {
+                    steps {
+                        script {
+                            echo """
+========================================
+Phase 3.1: Apply to Inactive Environment
+========================================
+• Deploy config to inactive blue/green environment
+• JCasC reload on inactive containers
+• Multi-layer health checks
+• Smoke tests
+• Auto-rollback on failure
+========================================
+"""
+
+                            sh """
+                                ansible-playbook -i \${ANSIBLE_INV} \${ANSIBLE_PLAYBOOK} \\
+                                  -e "jcasc_teams_input=${params.TEAMS}" \\
+                                  -e "jcasc_phase=phase3_step1" \\
+                                  -e "require_manual_approval=${params.REQUIRE_APPROVAL}" \\
+                                  -v
+                            """
+                        }
+                    }
+                }
+
+                stage('3.2: Manual Approval') {
+                    when {
+                        expression { params.REQUIRE_APPROVAL == true }
+                    }
+                    steps {
+                        script {
+                            echo """
+========================================
+Phase 3.2: Manual Approval Required
+========================================
+Inactive environment updated and validated successfully
+
+Next: Switch HAProxy traffic to validated environment
+
+Review metrics: ${env.GRAFANA_DASHBOARD}
+========================================
+"""
+
+                            // Read validation summary
+                            def validationSummary = sh(
+                                script: 'cat /tmp/jcasc-validation-summary.txt 2>/dev/null || echo "Summary not available"',
+                                returnStdout: true
+                            ).trim()
+
+                            // Manual approval gate
+                            timeout(time: 30, unit: 'MINUTES') {
+                                input(
+                                    message: """
+Validation Summary:
+${validationSummary}
+
+Inactive environment updated and tested successfully.
+
+Next Step: Switch HAProxy traffic to validated environment.
+
+Review metrics: ${env.GRAFANA_DASHBOARD}
+
+Approve to proceed with traffic switch?
+""",
+                                    ok: 'Approve and Switch Traffic',
+                                    submitterParameter: 'APPROVED_BY'
+                                )
+                            }
+
+                            echo "✓ Manual approval granted"
+                        }
+                    }
+                }
+
+                stage('3.3: Blue-Green Traffic Switch') {
+                    steps {
+                        script {
+                            echo """
+========================================
+Phase 3.3: Blue-Green Traffic Switch
+========================================
+• Switch HAProxy backends
+• Grace period for traffic stabilization
+• Monitor SLI metrics
+• Auto-rollback if error rate > ${env.SLI_ERROR_THRESHOLD}
+========================================
+"""
+
+                            sh """
+                                ansible-playbook -i \${ANSIBLE_INV} \${ANSIBLE_PLAYBOOK} \\
+                                  -e "jcasc_teams_input=${params.TEAMS}" \\
+                                  -e "jcasc_phase=phase3_step3" \\
+                                  -e "sli_error_threshold=${env.SLI_ERROR_THRESHOLD}" \\
+                                  -v
+                            """
+                        }
+                    }
+                }
+
+                stage('3.4: Update Former Active') {
+                    steps {
+                        script {
+                            echo """
+========================================
+Phase 3.4: Update Former Active Environment
+========================================
+• Apply config to now-inactive environment
+• JCasC reload
+• Health checks
+• Both environments synchronized
+========================================
+"""
+
+                            sh """
+                                ansible-playbook -i \${ANSIBLE_INV} \${ANSIBLE_PLAYBOOK} \\
+                                  -e "jcasc_teams_input=${params.TEAMS}" \\
+                                  -e "jcasc_phase=phase3_step4" \\
+                                  -v
+                            """
+                        }
                     }
                 }
             }
         }
 
-        stage('Execute JCasC Hot-Reload') {
+        stage('Phase 4: Verification') {
+            when {
+                expression { !params.DRY_RUN }
+            }
             steps {
                 script {
-                    def dryRunFlag = params.DRY_RUN ? '--check' : ''
+                    echo """
+========================================
+Phase 4: Verification & Monitoring
+========================================
+• Export Prometheus metrics
+• Create Grafana annotations
+• Send Teams notifications
+• Generate summary reports
+========================================
+"""
 
-                    sh '''
-                        echo "Starting JCasC hot-reload playbook execution..."
+                    sh """
+                        ansible-playbook -i \${ANSIBLE_INV} \${ANSIBLE_PLAYBOOK} \\
+                          -e "jcasc_teams_input=${params.TEAMS}" \\
+                          -e "jcasc_phase=phase4" \\
+                          -v
+                    """
 
-                        ansible-playbook -i ${ANSIBLE_INV} ${ANSIBLE_PLAYBOOK} \
-                          -e "jcasc_teams_input=${TEAMS}" \
-                          -e "jcasc_environments_input=${ENVIRONMENTS}" \
-                          -v ${DRY_RUN ? '--check' : ''}
-                    '''
+                    // Archive deployment summary reports
+                    sh 'find /var/jenkins/*/validation/deployment-summary-*.txt -type f -mmin -60 || true'
+                    archiveArtifacts artifacts: '**/validation/deployment-summary-*.txt', allowEmptyArchive: true
                 }
             }
         }
@@ -106,39 +400,185 @@ pipeline {
     post {
         success {
             script {
-                echo "=========================================="
-                echo "✅ JCasC Update Completed Successfully"
-                echo "=========================================="
-                echo "Teams: ${params.TEAMS}"
-                echo "Environments: ${params.ENVIRONMENTS}"
-                echo "Check Jenkins audit log for details"
-                echo "=========================================="
+                def message = """
+========================================
+✅ JCasC Safe Update Workflow COMPLETED
+========================================
+Status: SUCCESS
+Teams: ${params.TEAMS}
+Validation Mode: ${params.VALIDATION_MODE}
+Manual Approval: ${params.REQUIRE_APPROVAL}
+Dry-run: ${params.DRY_RUN}
+
+${params.DRY_RUN ? 'Dry-run completed - no changes made' : 'Zero-downtime deployment achieved ✓'}
+
+Monitoring:
+  Grafana Dashboard: ${env.GRAFANA_DASHBOARD}
+  Audit Log: /var/log/jenkins/jcasc-updates.log
+  Metrics: /var/lib/node_exporter/textfile_collector/jcasc_*.prom
+
+Next Steps:
+  1. Monitor Jenkins instances for 15-30 minutes
+  2. Review Grafana dashboards for anomalies
+  3. Verify job execution on updated configs
+  4. Check plugin functionality
+========================================
+"""
+                echo message
+
+                // Archive validation reports
+                archiveArtifacts artifacts: '**/jcasc-validation-summary.txt', allowEmptyArchive: true
+                archiveArtifacts artifacts: '**/jcasc-plugin-compatibility-report.txt', allowEmptyArchive: true
             }
         }
 
         failure {
             script {
-                echo "=========================================="
-                echo "❌ JCasC Update Failed"
-                echo "=========================================="
-                echo "Teams: ${params.TEAMS}"
-                echo "Environments: ${params.ENVIRONMENTS}"
-                echo "Status: Automatic rollback has been applied"
-                echo "Check Jenkins audit log for error details"
-                echo "=========================================="
+                def message = """
+========================================
+❌ JCasC Safe Update Workflow FAILED
+========================================
+Status: FAILURE
+Teams: ${params.TEAMS}
+Validation Mode: ${params.VALIDATION_MODE}
+Phase: Check console output for failure phase
+
+${params.DRY_RUN ? 'Dry-run failed - validation issues detected' : 'Automatic rollback has been applied'}
+
+Troubleshooting:
+  1. Check console output for failure phase
+  2. Review validation logs: /tmp/jcasc-validation-summary.txt
+  3. Review audit log: /var/log/jenkins/jcasc-updates.log
+  4. Check team-specific logs: /var/jenkins/*/validation/
+
+Common Issues:
+  • Phase 1: YAML syntax errors, hardcoded credentials
+  • Phase 2: Plugin compatibility issues
+  • Phase 3: Health check failures, running builds
+  • Phase 4: Monitoring integration issues (non-critical)
+
+Rollback:
+  ${params.DRY_RUN ? 'N/A - dry-run mode' : 'Automatic rollback applied - previous config restored'}
+
+Support:
+  Contact Platform Team or Jenkins Admin for assistance
+========================================
+"""
+                echo message
+
+                // Archive failure logs
+                archiveArtifacts artifacts: '**/validation-failure-*.log', allowEmptyArchive: true
+                sh 'find /var/jenkins/*/validation/ -type f -mmin -60 || true'
             }
         }
 
         always {
             script {
-                echo "Pipeline execution completed"
+                echo "Workflow execution completed"
+
                 // Archive console output for audit trail
                 sh '''
                     mkdir -p build-logs
-                    echo "${BUILD_LOG}" > build-logs/jcasc-update-${BUILD_NUMBER}.log || true
+                    cat ${BUILD_LOG} > build-logs/jcasc-update-${BUILD_NUMBER}.log 2>/dev/null || true
                 '''
                 archiveArtifacts artifacts: 'build-logs/**', allowEmptyArchive: true
+
+                // Display execution summary
+                echo """
+========================================
+Execution Summary
+========================================
+Build Number: ${env.BUILD_NUMBER}
+Duration: ${currentBuild.durationString}
+Result: ${currentBuild.result}
+Teams: ${params.TEAMS}
+Validation Mode: ${params.VALIDATION_MODE}
+
+Artifacts:
+  • Console log: build-logs/jcasc-update-${env.BUILD_NUMBER}.log
+  • Validation summary: /tmp/jcasc-validation-summary.txt
+  • Plugin compatibility report: /tmp/jcasc-plugin-compatibility-report.txt
+  • Deployment summaries: /var/jenkins/*/validation/deployment-summary-*.txt
+
+Audit Trail:
+  • Jenkins audit log: /var/log/jenkins/jcasc-updates.log
+  • Config state: /var/jenkins/*/config-state.json
+  • Prometheus metrics: /var/lib/node_exporter/textfile_collector/jcasc_*.prom
+========================================
+"""
             }
         }
     }
+}
+
+// Helper Functions
+// ================
+
+def validateParameters() {
+    def validTeams = ['all', 'devops', 'ma', 'ba', 'tw']
+    def validModes = ['full', 'quick', 'skip']
+
+    if (!validTeams.contains(params.TEAMS)) {
+        error("Invalid TEAMS: ${params.TEAMS}. Must be one of: ${validTeams.join(', ')}")
+    }
+
+    if (!validModes.contains(params.VALIDATION_MODE)) {
+        error("Invalid VALIDATION_MODE: ${params.VALIDATION_MODE}. Must be one of: ${validModes.join(', ')}")
+    }
+
+    if (params.VALIDATION_MODE == 'skip' && !params.DRY_RUN) {
+        echo """
+⚠️  WARNING: Validation mode is set to 'skip'
+This bypasses all safety checks and is DANGEROUS for production!
+Consider using 'quick' mode instead.
+"""
+        // Give operator time to abort if this was a mistake
+        sleep(time: 5, unit: 'SECONDS')
+    }
+
+    echo "✓ Parameters validated successfully"
+}
+
+def displayWorkflowPlan() {
+    def estimatedTime = params.VALIDATION_MODE == 'full' ? '60-90 minutes' : '45-60 minutes'
+
+    echo """
+========================================
+Workflow Execution Plan
+========================================
+
+Phase 1: Pre-Validation (5-10 min)
+  • Render templates from jenkins-master-v2 role
+  • YAML syntax validation
+  • JCasC schema validation
+  • Security checks (credentials, dangerous patterns)
+  • Config versioning and diff generation
+
+Phase 2: Plugin Compatibility Testing (10-15 min)
+  • ${params.VALIDATION_MODE == 'full' ? 'ENABLED - Will test with production images' : 'SKIPPED - Quick validation mode'}
+  • Disposable container per team (parallel)
+  • Plugin loading verification
+  • Startup validation
+  • Auto-cleanup
+
+Phase 3: Staged Rollout (30-45 min per team)
+  • Apply to INACTIVE environment first
+  • Health checks and smoke tests
+  • ${params.REQUIRE_APPROVAL ? 'MANUAL APPROVAL GATE' : 'AUTO-PROCEED (no approval)'}
+  • Blue-green traffic switch via HAProxy
+  • Update former active environment
+  • Auto-rollback on failure
+
+Phase 4: Verification & Monitoring (2-5 min)
+  • Export Prometheus metrics
+  • Create Grafana annotations
+  • Send Teams notifications
+  • Generate summary reports
+  • Final audit logging
+
+========================================
+Estimated Total Time: ${estimatedTime}
+${params.DRY_RUN ? 'DRY-RUN MODE: Validation only, no deployment' : ''}
+========================================
+"""
 }

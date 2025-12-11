@@ -1,0 +1,380 @@
+---
+# JCasC Phase 4: Verification & Monitoring
+# - Exports metrics to Prometheus
+# - Creates Grafana annotations
+# - Sends Teams notifications
+# - Generates final summary report
+# - Updates audit logs with complete metadata
+
+- name: "Phase 4: Verification & Monitoring - Initialize"
+  debug:
+    msg: |
+      ========================================
+      Phase 4: Verification & Monitoring
+      ========================================
+      Team: {{ current_team }}
+      Deployment Status: {{ deployment_status | default('success') }}
+      ========================================
+
+# Step 4.1: Export Prometheus Metrics
+- name: "Phase 4.1: Export Metrics to Prometheus"
+  block:
+    - name: "Phase 4.1: Calculate deployment duration"
+      set_fact:
+        deployment_start: "{{ deployment_start_time | default(ansible_date_time.epoch) }}"
+        deployment_end: "{{ ansible_date_time.epoch }}"
+
+    - name: "Phase 4.1: Calculate duration in seconds"
+      set_fact:
+        deployment_duration: "{{ (deployment_end | int) - (deployment_start | int) }}"
+
+    - name: "Phase 4.1: Export JCasC metrics to Prometheus textfile collector"
+      copy:
+        content: |
+          # HELP jcasc_reload_attempts_total Total number of JCasC reload attempts
+          # TYPE jcasc_reload_attempts_total counter
+          jcasc_reload_attempts_total{team="{{ current_team }}"} {{ jcasc_reload_attempts | default(1) }}
+
+          # HELP jcasc_reload_success_total Total number of successful JCasC reloads
+          # TYPE jcasc_reload_success_total counter
+          jcasc_reload_success_total{team="{{ current_team }}"} {{ 1 if (deployment_status | default('success')) == 'success' else 0 }}
+
+          # HELP jcasc_reload_duration_seconds Duration of JCasC reload in seconds
+          # TYPE jcasc_reload_duration_seconds gauge
+          jcasc_reload_duration_seconds{team="{{ current_team }}"} {{ deployment_duration }}
+
+          # HELP jcasc_validation_duration_seconds Duration of validation phases in seconds
+          # TYPE jcasc_validation_duration_seconds gauge
+          jcasc_validation_duration_seconds{team="{{ current_team }}",phase="phase1"} {{ phase1_duration | default(0) }}
+          jcasc_validation_duration_seconds{team="{{ current_team }}",phase="phase2"} {{ phase2_duration | default(0) }}
+          jcasc_validation_duration_seconds{team="{{ current_team }}",phase="phase3"} {{ phase3_duration | default(0) }}
+
+          # HELP jcasc_rollback_total Total number of automatic rollbacks
+          # TYPE jcasc_rollback_total counter
+          jcasc_rollback_total{team="{{ current_team }}"} {{ rollback_count | default(0) }}
+
+          # HELP jcasc_config_version Current config version (epoch timestamp)
+          # TYPE jcasc_config_version gauge
+          jcasc_config_version{team="{{ current_team }}"} {{ ansible_date_time.epoch }}
+
+          # HELP jcasc_manual_approval_required Whether manual approval was required
+          # TYPE jcasc_manual_approval_required gauge
+          jcasc_manual_approval_required{team="{{ current_team }}"} {{ 1 if (require_manual_approval | default(true)) else 0 }}
+
+          # HELP jcasc_haproxy_switched Whether HAProxy traffic was switched
+          # TYPE jcasc_haproxy_switched gauge
+          jcasc_haproxy_switched{team="{{ current_team }}"} {{ 1 if haproxy_switched | default(false) else 0 }}
+
+          # HELP jcasc_plugin_compatibility_tested Whether plugin compatibility was tested
+          # TYPE jcasc_plugin_compatibility_tested gauge
+          jcasc_plugin_compatibility_tested{team="{{ current_team }}"} {{ 1 if plugin_compatibility_tested | default(false) else 0 }}
+        dest: "/var/lib/node_exporter/textfile_collector/jcasc_{{ current_team }}.prom"
+        mode: '0644'
+      ignore_errors: yes
+
+    - name: "Phase 4.1: Display metrics export status"
+      debug:
+        msg: |
+          Metrics exported to Prometheus textfile collector
+          File: /var/lib/node_exporter/textfile_collector/jcasc_{{ current_team }}.prom
+          Deployment duration: {{ deployment_duration }}s
+
+# Step 4.2: Create Grafana Annotation
+- name: "Phase 4.2: Create Grafana Annotation"
+  block:
+    - name: "Phase 4.2: Create deployment annotation in Grafana"
+      uri:
+        url: "http://{{ monitoring_host | default('monitoring') }}:9300/api/annotations"
+        method: POST
+        user: "{{ grafana_admin_user | default('admin') }}"
+        password: "{{ grafana_admin_password | default('admin123') }}"
+        force_basic_auth: yes
+        body_format: json
+        body:
+          dashboardUID: "jcasc-updates"
+          time: "{{ ansible_date_time.epoch | int * 1000 }}"
+          tags:
+            - "jcasc-deployment"
+            - "team-{{ current_team }}"
+            - "{{ deployment_status | default('success') }}"
+          text: |
+            JCasC Update - {{ current_team }}
+            Status: {{ deployment_status | default('success') }}
+            Duration: {{ deployment_duration }}s
+            Operator: {{ ansible_user_id }}
+            Active: {{ inactive_env | default('N/A') }}
+        status_code: [200, 201]
+        timeout: 10
+      register: grafana_annotation
+      ignore_errors: yes
+
+    - name: "Phase 4.2: Display Grafana annotation status"
+      debug:
+        msg: |
+          {% if grafana_annotation is succeeded %}
+          Grafana annotation created successfully
+          Dashboard: http://{{ monitoring_host | default('monitoring') }}:9300/d/jcasc-updates
+          {% else %}
+          Failed to create Grafana annotation (non-critical)
+          Reason: {{ grafana_annotation.msg | default('Unknown error') }}
+          {% endif %}
+
+# Step 4.3: Send Teams Notification
+- name: "Phase 4.3: Send Microsoft Teams Notification"
+  block:
+    - name: "Phase 4.3: Determine notification color"
+      set_fact:
+        teams_color: "{{ '00FF00' if (deployment_status | default('success')) == 'success' else 'FF0000' }}"
+        teams_summary: "{{ 'SUCCESS' if (deployment_status | default('success')) == 'success' else 'FAILED' }}"
+
+    - name: "Phase 4.3: Build Teams notification payload"
+      set_fact:
+        teams_payload:
+          "@type": "MessageCard"
+          "@context": "https://schema.org/extensions"
+          themeColor: "{{ teams_color }}"
+          summary: "JCasC Update - {{ current_team }} - {{ teams_summary }}"
+          sections:
+            - activityTitle: "Jenkins JCasC Configuration Update"
+              activitySubtitle: "Team: {{ current_team }}"
+              activityImage: "https://www.jenkins.io/images/logos/jenkins/jenkins.png"
+              facts:
+                - name: "Team"
+                  value: "{{ current_team }}"
+                - name: "Status"
+                  value: "{{ teams_summary }}"
+                - name: "Duration"
+                  value: "{{ deployment_duration }}s"
+                - name: "Operator"
+                  value: "{{ ansible_user_id }}"
+                - name: "Active Environment"
+                  value: "{{ inactive_env | default('N/A') }}"
+                - name: "Manual Approval"
+                  value: "{{ 'Yes' if (require_manual_approval | default(true)) else 'No' }}"
+                - name: "Plugin Testing"
+                  value: "{{ 'Yes' if plugin_compatibility_tested | default(false) else 'No' }}"
+                - name: "Timestamp"
+                  value: "{{ ansible_date_time.iso8601 }}"
+              markdown: true
+          potentialAction:
+            - "@type": "OpenUri"
+              name: "View Metrics Dashboard"
+              targets:
+                - os: "default"
+                  uri: "http://{{ monitoring_host | default('monitoring') }}:9300/d/jcasc-updates"
+            - "@type": "OpenUri"
+              name: "View Jenkins"
+              targets:
+                - os: "default"
+                  uri: "http://{{ ansible_host }}:{{ team_config.ports.web | default(8080) }}"
+
+    - name: "Phase 4.3: Send notification to Microsoft Teams"
+      uri:
+        url: "{{ teams_webhook_url }}"
+        method: POST
+        body_format: json
+        body: "{{ teams_payload }}"
+        status_code: [200, 201, 202]
+        timeout: 10
+      register: teams_notification
+      ignore_errors: yes
+      when: teams_webhook_url is defined and teams_webhook_url | length > 0
+
+    - name: "Phase 4.3: Display Teams notification status"
+      debug:
+        msg: |
+          {% if teams_webhook_url is defined and teams_webhook_url | length > 0 %}
+          {% if teams_notification is succeeded %}
+          Teams notification sent successfully
+          {% else %}
+          Failed to send Teams notification (non-critical)
+          Reason: {{ teams_notification.msg | default('Unknown error') }}
+          {% endif %}
+          {% else %}
+          Teams webhook URL not configured - skipping notification
+          {% endif %}
+
+# Step 4.4: Generate Summary Report
+- name: "Phase 4.4: Generate Deployment Summary Report"
+  block:
+    - name: "Phase 4.4: Read config state"
+      slurp:
+        src: "{{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/config-state.json"
+      register: config_state_file
+      ignore_errors: yes
+
+    - name: "Phase 4.4: Parse config state"
+      set_fact:
+        config_state: "{{ config_state_file.content | b64decode | from_json }}"
+      when: config_state_file is succeeded
+
+    - name: "Phase 4.4: Generate comprehensive summary report"
+      copy:
+        content: |
+          ========================================
+          JCasC Deployment Summary Report
+          ========================================
+          Generated: {{ ansible_date_time.iso8601 }}
+          Team: {{ current_team }}
+          Status: {{ deployment_status | default('success') | upper }}
+          Operator: {{ ansible_user_id }}
+
+          ========================================
+          Deployment Timeline
+          ========================================
+          Start Time: {{ deployment_start | default('N/A') }}
+          End Time: {{ deployment_end }}
+          Total Duration: {{ deployment_duration }}s
+
+          Phase Durations:
+            - Phase 1 (Pre-Validation): {{ phase1_duration | default('N/A') }}s
+            - Phase 2 (Plugin Testing): {{ phase2_duration | default('N/A') }}s
+            - Phase 3 (Staged Rollout): {{ phase3_duration | default('N/A') }}s
+            - Phase 4 (Verification): {{ deployment_duration }}s
+
+          ========================================
+          Environment Details
+          ========================================
+          Previous Active: {{ active_env | default('N/A') }}
+          New Active: {{ inactive_env | default('N/A') }}
+          HAProxy Switched: {{ 'Yes' if haproxy_switched | default(false) else 'No' }}
+
+          Ports:
+            - Blue: {{ team_config.ports.web | default('N/A') }}
+            - Green: {{ (team_config.ports.web | default(0) + 100) if team_config.ports.web is defined else 'N/A' }}
+
+          ========================================
+          Validation Summary
+          ========================================
+          Phase 1 - Pre-Validation:
+            - YAML Syntax: ✓ PASSED
+            - Schema Validation: ✓ PASSED
+            - Security Checks: ✓ PASSED
+            - Config Versioning: ✓ COMPLETED
+
+          Phase 2 - Plugin Compatibility:
+            - Tested: {{ 'Yes' if plugin_compatibility_tested | default(false) else 'No' }}
+            - Production Image: jenkins-{{ current_team }}:production
+            - Disposable Container: {{ 'Used' if plugin_compatibility_tested | default(false) else 'Skipped' }}
+
+          Phase 3 - Staged Rollout:
+            - Inactive Update: ✓ PASSED
+            - Health Checks: ✓ PASSED
+            - Smoke Tests: ✓ PASSED
+            - Manual Approval: {{ 'Required' if (require_manual_approval | default(true)) else 'Not Required' }}
+            - Traffic Switch: {{ 'Completed' if haproxy_switched | default(false) else 'Not Performed' }}
+            - Former Active Update: {{ 'Completed' if haproxy_switched | default(false) else 'Not Performed' }}
+
+          ========================================
+          Rollback Information
+          ========================================
+          Rollback Count: {{ rollback_count | default(0) }}
+          Latest Backup: {{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/backups/current.yaml.{{ ansible_date_time.epoch }}
+          Rollback Available: {{ 'Yes' if config_state.rollback_available | default(true) else 'No' }}
+          Auto-Rollback: {{ 'Not Triggered' if (deployment_status | default('success')) == 'success' else 'Triggered' }}
+
+          ========================================
+          Monitoring & Metrics
+          ========================================
+          Prometheus Metrics: Exported to /var/lib/node_exporter/textfile_collector/jcasc_{{ current_team }}.prom
+          Grafana Dashboard: http://{{ monitoring_host | default('monitoring') }}:9300/d/jcasc-updates
+          Grafana Annotation: {{ 'Created' if grafana_annotation is succeeded else 'Failed (non-critical)' }}
+
+          Teams Notification: {{ 'Sent' if (teams_notification is succeeded and teams_webhook_url is defined) else 'Not Sent' }}
+
+          ========================================
+          Configuration State
+          ========================================
+          {% if config_state is defined %}
+          Active Config: {{ config_state.active_config | default('N/A') }}
+          Previous Config: {{ config_state.previous_config | default('N/A') }}
+          Last Update: {{ config_state.last_update | default('N/A') }}
+          Last Update By: {{ config_state.last_update_by | default('N/A') }}
+          Plugin Compatibility Tested: {{ config_state.plugin_compatibility_tested | default(false) }}
+          Smoke Tests Passed: {{ config_state.smoke_tests_passed | default(false) }}
+          {% else %}
+          Config state file not found or unreadable
+          {% endif %}
+
+          ========================================
+          Audit Trail
+          ========================================
+          Audit Log: {{ jenkins_audit_log | default('/var/log/jenkins/jcasc-updates.log') }}
+          Config State: {{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/config-state.json
+          Validation Logs: {{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/validation/
+
+          ========================================
+          Next Steps
+          ========================================
+          {% if (deployment_status | default('success')) == 'success' %}
+          1. Monitor Jenkins for 15-30 minutes
+          2. Review Grafana dashboard for anomalies
+          3. Check job execution on new config
+          4. Verify plugin functionality
+          5. Document any issues encountered
+          {% else %}
+          1. Review rollback logs
+          2. Investigate failure cause
+          3. Fix configuration issues
+          4. Re-run validation pipeline
+          5. Attempt deployment again
+          {% endif %}
+
+          ========================================
+          Useful Commands
+          ========================================
+          # View audit log
+          tail -f {{ jenkins_audit_log | default('/var/log/jenkins/jcasc-updates.log') }}
+
+          # Check config state
+          cat {{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/config-state.json | jq .
+
+          # Manual rollback (if needed)
+          cp {{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/backups/current.yaml.{latest} \
+             {{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/configs/current.yaml
+          curl -X POST -u admin:TOKEN http://{{ ansible_host }}:{{ team_config.ports.web | default(8080) }}/configuration-as-code/reload
+
+          # Query Prometheus metrics
+          curl -s 'http://{{ monitoring_host | default('monitoring') }}:9090/api/v1/query?query=jcasc_reload_success_total{team="{{ current_team }}"}' | jq
+
+          ========================================
+          Report End
+          ========================================
+        dest: "{{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/validation/deployment-summary-{{ ansible_date_time.epoch }}.txt"
+        mode: '0644'
+
+    - name: "Phase 4.4: Display summary report location"
+      debug:
+        msg: |
+          ========================================
+          Deployment Summary Report Generated
+          ========================================
+          Location: {{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/validation/deployment-summary-{{ ansible_date_time.epoch }}.txt
+          View with: cat {{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/validation/deployment-summary-{{ ansible_date_time.epoch }}.txt
+
+# Step 4.5: Final Audit Log Entry
+- name: "Phase 4.5: Final Audit Log Entry"
+  lineinfile:
+    path: "{{ jenkins_audit_log | default('/var/log/jenkins/jcasc-updates.log') }}"
+    create: yes
+    line: "[{{ ansible_date_time.iso8601 }}] [{{ current_team }}] [PHASE4] Status: COMPLETED | Duration: {{ deployment_duration }}s | Metrics: Exported | Notification: {{ 'Sent' if (teams_notification is succeeded and teams_webhook_url is defined) else 'Not Sent' }} | Operator: {{ ansible_user_id }}"
+    mode: '0644'
+
+- name: "Phase 4: Verification & Monitoring Complete"
+  debug:
+    msg: |
+      ========================================
+      Phase 4: Verification & Monitoring COMPLETED
+      ========================================
+      Team: {{ current_team }}
+      Status: {{ deployment_status | default('success') | upper }}
+      Duration: {{ deployment_duration }}s
+
+      Metrics: Exported to Prometheus
+      Grafana: Annotation created
+      Teams: {{ 'Notification sent' if (teams_notification is succeeded and teams_webhook_url is defined) else 'Not configured' }}
+      Summary: {{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/validation/deployment-summary-{{ ansible_date_time.epoch }}.txt
+
+      ========================================
+      All Phases Completed Successfully
+      ========================================

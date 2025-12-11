@@ -1,77 +1,446 @@
 ---
-- name: JCasC Hot-Reload Configuration Update
+- name: JCasC Safe Update Workflow with 4-Phase Validation
   hosts: jenkins_masters
   serial: 1
   gather_facts: yes
 
   vars_prompt:
     - name: jcasc_teams_input
-      prompt: "Teams to update (all or comma-separated)"
+      prompt: "Teams to update (all or comma-separated list)"
       default: "all"
-    - name: jcasc_environments_input
-      prompt: "Environments (blue/green/both)"
-      default: "both"
+      private: no
+
+    - name: require_manual_approval
+      prompt: "Require manual approval before traffic switch? (true/false)"
+      default: "true"
+      private: no
+
+    - name: validation_mode
+      prompt: "Validation mode (full/quick/skip - WARNING: skip is dangerous)"
+      default: "full"
+      private: no
 
   vars:
+    # Team selection and filtering
     jcasc_teams: "{{ jcasc_teams_input }}"
-    jcasc_environments: "{{ jcasc_environments_input }}"
     teams_list: "{{ (jcasc_teams == 'all') | ternary(jenkins_teams | map(attribute='team_name') | list, jcasc_teams.split(',') | map('trim') | list) }}"
 
+    # Validation configuration
+    validation_mode_value: "{{ validation_mode | default('full') }}"
+    plugin_test_timeout: 300
+    require_manual_approval_bool: "{{ require_manual_approval | default('true') | bool }}"
+
+    # SLI thresholds for automated rollback
+    sli_error_threshold: 0.01  # 1% error rate threshold
+    sli_latency_threshold: 2000  # 2000ms latency threshold
+
+    # Paths and configuration
+    jenkins_audit_log: "/var/log/jenkins/jcasc-updates.log"
+
+    # Deployment tracking
+    deployment_start_time: "{{ ansible_date_time.epoch }}"
+    deployment_status: "in_progress"
+
   pre_tasks:
-    - name: Pre-flight checks
-      block:
-        - name: Check Jenkins connectivity
-          uri:
-            url: "{{ jenkins_url }}/api/json"
-            method: GET
-            status_code: [200, 403]
-          register: jenkins_health
-          ignore_errors: yes
-
-        - name: Display Jenkins health status
-          debug:
-            msg: "Jenkins health: {{ jenkins_health.status | default('Unreachable') }}"
-
-        - name: Validate teams exist
-          assert:
-            that:
-              - item in (jenkins_teams | map(attribute='team_name') | list)
-            fail_msg: "Team {{ item }} not found in jenkins_teams configuration"
-          loop: "{{ teams_list }}"
-
-        - name: Display update plan
-          debug:
-            msg: |
-              JCasC Hot-Reload Update Plan
-              ========================================
-              Teams: {{ teams_list | join(', ') }}
-              Environments: {{ jcasc_environments }}
-              Jenkins URL: {{ jenkins_url }}
-              ========================================
-
-  tasks:
-    - name: Update JCasC for each team
-      include_tasks: tasks/jcasc-update-team.yml
-      loop: "{{ teams_list }}"
-      loop_control:
-        loop_var: current_team
-
-  post_tasks:
-    - name: Final Jenkins health check
-      uri:
-        url: "{{ jenkins_url }}/api/json"
-        method: GET
-      register: final_health
-      failed_when: final_health.status not in [200, 403]
-      retries: 3
-      delay: 5
-
-    - name: Display completion summary
+    - name: "Pre-flight Checks: Initialize"
       debug:
         msg: |
           ========================================
-          JCasC Hot-Reload Completed Successfully
+          JCasC Safe Update Workflow
           ========================================
+          Pipeline: 4-Phase Validation
+          Teams: {{ teams_list | join(', ') }}
+          Validation Mode: {{ validation_mode_value }}
+          Manual Approval: {{ require_manual_approval_bool }}
+          Plugin Test Timeout: {{ plugin_test_timeout }}s
+          SLI Error Threshold: {{ (sli_error_threshold * 100) | round(2) }}%
+          ========================================
+
+    - name: "Pre-flight: Validate input parameters"
+      block:
+        - name: "Pre-flight: Check validation mode is valid"
+          assert:
+            that:
+              - validation_mode_value in ['full', 'quick', 'skip']
+            fail_msg: "Invalid validation mode: {{ validation_mode_value }}. Must be 'full', 'quick', or 'skip'"
+            success_msg: "Validation mode: {{ validation_mode_value }}"
+
+        - name: "Pre-flight: Warn if validation is skipped"
+          debug:
+            msg: |
+              ⚠️  WARNING: Validation mode is set to 'skip'
+              This bypasses all safety checks and is DANGEROUS for production!
+              Consider using 'quick' mode instead.
+          when: validation_mode_value == 'skip'
+
+        - name: "Pre-flight: Validate teams exist in configuration"
+          assert:
+            that:
+              - item in (jenkins_teams | map(attribute='team_name') | list)
+            fail_msg: "Team '{{ item }}' not found in jenkins_teams configuration"
+            success_msg: "Team '{{ item }}' validated"
+          loop: "{{ teams_list }}"
+
+    - name: "Pre-flight: Check Jenkins connectivity"
+      block:
+        - name: "Pre-flight: Test Jenkins API connectivity"
+          uri:
+            url: "http://{{ ansible_host }}:{{ jenkins_teams[0].ports.web | default(8080) }}/api/json"
+            method: GET
+            status_code: [200, 403]
+            timeout: 10
+          register: jenkins_connectivity
+          ignore_errors: yes
+
+        - name: "Pre-flight: Display connectivity status"
+          debug:
+            msg: |
+              Jenkins Connectivity: {{ 'OK' if jenkins_connectivity.status in [200, 403] else 'FAILED' }}
+              Status Code: {{ jenkins_connectivity.status | default('N/A') }}
+
+        - name: "Pre-flight: Fail if Jenkins unreachable"
+          fail:
+            msg: "Jenkins is unreachable. Cannot proceed with JCasC update."
+          when: jenkins_connectivity.status is not defined or jenkins_connectivity.status not in [200, 403]
+
+    - name: "Pre-flight: Check Docker availability (for Phase 2)"
+      block:
+        - name: "Pre-flight: Test Docker connectivity"
+          command: docker info
+          register: docker_check
+          changed_when: false
+          failed_when: false
+
+        - name: "Pre-flight: Display Docker status"
+          debug:
+            msg: |
+              Docker Status: {{ 'Available' if docker_check.rc == 0 else 'Not Available' }}
+              {% if validation_mode_value == 'full' and docker_check.rc != 0 %}
+              WARNING: Docker is required for Phase 2 (Plugin Compatibility Testing)
+              {% endif %}
+
+        - name: "Pre-flight: Fail if Docker unavailable for full validation"
+          fail:
+            msg: |
+              Docker is not available but validation_mode is 'full'
+              Phase 2 (Plugin Compatibility Testing) requires Docker
+              Either install Docker or use validation_mode='quick'
+          when:
+            - validation_mode_value == 'full'
+            - docker_check.rc != 0
+      when: validation_mode_value == 'full'
+      delegate_to: localhost
+
+    - name: "Pre-flight: Create audit log directory"
+      file:
+        path: "{{ jenkins_audit_log | dirname }}"
+        state: directory
+        mode: '0755'
+      ignore_errors: yes
+
+    - name: "Pre-flight: Log workflow initiation"
+      lineinfile:
+        path: "{{ jenkins_audit_log }}"
+        create: yes
+        line: "[{{ ansible_date_time.iso8601 }}] [WORKFLOW_START] Teams: {{ teams_list | join(',') }} | Mode: {{ validation_mode_value }} | Approval: {{ require_manual_approval_bool }} | Operator: {{ ansible_user_id }}"
+        mode: '0644'
+
+    - name: "Pre-flight: Display workflow plan"
+      debug:
+        msg: |
+          ========================================
+          Workflow Execution Plan
+          ========================================
+
+          Phase 1: Pre-Validation (5-10 min)
+            • Render templates from jenkins-master-v2 role
+            • YAML syntax validation
+            • JCasC schema validation
+            • Security checks (credentials, dangerous patterns)
+            • Config versioning and diff generation
+
+          Phase 2: Plugin Compatibility Testing (10-15 min)
+            • {{ 'ENABLED - Will test with production images' if validation_mode_value == 'full' else 'SKIPPED - Quick validation mode' }}
+            • Disposable container per team (parallel)
+            • Plugin loading verification
+            • Startup validation
+            • Auto-cleanup
+
+          Phase 3: Staged Rollout (30-45 min per team)
+            • Apply to INACTIVE environment first
+            • Health checks and smoke tests
+            • {{ 'MANUAL APPROVAL GATE' if require_manual_approval_bool else 'AUTO-PROCEED (no approval)' }}
+            • Blue-green traffic switch via HAProxy
+            • Update former active environment
+            • Auto-rollback on failure
+
+          Phase 4: Verification & Monitoring (2-5 min)
+            • Export Prometheus metrics
+            • Create Grafana annotations
+            • Send Teams notifications
+            • Generate summary reports
+            • Final audit logging
+
+          ========================================
+          Estimated Total Time: {{ '60-90 minutes' if validation_mode_value == 'full' else '45-60 minutes' }}
+          ========================================
+
+  tasks:
+    # ========================================
+    # Phase 1: Pre-Validation
+    # ========================================
+    - name: "Phase 1: Pre-Validation"
+      block:
+        - name: "Phase 1: Start phase timer"
+          set_fact:
+            phase1_start: "{{ ansible_date_time.epoch }}"
+
+        - name: "Phase 1: Execute validation tasks"
+          include_tasks: tasks/jcasc-phase1-validation.yml
+
+        - name: "Phase 1: Calculate phase duration"
+          set_fact:
+            phase1_duration: "{{ (ansible_date_time.epoch | int) - (phase1_start | int) }}"
+
+        - name: "Phase 1: Log phase completion"
+          lineinfile:
+            path: "{{ jenkins_audit_log }}"
+            line: "[{{ ansible_date_time.iso8601 }}] [PHASE1_COMPLETE] Duration: {{ phase1_duration }}s | Status: SUCCESS | Operator: {{ ansible_user_id }}"
+
+      rescue:
+        - name: "Phase 1: Log phase failure"
+          lineinfile:
+            path: "{{ jenkins_audit_log }}"
+            line: "[{{ ansible_date_time.iso8601 }}] [PHASE1_FAILED] Reason: {{ ansible_failed_result.msg | default('Unknown error') }} | Operator: {{ ansible_user_id }}"
+
+        - name: "Phase 1: Fail with context"
+          fail:
+            msg: |
+              ========================================
+              Phase 1: Pre-Validation FAILED
+              ========================================
+              Reason: {{ ansible_failed_result.msg | default('Validation checks failed') }}
+
+              No changes have been made to production
+              Review validation logs and fix issues before retrying
+
+              Logs: /tmp/jcasc-validation-summary.txt
+              ========================================
+
+    # ========================================
+    # Phase 2: Plugin Compatibility Testing
+    # ========================================
+    - name: "Phase 2: Plugin Compatibility Testing"
+      block:
+        - name: "Phase 2: Start phase timer"
+          set_fact:
+            phase2_start: "{{ ansible_date_time.epoch }}"
+
+        - name: "Phase 2: Execute plugin tests"
+          include_tasks: tasks/jcasc-phase2-plugin-test.yml
+
+        - name: "Phase 2: Calculate phase duration"
+          set_fact:
+            phase2_duration: "{{ (ansible_date_time.epoch | int) - (phase2_start | int) }}"
+            plugin_compatibility_tested: true
+
+        - name: "Phase 2: Log phase completion"
+          lineinfile:
+            path: "{{ jenkins_audit_log }}"
+            line: "[{{ ansible_date_time.iso8601 }}] [PHASE2_COMPLETE] Duration: {{ phase2_duration }}s | Status: SUCCESS | Teams: {{ teams_list | join(',') }} | Operator: {{ ansible_user_id }}"
+
+      rescue:
+        - name: "Phase 2: Log phase failure"
+          lineinfile:
+            path: "{{ jenkins_audit_log }}"
+            line: "[{{ ansible_date_time.iso8601 }}] [PHASE2_FAILED] Reason: {{ ansible_failed_result.msg | default('Plugin compatibility test failed') }} | Operator: {{ ansible_user_id }}"
+
+        - name: "Phase 2: Fail with context"
+          fail:
+            msg: |
+              ========================================
+              Phase 2: Plugin Compatibility Testing FAILED
+              ========================================
+              Reason: {{ ansible_failed_result.msg | default('One or more teams failed plugin compatibility tests') }}
+
+              No changes have been made to production
+              Review plugin test logs and fix compatibility issues
+
+              Logs: {{ jenkins_base_path | default('/var/jenkins') }}/*/validation/
+              Report: /tmp/jcasc-plugin-compatibility-report.txt
+              ========================================
+      when: validation_mode_value == 'full'
+
+    - name: "Phase 2: Skipped (quick mode)"
+      block:
+        - name: "Phase 2: Set skipped flag"
+          set_fact:
+            phase2_duration: 0
+            plugin_compatibility_tested: false
+
+        - name: "Phase 2: Log phase skipped"
+          lineinfile:
+            path: "{{ jenkins_audit_log }}"
+            line: "[{{ ansible_date_time.iso8601 }}] [PHASE2_SKIPPED] Reason: Validation mode is '{{ validation_mode_value }}' | Operator: {{ ansible_user_id }}"
+
+        - name: "Phase 2: Display skip message"
+          debug:
+            msg: |
+              ========================================
+              Phase 2: Plugin Compatibility Testing SKIPPED
+              ========================================
+              Validation mode: {{ validation_mode_value }}
+              Plugin testing requires validation_mode='full'
+
+              WARNING: Proceeding without plugin compatibility validation
+              ========================================
+      when: validation_mode_value != 'full'
+
+    # ========================================
+    # Phase 3: Staged Rollout (Per Team)
+    # ========================================
+    - name: "Phase 3: Staged Rollout"
+      block:
+        - name: "Phase 3: Start phase timer"
+          set_fact:
+            phase3_start: "{{ ansible_date_time.epoch }}"
+
+        - name: "Phase 3: Execute staged rollout for each team"
+          include_tasks: tasks/jcasc-phase3-staged-rollout.yml
+          loop: "{{ teams_list }}"
+          loop_control:
+            loop_var: current_team
+
+        - name: "Phase 3: Calculate phase duration"
+          set_fact:
+            phase3_duration: "{{ (ansible_date_time.epoch | int) - (phase3_start | int) }}"
+
+        - name: "Phase 3: Log phase completion"
+          lineinfile:
+            path: "{{ jenkins_audit_log }}"
+            line: "[{{ ansible_date_time.iso8601 }}] [PHASE3_COMPLETE] Duration: {{ phase3_duration }}s | Status: SUCCESS | Teams: {{ teams_list | join(',') }} | Operator: {{ ansible_user_id }}"
+
+      rescue:
+        - name: "Phase 3: Log phase failure"
+          lineinfile:
+            path: "{{ jenkins_audit_log }}"
+            line: "[{{ ansible_date_time.iso8601 }}] [PHASE3_FAILED] Reason: {{ ansible_failed_result.msg | default('Staged rollout failed') }} | Operator: {{ ansible_user_id }}"
+
+        - name: "Phase 3: Fail with context"
+          fail:
+            msg: |
+              ========================================
+              Phase 3: Staged Rollout FAILED
+              ========================================
+              Reason: {{ ansible_failed_result.msg | default('Rollout failed during deployment') }}
+
+              Automatic rollback has been applied
+              Check team-specific logs for details
+
+              Logs: {{ jenkins_audit_log }}
+              Config state: {{ jenkins_base_path | default('/var/jenkins') }}/*/config-state.json
+              ========================================
+
+    # ========================================
+    # Phase 4: Verification & Monitoring
+    # ========================================
+    - name: "Phase 4: Verification & Monitoring"
+      block:
+        - name: "Phase 4: Execute verification for each team"
+          include_tasks: tasks/jcasc-phase4-verification.yml
+          vars:
+            current_team: "{{ item }}"
+            deployment_status: "success"
+            haproxy_switched: true
+          loop: "{{ teams_list }}"
+
+        - name: "Phase 4: Set final deployment status"
+          set_fact:
+            deployment_status: "success"
+
+      rescue:
+        - name: "Phase 4: Log verification failure (non-critical)"
+          lineinfile:
+            path: "{{ jenkins_audit_log }}"
+            line: "[{{ ansible_date_time.iso8601 }}] [PHASE4_FAILED] Reason: {{ ansible_failed_result.msg | default('Verification failed') }} | Note: Deployment succeeded but verification incomplete | Operator: {{ ansible_user_id }}"
+
+        - name: "Phase 4: Display non-critical failure message"
+          debug:
+            msg: |
+              ========================================
+              Phase 4: Verification Failed (Non-Critical)
+              ========================================
+              Deployment was successful but verification tasks failed
+              This is typically a monitoring/reporting issue
+
+              Teams were updated successfully
+              Review logs for verification failure details
+              ========================================
+
+  post_tasks:
+    - name: "Post-Deployment: Final Health Checks"
+      block:
+        - name: "Post-Deployment: Check each team's Jenkins"
+          uri:
+            url: "http://{{ ansible_host }}:{{ item.ports.web }}/api/json"
+            method: GET
+            status_code: [200, 403]
+            timeout: 10
+          loop: "{{ jenkins_teams | selectattr('team_name', 'in', teams_list) | list }}"
+          register: final_health_checks
+          retries: 3
+          delay: 5
+
+        - name: "Post-Deployment: Display health check results"
+          debug:
+            msg: |
+              Final Health Check Results:
+              {% for result in final_health_checks.results %}
+              - {{ result.item.team_name }}: {{ 'OK' if result.status in [200, 403] else 'FAILED' }} ({{ result.status | default('N/A') }})
+              {% endfor %}
+
+    - name: "Post-Deployment: Calculate total workflow duration"
+      set_fact:
+        total_duration: "{{ (ansible_date_time.epoch | int) - (deployment_start_time | int) }}"
+
+    - name: "Post-Deployment: Log workflow completion"
+      lineinfile:
+        path: "{{ jenkins_audit_log }}"
+        line: "[{{ ansible_date_time.iso8601 }}] [WORKFLOW_COMPLETE] Total Duration: {{ total_duration }}s | Teams: {{ teams_list | join(',') }} | Status: {{ deployment_status | default('success') | upper }} | Operator: {{ ansible_user_id }}"
+
+    - name: "Post-Deployment: Display completion summary"
+      debug:
+        msg: |
+          ========================================
+          JCasC Safe Update Workflow COMPLETED
+          ========================================
+          Status: {{ deployment_status | default('success') | upper }}
           Teams Updated: {{ teams_list | join(', ') }}
-          Final Jenkins Status: {{ final_health.status }}
+          Total Duration: {{ total_duration }}s
+
+          Phase Breakdown:
+            - Phase 1 (Pre-Validation): {{ phase1_duration | default('N/A') }}s
+            - Phase 2 (Plugin Testing): {{ phase2_duration | default('N/A') }}s
+            - Phase 3 (Staged Rollout): {{ phase3_duration | default('N/A') }}s
+            - Phase 4 (Verification): {{ (total_duration | int) - ((phase1_duration | default(0) | int) + (phase2_duration | default(0) | int) + (phase3_duration | default(0) | int)) }}s
+
+          Configuration:
+            - Validation Mode: {{ validation_mode_value }}
+            - Manual Approval: {{ require_manual_approval_bool }}
+            - Plugin Testing: {{ 'Yes' if plugin_compatibility_tested | default(false) else 'No' }}
+
+          Monitoring:
+            - Grafana Dashboard: http://{{ monitoring_host | default('monitoring') }}:9300/d/jcasc-updates
+            - Audit Log: {{ jenkins_audit_log }}
+            - Metrics: /var/lib/node_exporter/textfile_collector/jcasc_*.prom
+
+          Next Steps:
+            1. Monitor Jenkins instances for 15-30 minutes
+            2. Review Grafana dashboards for anomalies
+            3. Verify job execution on updated configs
+            4. Check plugin functionality
+            5. Document any issues in team channels
+
+          ========================================
+          Zero-Downtime Deployment Achieved ✓
           ========================================

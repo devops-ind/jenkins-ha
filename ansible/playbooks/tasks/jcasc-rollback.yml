@@ -1,0 +1,424 @@
+---
+# JCasC Enhanced Rollback System
+# - Finds and restores latest backup
+# - Triggers JCasC reload
+# - Performs post-rollback validation
+# - Escalates on validation failure
+# - Updates config state tracking
+
+- name: "Rollback: Initialize"
+  debug:
+    msg: |
+      ========================================
+      JCasC Rollback Initiated
+      ========================================
+      Team: {{ current_team }}
+      Reason: {{ rollback_reason | default('Manual rollback requested') }}
+      Timestamp: {{ ansible_date_time.iso8601 }}
+      ========================================
+
+# Step 1: Pre-Rollback Checks
+- name: "Rollback Step 1: Pre-Rollback Checks"
+  block:
+    - name: "Rollback 1.1: Verify backup directory exists"
+      stat:
+        path: "{{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/backups"
+      register: backup_dir
+
+    - name: "Rollback 1.1: Fail if no backup directory"
+      fail:
+        msg: "Backup directory not found: {{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/backups"
+      when: not backup_dir.stat.exists
+
+    - name: "Rollback 1.2: Find latest backup"
+      shell: |
+        cd {{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/backups
+        LATEST_BACKUP=$(ls -t current.yaml.* 2>/dev/null | head -1)
+
+        if [ -z "$LATEST_BACKUP" ]; then
+          echo "ERROR: No backup files found"
+          exit 1
+        fi
+
+        echo "$LATEST_BACKUP"
+      args:
+        executable: /bin/bash
+      register: latest_backup_result
+      failed_when: latest_backup_result.rc != 0
+
+    - name: "Rollback 1.2: Set backup file path"
+      set_fact:
+        backup_file: "{{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/backups/{{ latest_backup_result.stdout }}"
+
+    - name: "Rollback 1.3: Verify backup file exists and is readable"
+      stat:
+        path: "{{ backup_file }}"
+      register: backup_file_stat
+      failed_when: not backup_file_stat.stat.exists or not backup_file_stat.stat.readable
+
+    - name: "Rollback 1.4: Get backup file metadata"
+      set_fact:
+        backup_size: "{{ backup_file_stat.stat.size }}"
+        backup_timestamp: "{{ backup_file_stat.stat.mtime }}"
+
+    - name: "Rollback 1.4: Display backup information"
+      debug:
+        msg: |
+          Found backup file: {{ backup_file }}
+          Size: {{ backup_size }} bytes
+          Modified: {{ backup_timestamp | int | to_datetime }}
+          Ready for rollback
+
+# Step 2: Backup Current Config (Safety)
+- name: "Rollback Step 2: Safety Backup"
+  block:
+    - name: "Rollback 2.1: Create safety backup of current (broken) config"
+      copy:
+        src: "{{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/configs/current.yaml"
+        dest: "{{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/backups/rollback-safety.yaml.{{ ansible_date_time.epoch }}"
+        remote_src: yes
+        mode: '0644'
+      ignore_errors: yes
+
+    - name: "Rollback 2.1: Display safety backup info"
+      debug:
+        msg: "Safety backup created: {{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/backups/rollback-safety.yaml.{{ ansible_date_time.epoch }}"
+
+# Step 3: Restore Config
+- name: "Rollback Step 3: Restore Configuration"
+  block:
+    - name: "Rollback 3.1: Restore config from backup"
+      copy:
+        src: "{{ backup_file }}"
+        dest: "{{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/configs/current.yaml"
+        remote_src: yes
+        mode: '0644'
+        backup: yes
+      register: restore_result
+
+    - name: "Rollback 3.2: Update environment-specific configs (if applicable)"
+      block:
+        - name: "Rollback 3.2: Determine current active environment"
+          set_fact:
+            team_config: "{{ jenkins_teams | selectattr('team_name', 'equalto', current_team) | first }}"
+
+        - name: "Rollback 3.2: Set active environment"
+          set_fact:
+            active_env: "{{ team_config.active_environment | default('blue') }}"
+
+        - name: "Rollback 3.2: Update active environment config"
+          copy:
+            src: "{{ backup_file }}"
+            dest: "{{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/configs/{{ active_env }}.yaml"
+            remote_src: yes
+            mode: '0644'
+
+        - name: "Rollback 3.2: Update symlink (if using symlink mode)"
+          file:
+            src: "{{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/configs/{{ active_env }}.yaml"
+            dest: "{{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/configs/current.yaml"
+            state: link
+            force: yes
+          when: jenkins_config_mode | default('symlink') == 'symlink'
+
+    - name: "Rollback 3.3: Display restore status"
+      debug:
+        msg: |
+          Config restored successfully
+          Source: {{ backup_file }}
+          Destination: {{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/configs/current.yaml
+
+# Step 4: Trigger JCasC Reload
+- name: "Rollback Step 4: Trigger JCasC Reload"
+  block:
+    - name: "Rollback 4.1: Get Jenkins port"
+      set_fact:
+        jenkins_port: "{{ team_config.ports.web if active_env == 'blue' else (team_config.ports.web + 100) }}"
+
+    - name: "Rollback 4.2: Trigger JCasC reload"
+      uri:
+        url: "http://{{ ansible_host }}:{{ jenkins_port }}/configuration-as-code/reload"
+        method: POST
+        user: "{{ jenkins_admin_user }}"
+        password: "{{ jenkins_admin_token }}"
+        force_basic_auth: yes
+        status_code: [200, 201, 204]
+        timeout: 60
+      register: reload_result
+      retries: 3
+      delay: 5
+
+    - name: "Rollback 4.3: Display reload status"
+      debug:
+        msg: "JCasC reload triggered successfully - Status: {{ reload_result.status }}"
+
+# Step 5: Post-Rollback Validation
+- name: "Rollback Step 5: Post-Rollback Validation"
+  block:
+    - name: "Rollback 5.1: HTTP health check"
+      uri:
+        url: "http://{{ ansible_host }}:{{ jenkins_port }}/api/json"
+        method: GET
+        status_code: 200
+      register: health_check
+      retries: 5
+      delay: 10
+      until: health_check.status == 200
+
+    - name: "Rollback 5.2: Verify Jenkins API response"
+      set_fact:
+        jenkins_api_data: "{{ health_check.json }}"
+      when: health_check.status == 200
+
+    - name: "Rollback 5.3: Check Jenkins mode is NORMAL"
+      assert:
+        that:
+          - jenkins_api_data.mode | default('UNKNOWN') == 'NORMAL'
+        fail_msg: "Jenkins mode is {{ jenkins_api_data.mode | default('UNKNOWN') }} - expected NORMAL"
+        success_msg: "Jenkins is in NORMAL mode"
+      when: health_check.status == 200
+
+    - name: "Rollback 5.4: Verify Jenkins not in shutdown mode"
+      assert:
+        that:
+          - jenkins_api_data.quietingDown | default(false) == false
+        fail_msg: "Jenkins is in shutdown/quieting down mode"
+        success_msg: "Jenkins is not shutting down"
+      when: health_check.status == 200
+
+    - name: "Rollback 5.5: Check for ERROR/SEVERE in recent logs"
+      shell: |
+        docker logs jenkins-{{ current_team }}-{{ active_env }} 2>&1 | tail -200 | grep -E "ERROR|SEVERE" | grep -v "EXPECTED_ERROR_PATTERNS" || exit 0
+      register: error_logs
+      failed_when: false
+      changed_when: false
+
+    - name: "Rollback 5.5: Display log check results"
+      debug:
+        msg: |
+          {% if error_logs.stdout_lines | length > 0 %}
+          WARNING: Found {{ error_logs.stdout_lines | length }} ERROR/SEVERE entries in recent logs
+          Review logs manually if issues persist
+          {% else %}
+          No ERROR/SEVERE entries found in recent logs
+          {% endif %}
+
+    - name: "Rollback 5.6: Run smoke tests"
+      include_tasks: smoke-tests.yml
+      vars:
+        jenkins_test_url: "http://{{ ansible_host }}:{{ jenkins_port }}"
+        jenkins_test_team: "{{ current_team }}"
+
+    - name: "Rollback 5.7: Verify container health"
+      shell: |
+        docker ps --filter "name=jenkins-{{ current_team }}-{{ active_env }}" --format "{{.Status}}"
+      register: container_status
+      failed_when: "'Up' not in container_status.stdout"
+
+    - name: "Rollback 5.8: Display validation summary"
+      debug:
+        msg: |
+          ========================================
+          Post-Rollback Validation Summary
+          ========================================
+          HTTP Health Check: ✓ PASSED
+          Jenkins Mode: ✓ NORMAL
+          Shutdown Mode: ✓ Not shutting down
+          Recent Errors: {{ 'WARNING - Review logs' if (error_logs.stdout_lines | length > 0) else '✓ None found' }}
+          Smoke Tests: ✓ PASSED
+          Container Health: ✓ Running
+          ========================================
+
+  rescue:
+    # Post-rollback validation failed - CRITICAL
+    - name: "Rollback 5.RESCUE: Post-rollback validation failed"
+      debug:
+        msg: |
+          ========================================
+          CRITICAL: POST-ROLLBACK VALIDATION FAILED
+          ========================================
+          Team: {{ current_team }}
+          Rollback was applied but validation checks failed
+
+          This indicates a critical issue requiring manual intervention
+
+          Jenkins may be in an inconsistent state
+          ========================================
+
+    - name: "Rollback 5.RESCUE: Send critical Teams alert"
+      uri:
+        url: "{{ teams_webhook_url }}"
+        method: POST
+        body_format: json
+        body:
+          "@type": "MessageCard"
+          themeColor: "FF0000"
+          summary: "CRITICAL: JCasC Rollback Validation Failed - {{ current_team }}"
+          sections:
+            - activityTitle: "CRITICAL: Post-Rollback Validation Failed"
+              activitySubtitle: "Team: {{ current_team }}"
+              facts:
+                - name: "Team"
+                  value: "{{ current_team }}"
+                - name: "Status"
+                  value: "ROLLBACK VALIDATION FAILED"
+                - name: "Reason"
+                  value: "{{ ansible_failed_result.msg | default('Validation checks failed') }}"
+                - name: "Action Required"
+                  value: "IMMEDIATE MANUAL INTERVENTION"
+                - name: "Timestamp"
+                  value: "{{ ansible_date_time.iso8601 }}"
+          potentialAction:
+            - "@type": "OpenUri"
+              name: "View Jenkins"
+              targets:
+                - os: "default"
+                  uri: "http://{{ ansible_host }}:{{ jenkins_port }}"
+        status_code: [200, 201, 202]
+        timeout: 10
+      ignore_errors: yes
+      when: teams_webhook_url is defined and teams_webhook_url | length > 0
+
+    - name: "Rollback 5.RESCUE: Log critical failure"
+      lineinfile:
+        path: "{{ jenkins_audit_log | default('/var/log/jenkins/jcasc-updates.log') }}"
+        create: yes
+        line: "[{{ ansible_date_time.iso8601 }}] [{{ current_team }}] [CRITICAL] ROLLBACK VALIDATION FAILED | Reason: {{ ansible_failed_result.msg | default('Unknown') }} | MANUAL INTERVENTION REQUIRED | Operator: {{ ansible_user_id }}"
+        mode: '0644'
+
+    - name: "Rollback 5.RESCUE: Escalate with detailed info"
+      fail:
+        msg: |
+          ========================================
+          CRITICAL FAILURE - MANUAL INTERVENTION REQUIRED
+          ========================================
+          Team: {{ current_team }}
+          Issue: Rollback was applied but post-rollback validation failed
+
+          This indicates a critical issue with:
+          - Jenkins instance health
+          - Container runtime
+          - Config file integrity
+          - Plugin compatibility
+
+          Immediate Actions:
+          1. SSH to VM: {{ ansible_host }}
+          2. Check container: docker logs jenkins-{{ current_team }}-{{ active_env }}
+          3. Verify config: cat {{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/configs/current.yaml
+          4. Check disk space: df -h
+          5. Review audit log: tail -50 {{ jenkins_audit_log | default('/var/log/jenkins/jcasc-updates.log') }}
+
+          Escalation Contacts:
+          - Platform Team
+          - Jenkins Admin
+          - On-call Engineer
+          ========================================
+
+# Step 6: Update Config State
+- name: "Rollback Step 6: Update Config State Tracking"
+  block:
+    - name: "Rollback 6.1: Read current config state"
+      slurp:
+        src: "{{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/config-state.json"
+      register: config_state_file
+      ignore_errors: yes
+
+    - name: "Rollback 6.1: Parse config state"
+      set_fact:
+        config_state: "{{ config_state_file.content | b64decode | from_json }}"
+      when: config_state_file is succeeded
+
+    - name: "Rollback 6.2: Update config state with rollback metadata"
+      copy:
+        content: |
+          {
+            "active_config": "{{ active_env | default('unknown') }}",
+            "previous_config": "{{ config_state.active_config | default('unknown') }}",
+            "last_update": "{{ ansible_date_time.iso8601 }}",
+            "last_update_by": "{{ ansible_user_id }}",
+            "last_validation_timestamp": "{{ ansible_date_time.iso8601 }}",
+            "last_validation_status": "rollback",
+            "rollback_applied": true,
+            "rollback_timestamp": "{{ ansible_date_time.iso8601 }}",
+            "rollback_reason": "{{ rollback_reason | default('Manual rollback') }}",
+            "rollback_source": "{{ backup_file }}",
+            "rollback_operator": "{{ ansible_user_id }}",
+            "post_rollback_validation": "passed",
+            "rollback_available": true,
+            "safety_backup": "{{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/backups/rollback-safety.yaml.{{ ansible_date_time.epoch }}"
+          }
+        dest: "{{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/config-state.json"
+        mode: '0644'
+
+# Step 7: Audit Logging
+- name: "Rollback Step 7: Audit Logging"
+  block:
+    - name: "Rollback 7.1: Log successful rollback"
+      lineinfile:
+        path: "{{ jenkins_audit_log | default('/var/log/jenkins/jcasc-updates.log') }}"
+        create: yes
+        line: "[{{ ansible_date_time.iso8601 }}] [{{ current_team }}] [ROLLBACK] Status: SUCCESS | Source: {{ backup_file }} | Validation: PASSED | Reason: {{ rollback_reason | default('Manual rollback') }} | Operator: {{ ansible_user_id }}"
+        mode: '0644'
+
+    - name: "Rollback 7.2: Send success notification to Teams"
+      uri:
+        url: "{{ teams_webhook_url }}"
+        method: POST
+        body_format: json
+        body:
+          "@type": "MessageCard"
+          themeColor: "FFA500"
+          summary: "JCasC Rollback Successful - {{ current_team }}"
+          sections:
+            - activityTitle: "Jenkins JCasC Rollback"
+              activitySubtitle: "Team: {{ current_team }}"
+              facts:
+                - name: "Team"
+                  value: "{{ current_team }}"
+                - name: "Status"
+                  value: "ROLLBACK SUCCESSFUL"
+                - name: "Reason"
+                  value: "{{ rollback_reason | default('Manual rollback') }}"
+                - name: "Backup Source"
+                  value: "{{ backup_file | basename }}"
+                - name: "Validation"
+                  value: "PASSED"
+                - name: "Operator"
+                  value: "{{ ansible_user_id }}"
+                - name: "Timestamp"
+                  value: "{{ ansible_date_time.iso8601 }}"
+          potentialAction:
+            - "@type": "OpenUri"
+              name: "View Jenkins"
+              targets:
+                - os: "default"
+                  uri: "http://{{ ansible_host }}:{{ jenkins_port }}"
+            - "@type": "OpenUri"
+              name: "View Audit Log"
+              targets:
+                - os: "default"
+                  uri: "http://{{ monitoring_host | default('monitoring') }}:9300/explore"
+        status_code: [200, 201, 202]
+        timeout: 10
+      ignore_errors: yes
+      when: teams_webhook_url is defined and teams_webhook_url | length > 0
+
+# Final Summary
+- name: "Rollback: Complete"
+  debug:
+    msg: |
+      ========================================
+      JCasC Rollback COMPLETED SUCCESSFULLY
+      ========================================
+      Team: {{ current_team }}
+      Backup Source: {{ backup_file }}
+      Config Restored: {{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/configs/current.yaml
+      JCasC Reload: SUCCESS
+      Post-Rollback Validation: PASSED
+
+      Jenkins is now running with the restored configuration
+      Monitor for next 15-30 minutes to ensure stability
+
+      Safety Backup: {{ jenkins_base_path | default('/var/jenkins') }}/{{ current_team }}/backups/rollback-safety.yaml.{{ ansible_date_time.epoch }}
+      Audit Log: {{ jenkins_audit_log | default('/var/log/jenkins/jcasc-updates.log') }}
+      ========================================

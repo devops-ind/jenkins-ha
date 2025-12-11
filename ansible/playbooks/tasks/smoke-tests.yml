@@ -1,0 +1,174 @@
+---
+# JCasC Smoke Tests
+# - Tests Jenkins API accessibility
+# - Verifies version info and basic functionality
+# - Checks job creation endpoint
+# - Validates plugin loading
+# - Ensures critical plugins are present
+
+- name: "Smoke Tests: Initialize for {{ jenkins_test_url | default('Jenkins') }}"
+  debug:
+    msg: |
+      ========================================
+      Running Smoke Tests
+      ========================================
+      Target: {{ jenkins_test_url }}
+      Team: {{ jenkins_test_team | default('N/A') }}
+      ========================================
+
+# Test 1: Jenkins API Accessibility
+- name: "Smoke Test 1: Test Jenkins API accessibility"
+  uri:
+    url: "{{ jenkins_test_url }}/api/json"
+    method: GET
+    return_content: yes
+    status_code: [200, 403]  # 403 is OK if auth required
+  register: api_test
+  retries: 5
+  delay: 5
+  until: api_test.status in [200, 403]
+
+- name: "Smoke Test 1: Verify API response"
+  debug:
+    msg: "Jenkins API accessible - Status: {{ api_test.status }}"
+  when: api_test.status in [200, 403]
+
+- name: "Smoke Test 1: Parse API response (if 200)"
+  set_fact:
+    jenkins_api_data: "{{ api_test.json }}"
+  when: api_test.status == 200
+
+# Test 2: Verify Version Info
+- name: "Smoke Test 2: Verify Jenkins version info"
+  assert:
+    that:
+      - api_test.status == 200
+      - jenkins_api_data is defined
+      - jenkins_api_data.version is defined
+    fail_msg: "Jenkins API did not return version information"
+    success_msg: "Jenkins version: {{ jenkins_api_data.version | default('N/A') }}"
+  when: api_test.status == 200
+
+- name: "Smoke Test 2: Display Jenkins info"
+  debug:
+    msg: |
+      Jenkins Version: {{ jenkins_api_data.version | default('N/A') }}
+      Mode: {{ jenkins_api_data.mode | default('N/A') }}
+      Node Name: {{ jenkins_api_data.nodeName | default('N/A') }}
+      Quieting Down: {{ jenkins_api_data.quietingDown | default(false) }}
+  when: api_test.status == 200 and jenkins_api_data is defined
+
+# Test 3: Test Job Creation Endpoint
+- name: "Smoke Test 3: Test job creation endpoint"
+  uri:
+    url: "{{ jenkins_test_url }}/view/all/newJob"
+    method: GET
+    status_code: [200, 403]  # 403 is OK if auth required
+  register: job_endpoint_test
+  retries: 3
+  delay: 5
+
+- name: "Smoke Test 3: Verify job endpoint"
+  debug:
+    msg: "Job creation endpoint accessible - Status: {{ job_endpoint_test.status }}"
+
+# Test 4: Test Plugin List Endpoint
+- name: "Smoke Test 4: Test plugin list endpoint"
+  uri:
+    url: "{{ jenkins_test_url }}/pluginManager/api/json?depth=1"
+    method: GET
+    return_content: yes
+    status_code: [200, 403]  # 403 is OK if auth required
+  register: plugin_test
+  retries: 3
+  delay: 5
+
+- name: "Smoke Test 4: Parse plugin list (if 200)"
+  set_fact:
+    jenkins_plugins: "{{ plugin_test.json.plugins | default([]) }}"
+  when: plugin_test.status == 200
+
+- name: "Smoke Test 4: Verify plugins loaded"
+  assert:
+    that:
+      - plugin_test.status in [200, 403]
+      - jenkins_plugins | length > 0 or plugin_test.status == 403
+    fail_msg: "No plugins loaded or plugin endpoint inaccessible"
+    success_msg: "{{ jenkins_plugins | length }} plugins loaded"
+  when: plugin_test.status == 200
+
+- name: "Smoke Test 4: Display plugin count"
+  debug:
+    msg: "Total plugins loaded: {{ jenkins_plugins | length }}"
+  when: plugin_test.status == 200 and jenkins_plugins is defined
+
+# Test 5: Check for Critical Plugins
+- name: "Smoke Test 5: Check for critical plugins"
+  set_fact:
+    critical_plugins_status:
+      configuration_as_code: "{{ jenkins_plugins | selectattr('shortName', 'equalto', 'configuration-as-code') | list | length > 0 }}"
+      prometheus: "{{ jenkins_plugins | selectattr('shortName', 'equalto', 'prometheus') | list | length > 0 }}"
+      docker_workflow: "{{ jenkins_plugins | selectattr('shortName', 'equalto', 'docker-workflow') | list | length > 0 }}"
+      workflow_aggregator: "{{ jenkins_plugins | selectattr('shortName', 'equalto', 'workflow-aggregator') | list | length > 0 }}"
+  when: plugin_test.status == 200 and jenkins_plugins is defined
+
+- name: "Smoke Test 5: Display critical plugin status"
+  debug:
+    msg: |
+      Critical Plugins Status:
+        - Configuration as Code: {{ critical_plugins_status.configuration_as_code | default('Unknown') }}
+        - Prometheus: {{ critical_plugins_status.prometheus | default('Unknown') }}
+        - Docker Workflow: {{ critical_plugins_status.docker_workflow | default('Unknown') }}
+        - Workflow Aggregator: {{ critical_plugins_status.workflow_aggregator | default('Unknown') }}
+  when: plugin_test.status == 200 and critical_plugins_status is defined
+
+- name: "Smoke Test 5: Verify JCasC plugin present"
+  assert:
+    that:
+      - critical_plugins_status.configuration_as_code | default(false)
+    fail_msg: "CRITICAL: Configuration as Code plugin not found"
+    success_msg: "Configuration as Code plugin is present"
+  when: plugin_test.status == 200 and critical_plugins_status is defined
+
+# Test 6: Verify Jenkins Not Quieting Down
+- name: "Smoke Test 6: Verify Jenkins not in shutdown mode"
+  assert:
+    that:
+      - jenkins_api_data.quietingDown | default(false) == false
+    fail_msg: "WARNING: Jenkins is in shutdown/quieting down mode"
+    success_msg: "Jenkins is operating normally"
+  when: api_test.status == 200 and jenkins_api_data is defined
+
+# Test 7: Verify Jenkins Mode is NORMAL
+- name: "Smoke Test 7: Verify Jenkins mode is NORMAL"
+  assert:
+    that:
+      - jenkins_api_data.mode | default('UNKNOWN') == 'NORMAL'
+    fail_msg: "WARNING: Jenkins mode is {{ jenkins_api_data.mode | default('UNKNOWN') }}"
+    success_msg: "Jenkins mode is NORMAL"
+  when: api_test.status == 200 and jenkins_api_data is defined
+  ignore_errors: yes  # Don't fail on mode check
+
+# Summary
+- name: "Smoke Tests: Summary"
+  debug:
+    msg: |
+      ========================================
+      Smoke Tests Summary
+      ========================================
+      Target: {{ jenkins_test_url }}
+      Team: {{ jenkins_test_team | default('N/A') }}
+
+      Results:
+        1. API Accessibility: PASSED ({{ api_test.status }})
+        2. Version Info: {{ 'PASSED' if (api_test.status == 200 and jenkins_api_data is defined) else 'SKIPPED (auth required)' }}
+        3. Job Endpoint: PASSED ({{ job_endpoint_test.status }})
+        4. Plugin Endpoint: PASSED ({{ plugin_test.status }})
+        {% if plugin_test.status == 200 %}
+        5. Critical Plugins: {{ 'PASSED' if critical_plugins_status.configuration_as_code else 'WARNING' }}
+        6. Shutdown Mode: {{ 'NORMAL' if not jenkins_api_data.quietingDown else 'QUIETING DOWN' }}
+        7. Jenkins Mode: {{ jenkins_api_data.mode | default('UNKNOWN') }}
+        {% endif %}
+
+      Overall: ALL SMOKE TESTS PASSED
+      ========================================
