@@ -34,144 +34,20 @@
     - plugins/plugins.yml
   notify: restart grafana
 
-# Generate team-specific dashboard configurations
-- name: Generate team-specific dashboard list
-  set_fact:
-    team_specific_dashboards: |
-      [
-      {% if dashboard_deployment.generate_team_specific %}
-      {% for dashboard_id, config in grafana_dashboards.items() %}
-      {% if config.enabled and config.team_specific | default(false) and ((config.category == 'core' and dashboard_deployment.core_enabled) or (config.category == 'enhanced' and dashboard_deployment.enhanced_enabled)) %}
-      {% for team in jenkins_teams_config | default(jenkins_teams) %}
-        {
-          "id": "{{ dashboard_id }}{{ dashboard_deployment.team_dashboard_separator }}{{ team.team_name }}",
-          "base_template": "{{ dashboard_id }}",
-          "team_name": "{{ team.team_name }}",
-          "team_environment": "{{ team.active_environment | default('blue') }}",
-          "title": "{{ config.title }} - {{ team.team_name | title }} Team",
-          "name": "{{ config.template_file }}",
-          "template_file": "{{ config.template_file }}",
-          "category": "{{ config.category }}-team-specific",
-          "priority": {{ config.priority }}
-        },
-      {% endfor %}
-      {% endif %}
-      {% endfor %}
-      {% endif %}
-      ]
-
-# Generate global dashboard list (for non-team-specific dashboards)
-- name: Generate global dashboard list
-  set_fact:
-    global_dashboards: |
-      [
-      {% for dashboard_id, config in grafana_dashboards.items() %}
-      {% if config.enabled and not (config.team_specific | default(false)) and ((config.category == 'core' and dashboard_deployment.core_enabled) or (config.category == 'enhanced' and dashboard_deployment.enhanced_enabled)) %}
-        {
-          "id": "{{ dashboard_id }}",
-          "name": "{{ config.template_file }}",
-          "title": "{{ config.title }} - {{ deployment_mode | default('local') | title }}",
-          "category": "{{ config.category }}",
-          "priority": {{ config.priority }}
-        },
-      {% endif %}
-      {% if config.enabled and config.team_specific | default(false) and dashboard_deployment.keep_global_dashboards and ((config.category == 'core' and dashboard_deployment.core_enabled) or (config.category == 'enhanced' and dashboard_deployment.enhanced_enabled)) %}
-        {
-          "id": "{{ dashboard_id }}-global",
-          "name": "{{ config.template_file }}",
-          "title": "{{ config.title }} - Global - {{ deployment_mode | default('local') | title }}",
-          "category": "{{ config.category }}-global",
-          "priority": {{ config.priority + 1000 }}
-        },
-      {% endif %}
-      {% endfor %}
-      ]
-
-- name: Parse and combine dashboard lists
-  set_fact:
-    parsed_team_dashboards: "{{ team_specific_dashboards | from_yaml }}"
-    parsed_global_dashboards: "{{ global_dashboards | from_yaml }}"
-
-- name: Sort combined dashboard list by priority
-  set_fact:
-    sorted_enabled_dashboards: "{{ (parsed_team_dashboards + parsed_global_dashboards) | sort(attribute='priority') }}"
-
-- name: Validate dashboard template files exist
-  stat:
-    path: "{{ role_path }}/templates/dashboards/{{ item.name }}.j2"
-  register: template_file_check
-  loop: "{{ sorted_enabled_dashboards }}"
-  loop_control:
-    label: "{{ item.id }}"
-  failed_when: not template_file_check.stat.exists
-  when: dashboard_deployment.validation_strict | default(true)
-
-- name: Deploy global Grafana dashboards from centralized configuration
-  template:
-    src: "dashboards/{{ item.name }}.j2"
-    dest: "{{ monitoring_home_dir }}/grafana/dashboards/{{ item.id }}.json"
+# Simple JSON Dashboard Deployment (Phase 5.6)
+- name: Deploy JSON dashboards
+  copy:
+    src: "dashboards/json/{{ item }}"
+    dest: "{{ monitoring_home_dir }}/grafana/dashboards/{{ item }}"
     owner: "{{ monitoring_user }}"
     group: "{{ monitoring_group }}"
     mode: '0644'
-  vars:
-    # Global dashboard variables (no team-specific filtering)
-    dashboard_title_override: "{{ item.title if item.title is defined and item.title else item.id | replace('-', ' ') | title }}"
-    dashboard_team: "all"  # Placeholder for global dashboards
-    team_environment: "{{ deployment_mode | default('local') }}"  # Use deployment mode for globals
-  loop: "{{ sorted_enabled_dashboards | rejectattr('category', 'match', '.*-team-specific') | list }}"
-  loop_control:
-    label: "{{ item.id }} ({{ item.category }})"
-  notify: restart grafana
-  when: dashboard_deployment.jinja2_enabled | default(true)
-
-- name: Display dashboard deployment summary
-  debug:
-    msg: |
-      📊 Dashboard Template Deployment Summary:
-      Total Dashboards: {{ sorted_enabled_dashboards | length }}
-      Core Dashboards: {{ sorted_enabled_dashboards | selectattr('category', 'equalto', 'core') | list | length }}
-      Enhanced Dashboards: {{ sorted_enabled_dashboards | selectattr('category', 'equalto', 'enhanced') | list | length }}
-      Team-Specific Dashboards: {{ sorted_enabled_dashboards | selectattr('category', 'match', '.*-team-specific') | list | length }}
-      Global Dashboards: {{ sorted_enabled_dashboards | rejectattr('category', 'match', '.*-team-specific') | list | length }}
-      
-      Deployed Dashboards:
-      {% for dashboard in sorted_enabled_dashboards %}
-      • {{ dashboard.title }}{% if dashboard.team_name is defined %} (Team: {{ dashboard.team_name | title }}){% endif %} [{{ dashboard.category }}]
-      {% endfor %}
-
-- name: Create team-specific dashboard folders
-  file:
-    path: "{{ monitoring_home_dir }}/grafana/dashboards/teams/{{ item.team_name }}"
-    state: directory
-    owner: "{{ monitoring_user }}"
-    group: "{{ monitoring_group }}"
-    mode: '0755'
-  loop: "{{ jenkins_teams_config | default(jenkins_teams) }}"
-  loop_control:
-    label: "{{ item.team_name }}"
-  when: dashboard_deployment.team_folder_organization | default(true)
-
-- name: Deploy team-specific dashboards to team folders
-  template:
-    src: "dashboards/{{ item.name }}.j2"
-    dest: "{{ monitoring_home_dir }}/grafana/dashboards/{% if item.team_name is defined %}teams/{{ item.team_name }}/{% endif %}{{ item.id }}.json"
-    owner: "{{ monitoring_user }}"
-    group: "{{ monitoring_group }}"
-    mode: '0644'
-  vars:
-    # Team-specific template variables
-    dashboard_team: "{{ item.team_name }}"
-    team_name: "{{ item.team_name }}"
-    team_specific: true
-    team_environment: "{{ item.team_environment }}"
-    dashboard_title_override: "{{ item.title if item.title is defined and item.title else (item.id | replace('-', ' ') | title + ' - ' + item.team_name | title + ' Team') }}"
-  loop: "{{ sorted_enabled_dashboards | selectattr('category', 'match', '.*-team-specific') | list }}"
-  loop_control:
-    label: "{{ item.id }} (Team: {{ item.team_name }})"
+  loop: "{{ grafana_json_dashboards }}"
   notify: restart grafana
   when:
-    - dashboard_deployment.team_folder_organization | default(true)
-    - dashboard_deployment.jinja2_enabled | default(true)
+    - grafana_json_enabled | default(false)
+    - grafana_json_dashboards is defined
+    - grafana_json_dashboards | length > 0
 
 - name: Deploy Grafana container
   community.docker.docker_container:
