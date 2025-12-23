@@ -239,7 +239,7 @@ build-local-images: ## Build Docker images for local development
 ##@ Testing and Validation
 
 .PHONY: test
-test: test-syntax test-inventory test-lint test-security ## Run all tests
+test: test-syntax test-inventory test-lint test-security test-team-filtering ## Run all tests
 
 .PHONY: test-full
 test-full: test pre-commit-run ## Run comprehensive test suite including pre-commit
@@ -279,6 +279,11 @@ test-connectivity: ## Test connectivity to local environment
 test-templates: ## Validate Jinja2 templates
 	@echo "$(BLUE)🔍 Validating Jinja2 templates...$(RESET)"
 	@find $(ANSIBLE_DIR) -name "*.j2" -exec python3 -c "import jinja2; jinja2.Template(open('{}').read())" \; 2>/dev/null && echo "$(GREEN)✅ All templates are valid$(RESET)" || echo "$(RED)❌ Template validation failed$(RESET)"
+
+.PHONY: test-team-filtering
+test-team-filtering: ## Test jenkins-master-v2 team filtering functionality
+	@echo "$(BLUE)🔍 Testing team filtering functionality...$(RESET)"
+	@./tests/test-team-filtering.sh
 
 ##@ Pre-commit Hooks
 
