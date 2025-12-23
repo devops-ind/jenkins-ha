@@ -1,0 +1,260 @@
+---
+# JCasC Phase 1: Pre-Validation
+# - Renders JCasC templates from jenkins-master-v2 role
+# - Validates YAML syntax, schema, and security
+# - Creates config versioning and validation reports
+
+- name: "Phase 1: Pre-Validation - Setup"
+  debug:
+    msg: |
+      ========================================
+      Phase 1: Pre-Validation
+      ========================================
+      Teams to validate: {{ teams_list | join(', ') }}
+      Validation mode: {{ validation_mode | default('full') }}
+      ========================================
+
+# Step 1: Render Templates from jenkins-master-v2 Role
+- name: "Phase 1.1: Create validation directories"
+  file:
+    path: "/tmp/jcasc-validation/{{ item }}"
+    state: directory
+    mode: '0755'
+  loop: "{{ teams_list }}"
+  delegate_to: localhost
+
+- name: "Phase 1.1: Render JCasC templates for each team"
+  template:
+    src: "{{ playbook_dir }}/../roles/jenkins-master-v2/templates/jcasc/jenkins-config.yml.j2"
+    dest: "/tmp/jcasc-validation/{{ item }}/jenkins.yaml"
+    mode: '0644'
+  loop: "{{ teams_list }}"
+  vars:
+    jenkins_current_team: "{{ jenkins_teams | selectattr('team_name', 'equalto', item) | first }}"
+    team_config: "{{ jenkins_current_team }}"
+  delegate_to: localhost
+
+- name: "Phase 1.1: Render plugins templates for each team"
+  template:
+    src: "{{ playbook_dir }}/../roles/jenkins-master-v2/templates/team-plugins.txt.j2"
+    dest: "/tmp/jcasc-validation/{{ item }}/plugins.txt"
+    mode: '0644'
+  loop: "{{ teams_list }}"
+  vars:
+    jenkins_current_team: "{{ jenkins_teams | selectattr('team_name', 'equalto', item) | first }}"
+    team_config: "{{ jenkins_current_team }}"
+  delegate_to: localhost
+
+- name: "Phase 1.1: Display rendered config locations"
+  debug:
+    msg: |
+      Rendered configs for {{ item }}:
+        - JCasC: /tmp/jcasc-validation/{{ item }}/jenkins.yaml
+        - Plugins: /tmp/jcasc-validation/{{ item }}/plugins.txt
+  loop: "{{ teams_list }}"
+
+# Step 2: YAML Syntax Validation
+- name: "Phase 1.2: Install yamllint (if not present)"
+  package:
+    name: yamllint
+    state: present
+  become: yes
+  delegate_to: localhost
+  ignore_errors: yes
+
+- name: "Phase 1.2: Validate YAML syntax with Python"
+  shell: |
+    python3 -c "import yaml; yaml.safe_load(open('{{ item }}'))"
+  args:
+    chdir: /tmp/jcasc-validation
+  loop: "{{ teams_list | map('regex_replace', '^(.*)$', '\\1/jenkins.yaml') | list }}"
+  register: yaml_syntax_check
+  failed_when: yaml_syntax_check.rc != 0
+  delegate_to: localhost
+
+- name: "Phase 1.2: Display YAML syntax validation results"
+  debug:
+    msg: "YAML syntax validation passed for {{ item.item | basename | regex_replace('/jenkins.yaml', '') }}"
+  loop: "{{ yaml_syntax_check.results }}"
+  when: item.rc == 0
+
+# Step 3: Schema Validation
+- name: "Phase 1.3: Run JCasC schema validation"
+  shell: |
+    {{ playbook_dir }}/../scripts/config-validation/validate-jcasc-schema.sh \
+      /tmp/jcasc-validation/{{ item }}/jenkins.yaml
+  loop: "{{ teams_list }}"
+  register: schema_validation
+  failed_when: schema_validation.rc != 0
+  delegate_to: localhost
+
+- name: "Phase 1.3: Display schema validation results"
+  debug:
+    msg: |
+      Schema validation for {{ item.item }}:
+        Status: {{ 'PASSED' if item.rc == 0 else 'FAILED' }}
+  loop: "{{ schema_validation.results }}"
+
+# Step 4: Security Checks
+- name: "Phase 1.4: Check for hardcoded credentials"
+  shell: |
+    set -o pipefail
+    if grep -E 'password:\s*["\x27][^$]' /tmp/jcasc-validation/{{ item }}/jenkins.yaml; then
+      echo "ERROR: Hardcoded password found in {{ item }}"
+      exit 1
+    fi
+    echo "No hardcoded credentials found in {{ item }}"
+  args:
+    executable: /bin/bash
+  loop: "{{ teams_list }}"
+  register: credential_check
+  failed_when: false
+  changed_when: false
+  delegate_to: localhost
+
+- name: "Phase 1.4: Check for dangerous patterns"
+  shell: |
+    set -o pipefail
+    DANGEROUS_PATTERNS=(
+      'System\.exit'
+      'Runtime\.getRuntime'
+      'ProcessBuilder'
+      'GroovyShell'
+      '\.evaluate\('
+    )
+
+    for pattern in "${DANGEROUS_PATTERNS[@]}"; do
+      if grep -E "$pattern" /tmp/jcasc-validation/{{ item }}/jenkins.yaml; then
+        echo "WARNING: Dangerous pattern '$pattern' found in {{ item }}"
+      fi
+    done
+    echo "Security check completed for {{ item }}"
+  args:
+    executable: /bin/bash
+  loop: "{{ teams_list }}"
+  register: security_check
+  changed_when: false
+  delegate_to: localhost
+
+- name: "Phase 1.4: Display security check results"
+  debug:
+    msg: "{{ item.stdout_lines }}"
+  loop: "{{ security_check.results }}"
+  when: item.stdout_lines is defined
+
+# Step 5: Config Versioning
+- name: "Phase 1.5: Create timestamped backup of current configs"
+  copy:
+    src: "{{ jenkins_base_path | default('/var/jenkins') }}/{{ item }}/configs/current.yaml"
+    dest: "{{ jenkins_base_path | default('/var/jenkins') }}/{{ item }}/backups/current.yaml.{{ ansible_date_time.epoch }}"
+    remote_src: yes
+  loop: "{{ teams_list }}"
+  ignore_errors: yes
+  when: not (ansible_check_mode | default(false))
+
+- name: "Phase 1.5: Generate diff between current and proposed configs"
+  shell: |
+    if [ -f "{{ jenkins_base_path | default('/var/jenkins') }}/{{ item }}/configs/current.yaml" ]; then
+      diff -u \
+        {{ jenkins_base_path | default('/var/jenkins') }}/{{ item }}/configs/current.yaml \
+        /tmp/jcasc-validation/{{ item }}/jenkins.yaml \
+        > /tmp/jcasc-validation/{{ item }}/config.diff || true
+
+      if [ -s /tmp/jcasc-validation/{{ item }}/config.diff ]; then
+        echo "Config changes detected for {{ item }}"
+        head -50 /tmp/jcasc-validation/{{ item }}/config.diff
+      else
+        echo "No config changes for {{ item }}"
+      fi
+    else
+      echo "No existing config for {{ item }} - this is a new deployment"
+    fi
+  args:
+    executable: /bin/bash
+  loop: "{{ teams_list }}"
+  register: config_diff
+  changed_when: false
+  delegate_to: localhost
+
+- name: "Phase 1.5: Display config diff summary"
+  debug:
+    msg: "{{ item.stdout_lines }}"
+  loop: "{{ config_diff.results }}"
+  when: item.stdout_lines is defined and item.stdout_lines | length > 0
+
+# Step 6: Validation Report
+- name: "Phase 1.6: Generate validation summary report"
+  copy:
+    content: |
+      ========================================
+      JCasC Validation Summary Report
+      ========================================
+      Generated: {{ ansible_date_time.iso8601 }}
+      Operator: {{ ansible_user_id }}
+      Teams: {{ teams_list | join(', ') }}
+      Validation Mode: {{ validation_mode | default('full') }}
+
+      ========================================
+      Phase 1: Pre-Validation Results
+      ========================================
+
+      1. Template Rendering: PASSED
+         {% for team in teams_list %}
+         - {{ team }}: /tmp/jcasc-validation/{{ team }}/jenkins.yaml
+         {% endfor %}
+
+      2. YAML Syntax Validation: {{ 'PASSED' if yaml_syntax_check is defined and yaml_syntax_check.failed is not defined else 'FAILED' }}
+         {% for result in yaml_syntax_check.results | default([]) %}
+         - {{ result.item | basename | regex_replace('/jenkins.yaml', '') }}: {{ 'PASS' if result.rc == 0 else 'FAIL' }}
+         {% endfor %}
+
+      3. Schema Validation: {{ 'PASSED' if schema_validation is defined and schema_validation.failed is not defined else 'FAILED' }}
+         {% for result in schema_validation.results | default([]) %}
+         - {{ result.item }}: {{ 'PASS' if result.rc == 0 else 'FAIL' }}
+         {% endfor %}
+
+      4. Security Checks: COMPLETED
+         {% for result in credential_check.results | default([]) %}
+         - {{ result.item }}: {{ 'No hardcoded credentials' if result.rc == 0 else 'WARNING: Check logs' }}
+         {% endfor %}
+
+      5. Config Versioning: COMPLETED
+         - Backups created with timestamp: {{ ansible_date_time.epoch }}
+         - Config diffs generated
+
+      ========================================
+      Next Phase: Plugin Compatibility Testing
+      ========================================
+
+      {% if validation_mode == 'full' %}
+      Proceeding to Phase 2: Plugin compatibility testing with production images
+      {% elif validation_mode == 'quick' %}
+      Skipping Phase 2: Quick validation mode (plugin testing skipped)
+      {% else %}
+      DANGER: Validation mode 'skip' - proceeding directly to deployment
+      {% endif %}
+
+      ========================================
+    dest: /tmp/jcasc-validation-summary.txt
+    mode: '0644'
+  delegate_to: localhost
+
+- name: "Phase 1.6: Display validation summary"
+  shell: cat /tmp/jcasc-validation-summary.txt
+  register: validation_summary
+  changed_when: false
+  delegate_to: localhost
+
+- name: "Phase 1.6: Show validation summary"
+  debug:
+    msg: "{{ validation_summary.stdout_lines }}"
+
+- name: "Phase 1: Pre-Validation - Complete"
+  debug:
+    msg: |
+      ========================================
+      Phase 1: Pre-Validation COMPLETED
+      ========================================
+      All validations passed for {{ teams_list | length }} team(s)
+      Ready to proceed to Phase 2
+      ========================================

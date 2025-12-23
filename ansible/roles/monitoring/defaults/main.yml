@@ -91,28 +91,6 @@ dashboard_grafonnet_enabled: "{{ grafonnet_enabled | default(true) }}"  # Enable
 # Centralized dashboard configuration registry
 grafana_dashboards:
   # Core dashboards - infrastructure-wide
-  infrastructure-health:
-    category: core
-    enabled: true
-    title: "Infrastructure Health"
-    description: "VM and container infrastructure metrics"
-    refresh_interval: "1m"
-    time_range: "1h"
-    priority: 4
-    template_file: "infrastructure-health.json"
-    team_specific: false  # Global dashboard - monitors all infrastructure
-  
-  security-metrics:
-    category: core
-    enabled: true
-    title: "Security Metrics"
-    description: "Security events and compliance monitoring"
-    refresh_interval: "1m"
-    time_range: "4h"
-    priority: 5
-    template_file: "security-metrics.json"
-    team_specific: false  # Global dashboard - monitors all security events
-  
   node-exporter-full:
     category: core
     enabled: true
@@ -125,38 +103,6 @@ grafana_dashboards:
     team_specific: false  # Global infrastructure dashboard
   
   # Team-specific Jenkins dashboards
-  jenkins-overview:
-    category: core
-    enabled: true
-    title: "Jenkins Overview"
-    description: "General Jenkins metrics and health overview"
-    refresh_interval: "30s"
-    time_range: "5m"
-    priority: 1
-    template_file: "jenkins-overview.json"
-    team_specific: true  # Generate per-team versions
-  
-  jenkins-builds:
-    category: core
-    enabled: true
-    title: "Jenkins Builds"
-    description: "Build performance and trends"
-    refresh_interval: "1m"
-    time_range: "1h"
-    priority: 2
-    template_file: "jenkins-builds.json"
-    team_specific: true  # Generate per-team versions
-  
-  jenkins-dynamic-agents:
-    category: core
-    enabled: true
-    title: "Jenkins Dynamic Agents"
-    description: "Dynamic agent monitoring and resource usage"
-    refresh_interval: "30s"
-    time_range: "1h"
-    priority: 3
-    template_file: "jenkins-dynamic-agents.json"
-    team_specific: true  # Generate per-team versions
   
   # Enhanced team-specific dashboards
   jenkins-performance-health:
@@ -464,3 +410,37 @@ grafonnet_dashboards:
       - jenkins
       - ci-cd
       - pipelines
+  - name: "infrastructure-health"
+    enabled: true
+    description: "System health monitoring dashboard"
+    tags:
+      - infrastructure
+      - system
+      - health
+  - name: "security-metrics"
+    enabled: true
+    description: "Security events and compliance monitoring"
+    tags:
+      - security
+      - compliance
+  - name: "jenkins-overview"
+    enabled: true
+    description: "Comprehensive Jenkins monitoring dashboard"
+    tags:
+      - jenkins
+      - ci-cd
+      - pipelines
+  - name: "jenkins-builds"
+    enabled: true
+    description: "Build performance and trends"
+    tags:
+      - jenkins
+      - builds
+  - name: "jenkins-dynamic-agents"
+    enabled: true
+    description: "Dynamic agent monitoring and resource usage"
+    tags:
+      - jenkins
+      - agents
+      - dynamic
+      - containers

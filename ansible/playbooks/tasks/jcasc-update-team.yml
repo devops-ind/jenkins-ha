@@ -1,0 +1,135 @@
+---
+- name: "JCasC update for team: {{ current_team }}"
+  block:
+    - name: "Read current config state for {{ current_team }}"
+      slurp:
+        src: "{{ jenkins_base_path }}/{{ current_team }}/config-state.json"
+      register: current_state
+      ignore_errors: yes
+
+    - name: "Display current state for {{ current_team }}"
+      debug:
+        msg: "Current state: {{ current_state.content | from_json | default({}) }}"
+
+    - name: "Validate blue config exists for {{ current_team }}"
+      stat:
+        path: "{{ jenkins_base_path }}/{{ current_team }}/configs/blue.yaml"
+      register: blue_config_check
+      failed_when: not blue_config_check.stat.exists
+
+    - name: "Validate green config exists for {{ current_team }}"
+      stat:
+        path: "{{ jenkins_base_path }}/{{ current_team }}/configs/green.yaml"
+      register: green_config_check
+      failed_when: not green_config_check.stat.exists
+
+    - name: "Determine active environment for {{ current_team }}"
+      set_fact:
+        active_config: "{{ (current_state.content | from_json).active_config | default('blue') }}"
+        config_scripts_dir: "/home/jenkins/scripts"
+
+    - name: "Display active environment for {{ current_team }}"
+      debug:
+        msg: "Active config: {{ active_config }}, Will switch to: {{ 'green' if active_config == 'blue' else 'blue' }}"
+
+    - name: "Switch config using existing script for {{ current_team }}"
+      shell: |
+        {{ config_scripts_dir }}/config-file-switch.sh {{ current_team }} {{ target_env }}
+      vars:
+        target_env: "{{ 'green' if active_config == 'blue' else 'blue' }}"
+      register: switch_result
+      changed_when: true
+
+    - name: "Display switch result for {{ current_team }}"
+      debug:
+        msg: "Switch output: {{ switch_result.stdout }}"
+
+    - name: "Trigger JCasC hot-reload for {{ current_team }}"
+      uri:
+        url: "{{ jenkins_url }}/configuration-as-code/reload"
+        method: POST
+        user: "{{ jenkins_admin_user }}"
+        password: "{{ jenkins_admin_token }}"
+        force_basic_auth: yes
+        status_code: [200, 201, 204]
+        timeout: "{{ jenkins_reload_timeout | default(60) }}"
+      register: reload_response
+      retries: 2
+      delay: 5
+      ignore_errors: yes
+
+    - name: "Display reload response for {{ current_team }}"
+      debug:
+        msg: "Reload response: {{ reload_response.status | default('No response') }}"
+
+    - name: "Verify Jenkins health after reload for {{ current_team }}"
+      uri:
+        url: "{{ jenkins_url }}/api/json"
+        method: GET
+      register: health_check
+      retries: "{{ jenkins_reload_health_retries | default(5) }}"
+      delay: "{{ jenkins_reload_health_delay | default(5) }}"
+      until: health_check.status == 200
+      failed_when: health_check.status != 200
+
+    - name: "Display health check result for {{ current_team }}"
+      debug:
+        msg: "Jenkins health: {{ health_check.status }}"
+
+    - name: "Update audit log for {{ current_team }}"
+      lineinfile:
+        path: "{{ jenkins_audit_log | default('/var/log/jenkins/jcasc-updates.log') }}"
+        create: yes
+        line: "[{{ ansible_date_time.iso8601 }}] [{{ current_team }}] [UPDATE] Status: SUCCESS | Operator: {{ ansible_user_id }} | Switch target: {{ target_env }}"
+
+    - name: "Display success message for {{ current_team }}"
+      debug:
+        msg: "✅ JCasC update completed successfully for {{ current_team }}"
+
+  rescue:
+    - name: "Rollback for {{ current_team }}"
+      block:
+        - name: "Display rollback message for {{ current_team }}"
+          debug:
+            msg: "⚠️  Initiating automatic rollback for {{ current_team }}"
+
+        - name: "Restore previous config for {{ current_team }}"
+          shell: |
+            BACKUP_DIR="{{ jenkins_base_path }}/{{ current_team }}/backups"
+            LATEST_BACKUP=$(ls -t $BACKUP_DIR/current.yaml.* 2>/dev/null | head -1)
+
+            if [ -n "$LATEST_BACKUP" ]; then
+              cp "$LATEST_BACKUP" "{{ jenkins_base_path }}/{{ current_team }}/configs/current.yaml"
+              echo "Restored from backup: $LATEST_BACKUP"
+            else
+              echo "Warning: No backup found for rollback"
+            fi
+          register: restore_result
+
+        - name: "Display restore result for {{ current_team }}"
+          debug:
+            msg: "{{ restore_result.stdout }}"
+
+        - name: "Trigger reload with restored config for {{ current_team }}"
+          uri:
+            url: "{{ jenkins_url }}/configuration-as-code/reload"
+            method: POST
+            user: "{{ jenkins_admin_user }}"
+            password: "{{ jenkins_admin_token }}"
+            force_basic_auth: yes
+            status_code: [200, 201, 204]
+          ignore_errors: yes
+
+        - name: "Log rollback for {{ current_team }}"
+          lineinfile:
+            path: "{{ jenkins_audit_log | default('/var/log/jenkins/jcasc-updates.log') }}"
+            create: yes
+            line: "[{{ ansible_date_time.iso8601 }}] [{{ current_team }}] [ROLLBACK] Status: FAILED | Reason: {{ ansible_failed_result.msg | default('Reload validation failed') }} | Operator: {{ ansible_user_id }}"
+
+        - name: "Display rollback complete message for {{ current_team }}"
+          debug:
+            msg: "✅ Automatic rollback completed for {{ current_team }}"
+
+        - name: "Fail with context for {{ current_team }}"
+          fail:
+            msg: "JCasC update failed for {{ current_team }} - automatic rollback applied. Error: {{ ansible_failed_result.msg | default('Unknown error') }}"

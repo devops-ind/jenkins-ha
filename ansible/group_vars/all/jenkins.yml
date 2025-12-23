@@ -118,3 +118,11 @@ jenkins_images_cleanup: true
 # Jenkins Version Configuration
 jenkins_master_image_tag: "{{ jenkins_version }}"
 jenkins_agent_image_tag: "{{ jenkins_dynamic_agent_version }}"
+
+# JCasC Hot-Reload Configuration
+# Settings for zero-downtime configuration updates via file-based hot-reload
+jenkins_base_path: "/var/jenkins"
+jenkins_reload_timeout: 60                        # Timeout for hot-reload API call in seconds
+jenkins_reload_health_retries: 5                  # Number of retries for post-reload health check
+jenkins_reload_health_delay: 5                    # Delay between health check retries in seconds
+jenkins_audit_log: "/var/log/jenkins/jcasc-updates.log"  # Audit log path for config updates

@@ -1,0 +1,238 @@
+---
+# JCasC Phase 2: Plugin Compatibility Testing
+# - Spins up disposable containers with production images
+# - Tests rendered configs against actual installed plugins
+# - Runs in parallel for all teams
+# - Validates Jenkins startup, plugin loading, and JCasC application
+
+- name: "Phase 2: Plugin Compatibility Testing - Setup"
+  debug:
+    msg: |
+      ========================================
+      Phase 2: Plugin Compatibility Testing
+      ========================================
+      Teams to test: {{ teams_list | join(', ') }}
+      Plugin test timeout: {{ plugin_test_timeout | default(300) }}s
+      Running tests in PARALLEL
+      ========================================
+
+# Step 1: Prepare for Plugin Testing
+- name: "Phase 2.1: Check Docker availability"
+  command: docker info
+  register: docker_check
+  failed_when: docker_check.rc != 0
+  changed_when: false
+  delegate_to: localhost
+
+- name: "Phase 2.1: Verify Docker is accessible"
+  debug:
+    msg: "Docker is available and running"
+  when: docker_check.rc == 0
+
+- name: "Phase 2.1: Check production images exist for all teams"
+  shell: |
+    if docker image inspect jenkins-{{ item }}:production >/dev/null 2>&1; then
+      echo "Production image found: jenkins-{{ item }}:production"
+      exit 0
+    else
+      echo "WARNING: Production image not found: jenkins-{{ item }}:production"
+      echo "Falling back to jenkins/jenkins:lts"
+      exit 0
+    fi
+  loop: "{{ teams_list }}"
+  register: image_check
+  changed_when: false
+  delegate_to: localhost
+
+- name: "Phase 2.1: Display image check results"
+  debug:
+    msg: "{{ item.stdout_lines }}"
+  loop: "{{ image_check.results }}"
+
+- name: "Phase 2.1: Create validation log directories"
+  file:
+    path: "{{ jenkins_base_path | default('/var/jenkins') }}/{{ item }}/validation"
+    state: directory
+    mode: '0755'
+  loop: "{{ teams_list }}"
+  ignore_errors: yes
+
+# Step 2: Run Plugin Tests in Parallel
+- name: "Phase 2.2: Launch plugin compatibility tests (PARALLEL)"
+  shell: |
+    set -e
+
+    TEAM="{{ item }}"
+    CONFIG_FILE="/tmp/jcasc-validation/${TEAM}/jenkins.yaml"
+    TIMESTAMP=$(date +%s)
+    LOG_FILE="{{ jenkins_base_path | default('/var/jenkins') }}/${TEAM}/validation/plugin-test-${TIMESTAMP}.log"
+
+    # Determine image to use
+    if docker image inspect jenkins-${TEAM}:production >/dev/null 2>&1; then
+      IMAGE="jenkins-${TEAM}:production"
+    else
+      IMAGE="jenkins/jenkins:lts"
+    fi
+
+    echo "========================================" | tee -a "${LOG_FILE}"
+    echo "Plugin Compatibility Test for ${TEAM}" | tee -a "${LOG_FILE}"
+    echo "========================================" | tee -a "${LOG_FILE}"
+    echo "Team: ${TEAM}" | tee -a "${LOG_FILE}"
+    echo "Image: ${IMAGE}" | tee -a "${LOG_FILE}"
+    echo "Config: ${CONFIG_FILE}" | tee -a "${LOG_FILE}"
+    echo "Timestamp: ${TIMESTAMP}" | tee -a "${LOG_FILE}"
+    echo "========================================" | tee -a "${LOG_FILE}"
+
+    # Run dry-run test with production image
+    if {{ playbook_dir }}/../scripts/config-validation/dry-run-test.sh \
+        "${CONFIG_FILE}" \
+        --image "${IMAGE}" \
+        --timeout {{ plugin_test_timeout | default(300) }} \
+        --container-name "jenkins-${TEAM}-validation-${TIMESTAMP}" \
+        2>&1 | tee -a "${LOG_FILE}"; then
+
+      echo "SUCCESS: Plugin compatibility test passed for ${TEAM}" | tee -a "${LOG_FILE}"
+      exit 0
+    else
+      echo "FAILED: Plugin compatibility test failed for ${TEAM}" | tee -a "${LOG_FILE}"
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  loop: "{{ teams_list }}"
+  async: 900  # 15 minutes max
+  poll: 0
+  register: plugin_tests
+  delegate_to: localhost
+
+- name: "Phase 2.2: Display plugin test launch status"
+  debug:
+    msg: |
+      Launched plugin compatibility test for {{ item.item }}
+      Job ID: {{ item.ansible_job_id }}
+      Running in background...
+  loop: "{{ plugin_tests.results }}"
+
+# Step 3: Wait for All Validations
+- name: "Phase 2.3: Wait for all plugin tests to complete"
+  async_status:
+    jid: "{{ item.ansible_job_id }}"
+  loop: "{{ plugin_tests.results }}"
+  register: plugin_test_results
+  until: plugin_test_results.finished
+  retries: 60  # 60 * 15s = 15 minutes max
+  delay: 15
+  delegate_to: localhost
+
+- name: "Phase 2.3: Display completion status"
+  debug:
+    msg: |
+      Plugin test for {{ item.item }} completed
+      Status: {{ 'PASSED' if item.rc == 0 else 'FAILED' }}
+      Duration: {{ item.delta if item.delta is defined else 'N/A' }}
+  loop: "{{ plugin_test_results.results }}"
+
+# Step 4: Aggregate Results
+- name: "Phase 2.4: Aggregate plugin test results"
+  set_fact:
+    plugin_test_summary:
+      total_teams: "{{ teams_list | length }}"
+      passed_teams: "{{ plugin_test_results.results | selectattr('rc', 'equalto', 0) | list | length }}"
+      failed_teams: "{{ plugin_test_results.results | rejectattr('rc', 'equalto', 0) | list | length }}"
+      failed_team_names: "{{ plugin_test_results.results | rejectattr('rc', 'equalto', 0) | map(attribute='item') | list }}"
+
+- name: "Phase 2.4: Display aggregated results"
+  debug:
+    msg: |
+      ========================================
+      Plugin Compatibility Test Summary
+      ========================================
+      Total Teams: {{ plugin_test_summary.total_teams }}
+      Passed: {{ plugin_test_summary.passed_teams }}
+      Failed: {{ plugin_test_summary.failed_teams }}
+      {% if plugin_test_summary.failed_teams | int > 0 %}
+      Failed Teams: {{ plugin_test_summary.failed_team_names | join(', ') }}
+      {% endif %}
+      ========================================
+
+- name: "Phase 2.4: Generate plugin compatibility report"
+  copy:
+    content: |
+      ========================================
+      Plugin Compatibility Test Report
+      ========================================
+      Generated: {{ ansible_date_time.iso8601 }}
+      Operator: {{ ansible_user_id }}
+
+      Summary:
+        Total Teams Tested: {{ plugin_test_summary.total_teams }}
+        Passed: {{ plugin_test_summary.passed_teams }}
+        Failed: {{ plugin_test_summary.failed_teams }}
+
+      ========================================
+      Detailed Results:
+      ========================================
+      {% for result in plugin_test_results.results %}
+      Team: {{ result.item }}
+        Status: {{ 'PASSED' if result.rc == 0 else 'FAILED' }}
+        Exit Code: {{ result.rc }}
+        Duration: {{ result.delta if result.delta is defined else 'N/A' }}
+        {% if result.rc != 0 %}
+        Log Location: {{ jenkins_base_path | default('/var/jenkins') }}/{{ result.item }}/validation/plugin-test-*.log
+        {% endif %}
+      {% endfor %}
+
+      ========================================
+      {% if plugin_test_summary.failed_teams | int == 0 %}
+      Result: ALL TESTS PASSED
+      Proceeding to Phase 3: Staged Rollout
+      {% else %}
+      Result: TESTS FAILED
+      Cannot proceed to Phase 3
+      Failed teams must fix plugin compatibility issues
+      {% endif %}
+      ========================================
+    dest: /tmp/jcasc-plugin-compatibility-report.txt
+    mode: '0644'
+  delegate_to: localhost
+
+- name: "Phase 2.4: Display plugin compatibility report location"
+  debug:
+    msg: "Plugin compatibility report saved to: /tmp/jcasc-plugin-compatibility-report.txt"
+
+# Step 5: Fail if Any Team Fails
+- name: "Phase 2.5: Check for failed tests"
+  debug:
+    msg: |
+      ========================================
+      PLUGIN COMPATIBILITY TEST FAILED
+      ========================================
+      The following teams failed plugin compatibility tests:
+      {{ plugin_test_summary.failed_team_names | join(', ') }}
+
+      Logs available at:
+      {% for team in plugin_test_summary.failed_team_names %}
+      - {{ jenkins_base_path | default('/var/jenkins') }}/{{ team }}/validation/
+      {% endfor %}
+
+      Cannot proceed to Phase 3 (Staged Rollout)
+      Please review logs and fix compatibility issues
+      ========================================
+  when: plugin_test_summary.failed_teams | int > 0
+
+- name: "Phase 2.5: Fail playbook if tests failed"
+  fail:
+    msg: |
+      Plugin compatibility tests failed for {{ plugin_test_summary.failed_teams }} team(s).
+      Review logs at: {{ jenkins_base_path | default('/var/jenkins') }}/*/validation/
+  when: plugin_test_summary.failed_teams | int > 0
+
+- name: "Phase 2: Plugin Compatibility Testing - Complete"
+  debug:
+    msg: |
+      ========================================
+      Phase 2: Plugin Compatibility Testing COMPLETED
+      ========================================
+      All {{ plugin_test_summary.total_teams }} team(s) passed plugin compatibility tests
+      Ready to proceed to Phase 3: Staged Rollout
+      ========================================

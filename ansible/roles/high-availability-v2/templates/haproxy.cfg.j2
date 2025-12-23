@@ -83,6 +83,7 @@ frontend jenkins_http
     {% for team in jenkins_teams %}
     {% if team is mapping and team.team_name is defined and team.team_name != 'devops' %}
     use_backend jenkins_backend_{{ team.team_name }} if { hdr_beg(host) -i {{ team.team_name }}jenkins.{{ jenkins_domain }} }
+    use_backend jenkins_backend_{{ team.team_name }}_passive if { hdr_beg(host) -i passive-{{ team.team_name }}jenkins.{{ jenkins_domain }} }
     {% endif %}
     {% endfor %}
     {% endif %}
@@ -182,6 +183,73 @@ backend jenkins_backend_{{ team_name }}
     {% if team.labels is defined and team.labels is mapping and team.labels.role is defined %}
     http-response set-header X-Team-Role {{ team.labels.role }}
     {% endif %}
+
+backend jenkins_backend_{{ team_name }}_passive
+    balance {{ backend_balance_method | default('roundrobin') }}
+    option httpchk GET /login
+    http-check expect status 200
+
+    # Cross-VM Failover Strategy for Passive Environment
+    {% if groups['jenkins_masters'] is defined and groups['jenkins_masters'] | length > 0 %}
+    {% set failover_strategy = haproxy_backend_failover_strategy | default('active-passive') %}
+    {% set primary_host = groups['jenkins_masters'][0] %}
+    {% set is_current_primary = (inventory_hostname == primary_host) %}
+    {% set multi_vm_enabled = multi_vm_enabled | default(false) %}
+
+    {% for host in groups['jenkins_masters'] %}
+    {% set is_primary = (host == primary_host) %}
+    {% set host_ip = hostvars[host]['ansible_default_ipv4']['address'] %}
+    {% set host_name = hostvars[host]['inventory_hostname'] %}
+    {% set teams_on_vm = hostvars[host].get('jenkins_teams_on_vm', []) %}
+
+    {# Multi-VM Mode: Only add backend if team is deployed on this VM #}
+    {% set team_on_this_vm = (not multi_vm_enabled) or (team_name in teams_on_vm) %}
+
+    {% if team_on_this_vm %}
+
+    {% if team_bg_enabled %}
+    {# Inverse Logic for Passive Environment #}
+    {% if team_active_env == 'blue' %}
+    {# Active is Blue (8080), Passive target is Green (8180) #}
+    {% set passive_port = team_web_port | int + 100 %}
+    {% else %}
+    {# Active is Green (8180), Passive target is Blue (8080) #}
+    {% set passive_port = team_web_port %}
+    {% endif %}
+    {% else %}
+    {# If Blue-Green disabled, Passive points to same port (or could be disabled) #}
+    {% set passive_port = team_web_port %}
+    {% endif %}
+
+    {% if failover_strategy == 'active-passive' %}
+    server {{ team_name }}-{{ host_name }}-passive {{ host_ip }}:{{ passive_port }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}{{ ' backup' if not is_primary else '' }}
+    {% elif failover_strategy == 'active-active' %}
+    server {{ team_name }}-{{ host_name }}-passive {{ host_ip }}:{{ passive_port }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }} weight 100
+    {% elif failover_strategy == 'local-only' %}
+    {% if host == inventory_hostname %}
+    server {{ team_name }}-{{ host_name }}-passive {{ host_ip }}:{{ passive_port }} check inter {{ haproxy_check_interval | default('5s') }} fall {{ haproxy_check_fall | default(3) }} rise {{ haproxy_check_rise | default(2) }}
+    {% endif %}
+    {% endif %}
+
+    {% endif %}
+    {% endfor %}
+    {% else %}
+    # Localhost fallback for {{ team_name }} - Passive
+    {% if team_bg_enabled %}
+    {% if team_active_env == 'blue' %}
+    server {{ team_name }}-localhost-passive 127.0.0.1:{{ team_web_port | int + 100 }} check
+    {% else %}
+    server {{ team_name }}-localhost-passive 127.0.0.1:{{ team_web_port }} check
+    {% endif %}
+    {% else %}
+    server {{ team_name }}-localhost-passive 127.0.0.1:{{ team_web_port }} check
+    {% endif %}
+    {% endif %}
+    
+    # Team-specific headers for Passive
+    http-response set-header X-Jenkins-Team {{ team_name }}
+    http-response set-header X-Jenkins-Environment {{ 'green' if team_active_env == 'blue' else 'blue' }}
+    http-response set-header X-Jenkins-Mode Passive
 
 {% endif %}
 {% endfor %}
