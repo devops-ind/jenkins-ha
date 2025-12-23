@@ -42,10 +42,10 @@ scrape_configs:
       - template:
           source: team
           template: |
-            {% raw %}{{- if contains .container_name "jenkins-devops" -}}devops
-            {{- else if contains .container_name "jenkins-ma" -}}ma  
-            {{- else if contains .container_name "jenkins-ba" -}}ba
-            {{- else if contains .container_name "jenkins-tw" -}}tw
+            {% raw %}{{- if contains .container_name "jenkins-jenkins" -}}devops
+            {{- else if contains .container_name "jenkins-digjenkins" -}}digjenkins
+            {{- else if contains .container_name "jenkins-bwjenkins" -}}bwjenkins
+            {{- else if contains .container_name "jenkins-bwacjenkins" -}}bwacjenkins
             {{- else -}}unknown{{- end }}{% endraw %}
       - labels:
           team:
@@ -77,10 +77,10 @@ scrape_configs:
       - template:
           source: team
           template: |
-            {% raw %}{{- if contains .backend_name "devops" -}}devops
-            {{- else if contains .backend_name "ma" -}}ma
-            {{- else if contains .backend_name "ba" -}}ba  
-            {{- else if contains .backend_name "tw" -}}tw
+            {% raw %}{{- if contains .backend_name "jenkins" -}}devops
+            {{- else if contains .backend_name "digjenkins" -}}digjenkins
+            {{- else if contains .backend_name "bwjenkins" -}}bwjenkins
+            {{- else if contains .backend_name "bwacjenkins" -}}bwacjenkins
             {{- else -}}system{{- end }}{% endraw %}
       - labels:
           team:
@@ -132,7 +132,7 @@ scrape_configs:
 {% endif %}
 
   # Docker container logs for Jenkins teams
-{% for team in ['devops', 'ma', 'ba', 'tw'] %}
+{% for team in ['jenkins', 'digjenkins', 'bwjenkins', 'bwacjenkins'] %}
   - job_name: jenkins-{{ team }}
     docker_sd_configs:
       - host: unix:///var/run/docker.sock
@@ -206,16 +206,104 @@ scrape_configs:
         labels:
           job: jenkins-job-logs
           source: build-logs
-          __path__: "/jenkins-logs/*/*/jobs/*/builds/*/log"
+          __path__: "/jenkins-logs/**/builds/**/log"
     pipeline_stages:
-      # Extract metadata from file path
+      # Drop lines containing:
+      #   - 'ha:' markers
+      #   - ANSI escape sequences (\x1b[)
+      #   - null bytes (\x00)
+      - drop:
+          expression: '(ha:|\\x1b\\[|\\x00)'
+      #######################################################################
+      # 1) Main path decode – this is the one that we know now works
+      #
+      # Matches:
+      #   .../jenkins-logs/<jenkins>/[data/]<environment>/
+      #     (jobs/.../jobs/)?<job_name>[/branches/<branch>]/builds/<n>/log
+      #######################################################################
       - regex:
-          expression: '/jenkins-logs/(?P<team>[^/]+)/(?P<environment>[^/]+)/jobs/(?P<job_name>[^/]+)/builds/(?P<build_number>[^/]+)/log'
+          source: filename
+          expression: '.*/jenkins-logs/(?P<jenkins>jenkins|digjenkins|bwacjenkins|bwjenkins)/(?:data/)?(?P<environment>[^/]+)/(?:(?:jobs/(?:[^/]+/jobs/)*)?(?P<job_name>[^/]+))(?:/branches/(?P<branch_name>[^/]+))?/builds/(?P<build_number>[0-9]+)/log$'
+
+      #######################################################################
+      # 2) folder1: first folder after /jobs/
+      #
+      # Example:
+      #   /jenkins-logs/.../green/jobs/MobileApp-Build/...
+      #   → folder1 = MobileApp-Build
+      #######################################################################
+      - regex:
+          source: filename
+          expression: '.*/jenkins-logs/(?:jenkins|digjenkins|bwacjenkins|bwjenkins)/(?:data/)?[^/]+/jobs/(?P<folder1>[^/]+)/.*'
+
+      #######################################################################
+      # 3) folder2: second folder after /jobs/<folder1>/jobs/
+      #
+      # Example:
+      #   /jenkins-logs/.../green/jobs/MobileApp-Build/jobs/DMA-Android/...
+      #   → folder2 = DMA-Android
+      #######################################################################
+      - regex:
+          source: filename
+          expression: '.*/jenkins-logs/(?:jenkins|digjenkins|bwacjenkins|bwjenkins)/(?:data/)?[^/]+/jobs/[^/]+/jobs/(?P<folder2>[^/]+)/.*'
+
+      #######################################################################
+      # 4) Derived pipeline name
+      #
+      # If folder1 exists AND folder1 != job_name:
+      #   pipeline = folder1[/folder2]/job_name
+      # Else:
+      #   pipeline = job_name
+      #######################################################################
+      - template:
+          source: pipeline
+          template: >
+            {{- if and .folder1 (ne .folder1 .job_name) -}}
+              {{- .folder1 -}}
+              {{- if .folder2 -}}/{{ .folder2 }}{{ end -}}
+              /{{ .job_name }}
+            {{- else -}}
+              {{- .job_name -}}
+            {{- end -}}
+
+      #######################################################################
+      # 5) Map technical jenkins cluster name -> friendly team name
+      #######################################################################
+      - template:
+          source: team
+          template: >
+            {{- if eq .jenkins "bwacjenkins" -}}
+              BWAC
+            {{- else if eq .jenkins "digjenkins" -}}
+              Digital
+            {{- else if eq .jenkins "bwjenkins" -}}
+              BankWorld
+            {{- else if eq .jenkins "jenkins" -}}
+              DevOps
+            {{- else -}}
+              {{ .jenkins }}
+            {{- end -}}
+
+
+      - drop:
+          older_than: 1h
+          drop_counter_reason: "bootstrap_old_lines"
+
+      #######################################################################
+      # 6) Expose everything as Loki labels
+      #######################################################################
       - labels:
-          team:
-          environment:
-          job_name:
-          build_number:
+          jenkins:     jenkins        # raw cluster (jenkins / digjenkins / ...)
+          team:        team           # friendly mapping
+          environment: environment
+          folder1:     folder1
+          folder2:     folder2
+          job_name:    job_name
+          branch_name: branch_name
+          build_number: build_number
+          pipeline:    pipeline
+
+
       # Add timestamp (Jenkins logs have timestamps in content)
       - match:
           selector: '{job="jenkins-job-logs"}'
@@ -234,8 +322,8 @@ scrape_configs:
           expression: 'Duration:\s+(?:(?P<hours>\d+)\s*hr\s*)?(?:(?P<minutes>\d+)\s*min\s*)?(?:(?P<seconds>\d+)\s*sec)?'
       - template:
           source: duration_seconds
-          template: {% raw %}'{{ add (add (mul (or .hours "0") 3600) (mul (or .minutes "0") 60)) (or .seconds "0") }}'
-{% endraw %}
+          template: '{{ add (add (mul (or .hours "0") 3600) (mul (or .minutes "0") 60)) (or .seconds "0") }}'
+{% raw %}
       - labels:
           duration_seconds:
       # Extract error messages for failed builds
@@ -243,7 +331,7 @@ scrape_configs:
           selector: '{job="jenkins-job-logs", build_result="FAILURE"}'
           stages:
             - regex:
-                expression: '(?P<error_type>ERROR|EXCEPTION|FATAL|BUILD\s+FAIL)'
+                expression: '(?i)(?P<error_type>ERROR|EXCEPTION|FATAL|BUILD\s+FAIL)'
             - labels:
                 error_type:
       # Generate Prometheus metrics from logs
@@ -268,4 +356,5 @@ scrape_configs:
             config:
               action: inc
               match_all: true
+{% endraw %}
 {% endif %}
