@@ -303,7 +303,6 @@ scrape_configs:
       - template:
           source: duration_seconds
           template: '{{ add (add (mul (or .hours "0") 3600) (mul (or .minutes "0") 60)) (or .seconds "0") }}'
-{% raw %}
       - labels:
           duration_seconds:
       # Extract error messages for failed builds
@@ -336,5 +335,4 @@ scrape_configs:
             config:
               action: inc
               match_all: true
-{% endraw %}
 {% endif %}
