@@ -194,6 +194,29 @@
   tags: ['monitoring', 'phase5.5', 'grafonnet', 'test']
 
 # =============================================================================
+# PHASE 5.6: SIMPLE JSON DASHBOARD DEPLOYMENT (Simplified Alternative)
+# =============================================================================
+# Simple static JSON dashboard deployment without complex templating
+# Provides hybrid approach: file-based (initial) + API-based (updates)
+# Use for simplified dashboard management with minimal variables
+
+- name: Phase 5.6 - Deploy JSON Dashboards (File-based)
+  import_tasks: dashboards/deploy-json.yml
+  when:
+    - grafana_json_enabled | default(false)
+    - dashboard_deployment_method | default('file') == 'file'
+    - inventory_hostname == monitoring_server_host
+  tags: ['monitoring', 'phase5.6', 'dashboards', 'json', 'deploy']
+
+- name: Phase 5.6 - Deploy JSON Dashboards (API-based, fast updates)
+  import_tasks: dashboards/deploy-json-api.yml
+  when:
+    - grafana_json_enabled | default(false)
+    - dashboard_deployment_method | default('file') == 'api'
+    - inventory_hostname == monitoring_server_host
+  tags: ['monitoring', 'phase5.6', 'dashboards', 'json', 'update']
+
+# =============================================================================
 # PHASE 5.7: FQDN MIGRATION & CONSISTENCY (Production Improvements)
 # =============================================================================
 # Migrate monitoring from IP-based to FQDN-based infrastructure addressing

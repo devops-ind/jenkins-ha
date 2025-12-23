@@ -1,0 +1,20 @@
+---
+# Simple JSON dashboard deployment via file provisioning
+- name: Create dashboard directory
+  file:
+    path: "{{ monitoring_home_dir }}/grafana/dashboards"
+    state: directory
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0755'
+
+- name: Deploy JSON dashboards
+  copy:
+    src: "dashboards/json/{{ item }}"
+    dest: "{{ monitoring_home_dir }}/grafana/dashboards/{{ item }}"
+    owner: "{{ monitoring_user }}"
+    group: "{{ monitoring_group }}"
+    mode: '0644'
+  loop: "{{ grafana_json_dashboards }}"
+  notify: restart grafana
+  when: grafana_json_dashboards is defined and grafana_json_dashboards | length > 0

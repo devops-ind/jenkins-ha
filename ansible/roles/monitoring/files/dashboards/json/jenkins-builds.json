@@ -1,0 +1,124 @@
+{
+  "title": "Jenkins Build Metrics",
+  "tags": ["jenkins", "builds"],
+  "timezone": "browser",
+  "schemaVersion": 16,
+  "version": 0,
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "team",
+        "type": "query",
+        "label": "Team",
+        "query": "label_values(jenkins_builds_last_build_result_ordinal, team)",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "includeAll": true,
+        "multi": true,
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Build Rate",
+      "type": "graph",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(rate(jenkins_builds_last_build_start_time_milliseconds_count{team=~\"$team\"}[5m])) by (team)",
+          "legendFormat": "{{team}}",
+          "refId": "A"
+        }
+      ],
+      "yaxes": [
+        {"format": "short", "label": "Builds/sec"},
+        {"format": "short"}
+      ],
+      "legend": {
+        "show": true,
+        "alignAsTable": true,
+        "rightSide": false
+      }
+    },
+    {
+      "id": 2,
+      "title": "Build Duration",
+      "type": "graph",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {
+          "expr": "jenkins_builds_last_build_duration_milliseconds{team=~\"$team\"} / 1000",
+          "legendFormat": "{{job}} - {{team}}",
+          "refId": "A"
+        }
+      ],
+      "yaxes": [
+        {"format": "s", "label": "Duration"},
+        {"format": "short"}
+      ],
+      "legend": {
+        "show": true,
+        "alignAsTable": true,
+        "rightSide": false
+      }
+    },
+    {
+      "id": 3,
+      "title": "Build Results",
+      "type": "piechart",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [
+        {
+          "expr": "sum by (result) (jenkins_builds_last_build_result_ordinal{team=~\"$team\"})",
+          "legendFormat": "{{result}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "pieType": "pie"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Failed Builds",
+      "type": "table",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [
+        {
+          "expr": "jenkins_builds_last_build_result_ordinal{team=~\"$team\", result=\"FAILURE\"} > 0",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

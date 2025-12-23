@@ -88,6 +88,17 @@ jenkins_enhanced_dashboards_enabled: true
 dashboard_jinja2_enabled: true   # Enable Jinja2 template-based dashboards (Phase 3)
 dashboard_grafonnet_enabled: "{{ grafonnet_enabled | default(true) }}"  # Enable Grafonnet dashboards (Phase 5.5)
 
+# Simple JSON Dashboard Configuration (Phase 5.6 - Simplified Alternative)
+# Minimal variables, no templating, static JSON files
+grafana_json_enabled: false  # Enable simple JSON dashboard deployment
+dashboard_deployment_method: "file"  # Options: "file" (requires restart) or "api" (no restart)
+
+# List of JSON dashboard files to deploy (from files/dashboards/json/)
+grafana_json_dashboards:
+  - jenkins-overview.json
+  - infrastructure-health.json
+  - jenkins-builds.json
+
 # Centralized dashboard configuration registry
 grafana_dashboards:
   # Core dashboards - infrastructure-wide

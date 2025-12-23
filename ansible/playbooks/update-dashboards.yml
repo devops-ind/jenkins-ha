@@ -1,0 +1,31 @@
+---
+# Quick Grafana dashboard update without redeploying monitoring role
+# Usage: ansible-playbook -i $PROD_INV playbooks/update-dashboards.yml
+- name: Update Grafana Dashboards via API
+  hosts: monitoring
+  gather_facts: yes
+
+  vars:
+    # Override these if needed
+    dashboard_update_method: api  # Options: api, file
+
+  tasks:
+    - name: Display update method
+      debug:
+        msg: "Updating dashboards using {{ dashboard_update_method }} method"
+
+    - name: Deploy dashboards via API (fast, no restart)
+      include_role:
+        name: monitoring
+        tasks_from: dashboards/deploy-json-api.yml
+      when: dashboard_update_method == 'api'
+
+    - name: Deploy dashboards via file provisioning (requires restart)
+      include_role:
+        name: monitoring
+        tasks_from: dashboards/deploy-json.yml
+      when: dashboard_update_method == 'file'
+
+    - name: Summary
+      debug:
+        msg: "Dashboard update completed. Check Grafana UI at http://{{ monitoring_host | default(ansible_default_ipv4.address) }}:{{ grafana_port }}"

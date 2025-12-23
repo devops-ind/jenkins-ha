@@ -372,6 +372,50 @@ jsonnet -J vendor infrastructure-health.jsonnet -o infrastructure-health.json
 jb install  # Update dependencies
 ```
 
+#### Dashboard Management (Simple JSON)
+```bash
+# Simple JSON dashboard deployment (Phase 5.6 - Simplified Alternative)
+# No complex templating, minimal variables, static JSON files
+
+# Enable simple JSON dashboards in defaults/main.yml:
+# grafana_json_enabled: true
+# dashboard_deployment_method: "file"  # or "api"
+
+# Initial deployment (file-based, requires Grafana restart)
+$AP --tags monitoring,phase5.6,dashboards,deploy
+
+# Quick updates via API (no restart, 30 seconds)
+ansible-playbook -i $PROD_INV playbooks/update-dashboards.yml
+
+# Or use tags for API deployment
+$AP --tags monitoring,phase5.6,dashboards,update -e "dashboard_deployment_method=api"
+
+# Dashboard files location
+ls -la ansible/roles/monitoring/files/dashboards/json/
+
+# Add new dashboard
+# 1. Create JSON file: ansible/roles/monitoring/files/dashboards/json/my-dashboard.json
+# 2. Add to list in defaults/main.yml:
+#    grafana_json_dashboards:
+#      - jenkins-overview.json
+#      - infrastructure-health.json
+#      - jenkins-builds.json
+#      - my-dashboard.json  # NEW
+# 3. Deploy:
+ansible-playbook -i $PROD_INV playbooks/update-dashboards.yml
+
+# Export existing dashboard from Grafana
+curl -u admin:password "http://localhost:9300/api/dashboards/uid/DASHBOARD_UID" | \
+  jq '.dashboard | del(.id, .uid, .version)' > my-dashboard.json
+
+# Benefits:
+# - 0-3 variables (vs 30-50+ in Jinja2)
+# - Static JSON files (no templating)
+# - Fast updates (30 sec via API)
+# - Simple maintenance (10 lines vs 150+)
+# - Use Grafana $team variable instead of team-specific dashboards
+```
+
 ### Keepalived & HAProxy
 ```bash
 # Deploy intelligent keepalived

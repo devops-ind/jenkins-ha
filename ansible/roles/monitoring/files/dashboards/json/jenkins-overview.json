@@ -1,0 +1,151 @@
+{
+  "title": "Jenkins Overview",
+  "tags": ["jenkins", "overview"],
+  "timezone": "browser",
+  "schemaVersion": 16,
+  "version": 0,
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "team",
+        "type": "query",
+        "label": "Team",
+        "query": "label_values(jenkins_up, team)",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "includeAll": true,
+        "multi": true,
+        "refresh": 1
+      },
+      {
+        "name": "environment",
+        "type": "query",
+        "label": "Environment",
+        "query": "label_values(jenkins_up{team=~\"$team\"}, environment)",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "includeAll": true,
+        "multi": true,
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Jenkins Status",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "jenkins_up{team=~\"$team\", environment=~\"$environment\"}",
+          "legendFormat": "{{team}}-{{environment}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"type": "value", "value": "1", "text": "UP"},
+            {"type": "value", "value": "0", "text": "DOWN"}
+          ],
+          "thresholds": {
+            "steps": [
+              {"value": 0, "color": "red"},
+              {"value": 1, "color": "green"}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Active Jobs",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(jenkins_job_count_value{team=~\"$team\", environment=~\"$environment\"})",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Build Success Rate",
+      "type": "gauge",
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0},
+      "targets": [
+        {
+          "expr": "100 * sum(rate(jenkins_builds_success_build_count_total{team=~\"$team\", environment=~\"$environment\"}[5m])) / sum(rate(jenkins_builds_last_build_start_time_milliseconds_count{team=~\"$team\", environment=~\"$environment\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "steps": [
+              {"value": 0, "color": "red"},
+              {"value": 70, "color": "yellow"},
+              {"value": 90, "color": "green"}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Queue Length",
+      "type": "graph",
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+      "targets": [
+        {
+          "expr": "jenkins_queue_size_value{team=~\"$team\", environment=~\"$environment\"}",
+          "legendFormat": "{{team}}-{{environment}}",
+          "refId": "A"
+        }
+      ],
+      "yaxes": [
+        {"format": "short", "label": "Queue Size"},
+        {"format": "short"}
+      ],
+      "legend": {
+        "show": true,
+        "alignAsTable": true,
+        "rightSide": false
+      }
+    }
+  ]
+}
