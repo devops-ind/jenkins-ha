@@ -266,35 +266,15 @@ scrape_configs:
               {{- .job_name -}}
             {{- end -}}
 
-      #######################################################################
-      # 5) Map technical jenkins cluster name -> friendly team name
-      #######################################################################
-      - template:
-          source: team
-          template: >
-            {{- if eq .jenkins "bwacjenkins" -}}
-              BWAC
-            {{- else if eq .jenkins "digjenkins" -}}
-              Digital
-            {{- else if eq .jenkins "bwjenkins" -}}
-              BankWorld
-            {{- else if eq .jenkins "jenkins" -}}
-              DevOps
-            {{- else -}}
-              {{ .jenkins }}
-            {{- end -}}
-
-
       - drop:
           older_than: 1h
           drop_counter_reason: "bootstrap_old_lines"
 
       #######################################################################
-      # 6) Expose everything as Loki labels
+      # 5) Expose everything as Loki labels
       #######################################################################
       - labels:
-          jenkins:     jenkins        # raw cluster (jenkins / digjenkins / ...)
-          team:        team           # friendly mapping
+          team:        jenkins        # team name (jenkins / digjenkins / bwjenkins / bwacjenkins)
           environment: environment
           folder1:     folder1
           folder2:     folder2
