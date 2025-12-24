@@ -416,6 +416,37 @@ curl -u admin:password "http://localhost:9300/api/dashboards/uid/DASHBOARD_UID" 
 # - Use Grafana $team variable instead of team-specific dashboards
 ```
 
+#### Grafana User Management
+```bash
+# Users are automatically created via API after Grafana deployment
+# Configure in defaults/main.yml:
+
+grafana_create_users: true
+grafana_users:
+  - name: "DevOps Team"
+    login: "devops"
+    email: "devops@example.com"
+    password: "{{ vault_grafana_devops_password | default('devops123') }}"
+    role: "Editor"  # Options: Admin, Editor, Viewer
+  - name: "Viewer User"
+    login: "viewer"
+    email: "viewer@example.com"
+    password: "{{ vault_grafana_viewer_password | default('viewer123') }}"
+    role: "Viewer"
+
+# Users are created automatically during monitoring deployment
+$AP --tags monitoring
+
+# Users will be created via Grafana API after container starts
+# Status codes: 200 (created), 412 (already exists)
+
+# Secure passwords in vault:
+ansible-vault edit ansible/inventories/production/group_vars/all/vault.yml
+# Add:
+# vault_grafana_devops_password: "secure_password_here"
+# vault_grafana_viewer_password: "another_secure_password"
+```
+
 ### Keepalived & HAProxy
 ```bash
 # Deploy intelligent keepalived

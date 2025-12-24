@@ -163,3 +163,52 @@
     state: started
     restart: true
   when: grafana_enabled | default(true)
+
+- name: Wait for Grafana to be ready for user creation
+  uri:
+    url: "http://localhost:{{ grafana_port }}/api/health"
+    status_code: 200
+  register: grafana_health_final
+  until: grafana_health_final.status == 200
+  retries: 30
+  delay: 2
+  when:
+    - grafana_enabled | default(true)
+    - grafana_create_users | default(false)
+
+- name: Create Grafana users via API
+  uri:
+    url: "http://localhost:{{ grafana_port }}/api/admin/users"
+    method: POST
+    user: "{{ grafana_admin_user }}"
+    password: "{{ grafana_admin_password }}"
+    body_format: json
+    body:
+      name: "{{ item.name }}"
+      login: "{{ item.login }}"
+      email: "{{ item.email }}"
+      password: "{{ item.password }}"
+      role: "{{ item.role | default('Viewer') }}"
+    status_code: [200, 412]  # 200 = created, 412 = user already exists
+    force_basic_auth: yes
+  loop: "{{ grafana_users }}"
+  loop_control:
+    label: "{{ item.login }}"
+  register: user_creation
+  when:
+    - grafana_enabled | default(true)
+    - grafana_create_users | default(false)
+    - grafana_users is defined
+    - grafana_users | length > 0
+
+- name: Display user creation results
+  debug:
+    msg: "User {{ item.item.login }}: {{ 'Created' if item.status == 200 else 'Already exists' }}"
+  loop: "{{ user_creation.results }}"
+  loop_control:
+    label: "{{ item.item.login }}"
+  when:
+    - grafana_enabled | default(true)
+    - grafana_create_users | default(false)
+    - user_creation is defined
+    - user_creation.results is defined
